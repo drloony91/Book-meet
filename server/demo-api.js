@@ -28,6 +28,10 @@ const users = [
       country: "Казахстан",
       type: "Читатель",
       gender: "Мужской",
+      birthDate: "1991-07-15",
+      age: 35,
+      showBirthDateToFriends: false,
+      tabOrder: [],
       bio: "",
       authorInfluences: "",
       writingThemes: "",
@@ -422,6 +426,15 @@ router.put("/users/me/state", (request, response) => {
   const profile = request.body?.profile;
   const publisher = profile?.type === "Издатель";
   if (!String(profile?.name ?? "").trim() || !Number(profile?.cityId)) return response.status(400).json({ error: "Заполните обязательные поля" });
+  if (!publisher && !/^\d{4}-\d{2}-\d{2}$/.test(String(profile?.birthDate ?? ""))) return response.status(400).json({ error: "Укажите корректную дату рождения" });
+  if (!publisher) {
+    const birth = new Date(`${profile.birthDate}T00:00:00Z`);
+    const now = new Date();
+    let age = now.getUTCFullYear() - birth.getUTCFullYear();
+    if (now.getUTCMonth() < birth.getUTCMonth() || now.getUTCMonth() === birth.getUTCMonth() && now.getUTCDate() < birth.getUTCDate()) age -= 1;
+    if (!Number.isFinite(age) || age < 0 || age > 120) return response.status(400).json({ error: "Укажите корректную дату рождения" });
+    profile.age = age;
+  }
   if (publisher) {
     const required = [profile.publisherWebsite, profile.bio, profile.publisherLegalName, profile.publisherBin, profile.publisherAccount, profile.publisherBik, profile.publisherBank, profile.publisherLegalAddress, profile.publisherPostalAddress];
     if (required.some((value) => !String(value ?? "").trim())) return response.status(400).json({ error: "Заполните обязательные поля издательства" });
@@ -826,7 +839,7 @@ router.patch("/social/messages/:targetId/read", (request, response) => {
 
 router.post("/events", (request, response) => {
   const creator = users.find((user) => user.id === request.demoUserId);
-  const event = { id: nextId++, creatorId: request.demoUserId, title: String(request.body.title), summary: String(request.body.summary), description: String(request.body.description), date: String(request.body.date), time: String(request.body.time), city: String(request.body.city), address: String(request.body.address), mapUrl: String(request.body.mapUrl ?? ""), detailsUrl: String(request.body.detailsUrl ?? ""), status: "pending", moderationNote: "", organizerName: creator?.isAdmin ? "" : creator?.profile.name, createdAt: new Date().toISOString() };
+  const event = { id: nextId++, creatorId: request.demoUserId, title: String(request.body.title), summary: String(request.body.summary), description: String(request.body.description), isAdult: Boolean(request.body.isAdult), date: String(request.body.date), time: String(request.body.time), city: String(request.body.city), address: String(request.body.address), mapUrl: String(request.body.mapUrl ?? ""), detailsUrl: String(request.body.detailsUrl ?? ""), status: "pending", moderationNote: "", organizerName: creator?.isAdmin ? "" : creator?.profile.name, createdAt: new Date().toISOString() };
   state.events.push(event);
   notification(request.demoUserId, request.demoUserId, "event_submitted", "Событие на модерации", `Событие «${event.title}» отправлено на модерацию.`, { materialKind: "event", materialId: event.id });
   response.status(201).json({ event });
@@ -870,7 +883,7 @@ router.patch("/admin/events/:id", (request, response) => {
 router.post("/occasions", (request, response) => {
   const creator = users.find((user) => user.id === request.demoUserId);
   if (creator?.profile.type === "Издатель") return response.status(403).json({ error: "Издательства не могут создавать поводы познакомиться" });
-  const occasion = { id: nextId++, creatorId: request.demoUserId, type: request.body.type, primaryText: String(request.body.primaryText ?? ""), audienceText: String(request.body.audienceText ?? ""), targetGender: request.body.targetGender, targetCities: structuredClone(request.body.targetCities ?? []), targetProfileType: request.body.targetProfileType, status: "pending", moderationNote: "", creatorName: creator?.profile.name ?? "", createdAt: new Date().toISOString() };
+  const occasion = { id: nextId++, creatorId: request.demoUserId, type: request.body.type, primaryText: String(request.body.primaryText ?? ""), audienceText: String(request.body.audienceText ?? ""), isAdult: Boolean(request.body.isAdult), targetGender: request.body.targetGender, targetCities: structuredClone(request.body.targetCities ?? []), targetProfileType: request.body.targetProfileType, status: "pending", moderationNote: "", creatorName: creator?.profile.name ?? "", createdAt: new Date().toISOString() };
   if (!occasion.type || !occasion.primaryText || !occasion.audienceText || !occasion.targetCities.length) return response.status(400).json({ error: "Заполните все поля повода для знакомства" });
   state.occasions.push(occasion);
   notification(request.demoUserId, request.demoUserId, "event_submitted", "Повод на модерации", "Повод для знакомства отправлен на модерацию.", { materialKind: "occasion", materialId: occasion.id });

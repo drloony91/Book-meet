@@ -743,6 +743,71 @@ select option {
   animation: dropdown-control-in .24s cubic-bezier(.22, .8, .3, 1) both;
 }
 
+.spoiler {
+  display: inline;
+  border-radius: 4px;
+  color: transparent;
+  background: repeating-linear-gradient(135deg, #9aa8b8 0 3px, #bcc6d1 3px 6px);
+  cursor: pointer;
+  user-select: none;
+  transition: color .18s ease, background .18s ease;
+}
+
+.spoiler:not(.is-revealed):hover::after {
+  content: "Открыть спойлер";
+  position: absolute;
+  z-index: 20;
+  margin-top: -28px;
+  padding: 4px 7px;
+  border-radius: 6px;
+  color: #fff;
+  background: #26384c;
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+.spoiler.is-revealed {
+  color: inherit;
+  background: transparent;
+  cursor: text;
+  user-select: text;
+}
+
+.comment-format-toolbar,
+.profile-menu-order-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 7px;
+}
+
+.comment-format-toolbar span,
+.toolbar-hint { color: #8c3a3a; font-size: 12px; }
+
+.adult-material-checkbox,
+.profile-checkbox {
+  display: flex !important;
+  flex-direction: row !important;
+  align-items: center;
+  gap: 9px;
+}
+
+.adult-material-checkbox input,
+.profile-checkbox input { width: 18px; height: 18px; margin: 0; }
+
+.profile-nav-row { display: flex; align-items: center; min-width: 0; }
+.profile-nav-row > button { flex: 1; }
+.profile-tab-drag-handle { flex: 0 0 18px; color: inherit; cursor: grab; font-size: 14px; letter-spacing: -2px; user-select: none; }
+.profile-tab-drag-handle:active { cursor: grabbing; }
+.profile-menu-order-settings { padding: 14px 0; }
+.profile-menu-order-settings h3 { margin: 0 0 10px; }
+.profile-identity-row { align-items: end; }
+.profile-identity-row > * { min-width: 0; flex: 1; }
+
+@media (max-width: 760px) {
+  .profile-identity-row { grid-template-columns: 1fr; }
+}
+
 @media (max-width: 560px) {
   .event-attendees > div { grid-template-columns: 1fr; }
 }

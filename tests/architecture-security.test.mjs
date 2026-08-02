@@ -5,6 +5,7 @@ import path from "node:path";
 import { plainTextFromHtml, validateRichHtml } from "../server/modules/content-security.js";
 import { imageType } from "../server/modules/image-storage.js";
 import { requestLimitPolicy } from "../server/modules/request-limits.js";
+import { ageFromBirthDate } from "../server/data.js";
 
 const root = path.resolve(import.meta.dirname, "..");
 
@@ -12,6 +13,29 @@ test("сервер удаляет опасный HTML, обработчики с
   const cleaned = validateRichHtml('<p onclick="steal()" style="text-align:center;color:red">Текст<script>alert(1)</script></p><img src=x onerror=steal()>');
   assert.equal(cleaned, '<p style="text-align:center">Текст</p>');
   assert.equal(plainTextFromHtml(cleaned), "Текст");
+});
+
+test("дата рождения, спойлеры и материалы 18+ защищены общими контрактами", async () => {
+  assert.equal(ageFromBirthDate("2000-08-03", new Date("2026-08-02T12:00:00Z")), 25);
+  assert.equal(ageFromBirthDate("2000-08-02", new Date("2026-08-02T12:00:00Z")), 26);
+  assert.equal(ageFromBirthDate("2025-02-31"), null);
+  assert.equal(validateRichHtml('<span class="spoiler" onclick="steal()">секрет</span>'), '<span class="spoiler">секрет</span>');
+  const migration = await readFile(path.join(root, "mysql", "migrations", "019_profile_age_material_controls.sql"), "utf8");
+  const api = await readFile(path.join(root, "server", "api.js"), "utf8");
+  const data = await readFile(path.join(root, "server", "data.js"), "utf8");
+  const profile = await readFile(path.join(root, "app", "screens", "ProfileScreens.tsx"), "utf8");
+  const content = await readFile(path.join(root, "app", "components", "content", "ContentComponents.tsx"), "utf8");
+  assert.match(migration, /birth_date DATE/);
+  assert.match(migration, /profile_tab_order LONGTEXT/);
+  assert.match(migration, /last_read_chapter INT/);
+  assert.match(migration, /ADD COLUMN is_adult/);
+  assert.match(api, /assertAdultMaterialAllowed/);
+  assert.match(data, /hideAdultMaterials/);
+  assert.match(data, /show_birth_date_to_friends && isViewerFriend/);
+  assert.match(profile, /Показывать дату рождения друзьям/);
+  assert.match(profile, /Изменить порядок пунктов меню профиля/);
+  assert.match(content, /Скрыть под спойлер/);
+  assert.match(content, /Прочитано глав/);
 });
 
 test("тип загруженного изображения определяется по содержимому, а не по расширению", () => {

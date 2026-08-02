@@ -41,6 +41,32 @@ import type {
   WishBook,
 } from "../../types/domain";
 
+function SpoilerChunk({ children }: { children: string }) {
+  const [revealed, setRevealed] = useState(false);
+  return <span className={`spoiler ${revealed ? "is-revealed" : ""}`} role="button" tabIndex={0} title="Открыть спойлер" onClick={() => setRevealed(true)} onKeyDown={(event) => { if (event.key === "Enter" || event.key === " ") setRevealed(true); }}>{children}</span>;
+}
+
+function SpoilerText({ text }: { text: string }) {
+  return <>{text.split(/(\|\|[\s\S]*?\|\|)/g).map((part, index) => part.startsWith("||") && part.endsWith("||") ? <SpoilerChunk key={index}>{part.slice(2, -2)}</SpoilerChunk> : <React.Fragment key={index}>{part}</React.Fragment>)}</>;
+}
+
+function SpoilerTextarea({ value, onChange, rows = 4, required = false, placeholder }: { value: string; onChange: (value: string) => void; rows?: number; required?: boolean; placeholder?: string }) {
+  const ref = useRef<HTMLTextAreaElement>(null);
+  const [hint, setHint] = useState(false);
+  function toggleSpoiler() {
+    const input = ref.current;
+    if (!input || input.selectionStart === input.selectionEnd) { setHint(true); window.setTimeout(() => setHint(false), 1800); return; }
+    const start = input.selectionStart;
+    const end = input.selectionEnd;
+    const selected = value.slice(start, end);
+    const alreadyWrapped = value.slice(Math.max(0, start - 2), start) === "||" && value.slice(end, end + 2) === "||";
+    const next = alreadyWrapped ? value.slice(0, start - 2) + selected + value.slice(end + 2) : value.slice(0, start) + `||${selected}||` + value.slice(end);
+    onChange(next);
+    requestAnimationFrame(() => { input.focus(); input.setSelectionRange(alreadyWrapped ? start - 2 : start + 2, alreadyWrapped ? end - 2 : end + 2); });
+  }
+  return <div className="spoiler-textarea"><div className="comment-format-toolbar"><button type="button" onClick={toggleSpoiler} title="Скрыть под спойлер">▦ Скрыть под спойлер</button>{hint && <span>Выделите текст для скрытия под спойлер</span>}</div><textarea ref={ref} required={required} rows={rows} value={value} onChange={(event) => onChange(event.target.value)} placeholder={placeholder} /></div>;
+}
+
 export const monthlyBooks = [
   { title: "Время секонд хэнд", author: "Светлана Алексиевич", cover: "cover-red", mark: "В" },
   { title: "Тревожные люди", author: "Фредрик Бакман", cover: "cover-cream", mark: "ТЛ" },
@@ -48,8 +74,8 @@ export const monthlyBooks = [
   { title: "Бегущий за ветром", author: "Халед Хоссейни", cover: "cover-green", mark: "БВ" },
 ];
 
-export type EventFormValue = { title: string; summary: string; description: string; date: string; time: string; city: string; cityId?: number; address: string; mapUrl: string; detailsUrl: string; relatedToBook: boolean; linkedBookId?: number };
-export const emptyEvent: EventFormValue = { title: "", summary: "", description: "", date: "", time: "", city: "", address: "", mapUrl: "", detailsUrl: "", relatedToBook: false };
+export type EventFormValue = { title: string; summary: string; description: string; isAdult: boolean; date: string; time: string; city: string; cityId?: number; address: string; mapUrl: string; detailsUrl: string; relatedToBook: boolean; linkedBookId?: number };
+export const emptyEvent: EventFormValue = { title: "", summary: "", description: "", isAdult: false, date: "", time: "", city: "", address: "", mapUrl: "", detailsUrl: "", relatedToBook: false };
 
 function EventBookSelector({ catalog, selectedId, onSelect, onCreateBook }: { catalog: (LibraryBook | AuthorBook)[]; selectedId?: number; onSelect: (book: LibraryBook | AuthorBook) => void; onCreateBook: () => void }) {
   const selected = catalog.find((book) => book.id === selectedId);
@@ -63,7 +89,7 @@ function EventBookSelector({ catalog, selectedId, onSelect, onCreateBook }: { ca
 }
 
 export function EventForm({ initial, catalog = [], onCreateBook = () => undefined, onCancel, onSave, submitLabel = "Отправить на модерацию" }: { initial?: BookEvent; catalog?: (LibraryBook | AuthorBook)[]; onCreateBook?: () => void; onCancel: () => void; onSave: (value: EventFormValue) => Promise<void>; submitLabel?: string }) {
-  const [value, setValue] = useState<EventFormValue>(() => initial ? { title: initial.title, summary: initial.summary, description: initial.description, date: initial.date, time: initial.time, city: initial.city, cityId: initial.cityId, address: initial.address, mapUrl: initial.mapUrl, detailsUrl: initial.detailsUrl, relatedToBook: Boolean(initial.linkedBookId), linkedBookId: initial.linkedBookId } : emptyEvent);
+  const [value, setValue] = useState<EventFormValue>(() => initial ? { title: initial.title, summary: initial.summary, description: initial.description, isAdult: Boolean(initial.isAdult), date: initial.date, time: initial.time, city: initial.city, cityId: initial.cityId, address: initial.address, mapUrl: initial.mapUrl, detailsUrl: initial.detailsUrl, relatedToBook: Boolean(initial.linkedBookId), linkedBookId: initial.linkedBookId } : emptyEvent);
   const [saving, setSaving] = useState(false);
   const field = (name: "title" | "summary" | "description" | "date" | "time" | "address" | "mapUrl" | "detailsUrl") => ({ value: value[name], onChange: (event: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement>) => setValue((current) => ({ ...current, [name]: event.target.value })) });
   return <form className="event-form" onSubmit={async (event) => { event.preventDefault(); setSaving(true); try { await onSave(value); } finally { setSaving(false); } }}>
@@ -73,6 +99,7 @@ export function EventForm({ initial, catalog = [], onCreateBook = () => undefine
     <label>Название события<input required maxLength={200} {...field("title")} /></label>
     <label>Краткое описание для карточки<textarea required rows={3} maxLength={1200} {...field("summary")} /></label>
     <label>Подробности события<textarea required rows={6} {...field("description")} /></label>
+    <label className="adult-material-checkbox"><input type="checkbox" checked={value.isAdult} onChange={(event) => setValue((current) => ({ ...current, isAdult: event.target.checked }))} />Событие не предназначено для лиц младше 18 лет</label>
     <div className="form-row"><label>Дата<input required type="date" {...field("date")} /></label><label>Время<input required type="time" {...field("time")} /></label></div>
     <div className="form-row"><CityAutocomplete value={value.city} required onChange={(city, cityId) => setValue((current) => ({ ...current, city, cityId }))} /><label>Адрес<input required {...field("address")} /></label></div>
     <label>Ссылка на 2ГИС<input type="url" placeholder="https://2gis.kz/..." {...field("mapUrl")} /></label>
@@ -88,22 +115,12 @@ export function EventStatusLabel({ status }: { status: EventStatus }) {
 }
 
 export function EventCard({ item, own, onOpen, onOpenBook, onEdit, compact = false }: { item: BookEvent; own: boolean; onOpen: () => void; onOpenBook?: () => void; onEdit?: () => void; compact?: boolean }) {
-  return <article className={`event-card event-card-clickable ${compact ? "event-card-compact" : ""} ${item.pinned ? "is-pinned" : ""}`} role="button" tabIndex={0} onClick={onOpen} onKeyDown={(event) => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); onOpen(); } }}><div className="event-date"><strong>{new Date(`${item.date}T00:00:00`).toLocaleDateString("ru-RU", { day: "2-digit", month: "short" })}</strong><span>{item.time}</span></div><div className="event-card-copy"><div>{own && <EventStatusLabel status={item.status} />}<span className="section-subtitle">{item.pinned && <b className="pinned-event-label">Закреплено · </b>}{item.city}{!compact && item.bookTitle && <><i className="event-book-dot" aria-hidden="true" /><button className="event-book-inline" type="button" onClick={(event) => { event.stopPropagation(); onOpenBook?.(); }}>{item.bookTitle} · {item.bookAuthor}</button></>}</span></div><h3>{item.title}</h3>{!compact && <><p>{item.summary}</p><small>{item.address}</small></>}{own && item.status === "needs_changes" && onEdit && <div className="moderated-card-actions"><button className="outline-button" type="button" onClick={(event) => { event.stopPropagation(); onEdit(); }}>Редактировать</button></div>}</div></article>;
+  return <article className={`event-card event-card-clickable ${compact ? "event-card-compact" : ""} ${item.pinned ? "is-pinned" : ""}`} role="button" tabIndex={0} onClick={onOpen} onKeyDown={(event) => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); onOpen(); } }}><div className="event-date"><strong>{new Date(`${item.date}T00:00:00`).toLocaleDateString("ru-RU", { day: "2-digit", month: "short" })}</strong><span>{item.time}</span></div><div className="event-card-copy"><div>{own && <EventStatusLabel status={item.status} />}<span className="section-subtitle">{item.pinned && <b className="pinned-event-label">Закреплено · </b>}{item.isAdult && <b>18+ · </b>}{item.city}{!compact && item.bookTitle && <><i className="event-book-dot" aria-hidden="true" /><button className="event-book-inline" type="button" onClick={(event) => { event.stopPropagation(); onOpenBook?.(); }}>{item.bookTitle} · {item.bookAuthor}</button></>}</span></div><h3>{item.title}</h3>{!compact && <><p>{item.summary}</p><small>{item.address}</small></>}{own && item.status === "needs_changes" && onEdit && <div className="moderated-card-actions"><button className="outline-button" type="button" onClick={(event) => { event.stopPropagation(); onEdit(); }}>Редактировать</button></div>}</div></article>;
 }
 
 export async function editReadingMaterial(item: ReadingItem, currentUser: DemoUser) {
-  if (item.ownerId === currentUser.id) {
-    window.dispatchEvent(new CustomEvent("bookmeet:edit-material", { detail: { kind: item.kind, id: item.id } }));
-    return;
-  }
-  if (!currentUser.isAdmin) return;
-  const title = window.prompt(item.kind === "review" ? "Название книги для рецензии" : "Название публикации", item.title);
-  if (title === null) return;
-  const text = window.prompt(item.kind === "review" ? "Краткое описание рецензии" : "Текст публикации", item.preview || item.text);
-  if (text === null) return;
-  const response = await fetch(`/api/admin/materials/${item.kind}/${item.id}`, { method: "PATCH", credentials: "same-origin", headers: { "content-type": "application/json" }, body: JSON.stringify({ title, text }) });
-  if (!response.ok) { window.alert("Не удалось сохранить изменения"); return; }
-  window.location.reload();
+  if (item.ownerId !== currentUser.id && !currentUser.isAdmin) return;
+  window.dispatchEvent(new CustomEvent("bookmeet:edit-material", { detail: { kind: item.kind, id: item.id, admin: Boolean(currentUser.isAdmin && item.ownerId !== currentUser.id) } }));
 }
 
 export async function deleteReadingMaterial(item: ReadingItem, currentUser: DemoUser) {
@@ -177,7 +194,7 @@ export function EventModal({ item, users = [], currentUserId, onClose, onOpenBoo
   return <div className="modal-backdrop" onMouseDown={routedClose}><section className="event-modal" onMouseDown={(event) => event.stopPropagation()}>
     <ModalIconActions onEdit={onEdit} onDelete={onDelete} onReport={onReport} onClose={routedClose} />
     <EventStatusLabel status={item.status} />
-    <span className="section-subtitle">Книжное событие · {item.city}</span><h2>{item.title}</h2>
+    <span className="section-subtitle">Книжное событие{item.isAdult ? " · 18+" : ""} · {item.city}</span><h2>{item.title}</h2>
     {item.bookTitle && <button className="event-modal-book" type="button" onClick={onOpenBook}><div className={`event-modal-book-cover library-cover-${item.bookCoverTone ?? "blue"}`} style={item.bookCoverUrl ? { backgroundImage: `url(${item.bookCoverUrl})` } : undefined}>{!item.bookCoverUrl && item.bookTitle.slice(0, 1)}</div><span><strong>{item.bookTitle}</strong><small>{item.bookAuthor}</small><p>{item.bookAnnotation || "Аннотация пока не добавлена."}</p></span></button>}
     <div className="event-modal-meta"><strong>{new Date(`${item.date}T00:00:00`).toLocaleDateString("ru-RU", { day: "numeric", month: "long", year: "numeric" })} · {item.time}</strong><span>{item.address}</span></div><p>{item.description}</p>
     {item.moderationNote && item.status !== "published" && <div className="moderation-note"><strong>Комментарий модератора</strong><p>{item.moderationNote}</p></div>}
@@ -213,19 +230,19 @@ export function MultiCityPicker({ values, onChange }: { values: string[]; onChan
   return <div className="multi-city-picker"><div className="selected-city-tags">{values.map((city) => <span key={city}>{city}<button type="button" onClick={() => onChange(values.filter((item) => item !== city))}>×</button></span>)}</div><CityAutocomplete label="Город (можно выбрать несколько)" value={draft} required={!values.length} onChange={(name, id) => { setDraft(name); if (id && !values.includes(name)) { onChange([...values, name]); setDraft(""); } }} /></div>;
 }
 
-export const emptyOccasion = { type: "" as "" | OccasionType, primaryText: "", audienceText: "", targetGender: "Все" as Occasion["targetGender"], targetCities: [] as string[], targetProfileType: "Все" as Occasion["targetProfileType"] };
+export const emptyOccasion = { type: "" as "" | OccasionType, primaryText: "", audienceText: "", isAdult: false, targetGender: "Все" as Occasion["targetGender"], targetCities: [] as string[], targetProfileType: "Все" as Occasion["targetProfileType"] };
 export const occasionLabels = { meet: "Просто познакомиться", discuss: "Обсудить что-то", invite: "Встретиться" } as const;
 
 export function OccasionForm({ initial, onCancel, onSave, submitLabel = "Отправить" }: { initial?: Occasion; onCancel: () => void; onSave: (value: typeof emptyOccasion) => Promise<void>; submitLabel?: string }) {
-  const [value, setValue] = useState<typeof emptyOccasion>(() => initial ? { type: initial.type, primaryText: initial.primaryText, audienceText: initial.audienceText, targetGender: initial.targetGender, targetCities: initial.targetCities, targetProfileType: initial.targetProfileType } : emptyOccasion);
+  const [value, setValue] = useState<typeof emptyOccasion>(() => initial ? { type: initial.type, primaryText: initial.primaryText, audienceText: initial.audienceText, isAdult: Boolean(initial.isAdult), targetGender: initial.targetGender, targetCities: initial.targetCities, targetProfileType: initial.targetProfileType } : emptyOccasion);
   const [saving, setSaving] = useState(false);
   const changeType = (type: OccasionType | "") => setValue({ ...emptyOccasion, type });
   const texts = value.type === "meet" ? { primary: "Расскажите о себе", audience: "С кем вы хотите познакомиться", audienceHint: "Опишите людей, с которыми вам хотелось бы познакомиться: например, их книжные интересы, возраст или формат общения." } : value.type === "discuss" ? { primary: "Что вы хотите обсудить?", audience: "С кем вы хотите это обсудить", audienceHint: "Расскажите, какого собеседника вы ищете и с кем вам было бы интересно обсудить эту тему." } : { primary: "Напишите своё предложение", audience: "Кого вы хотите пригласить?", audienceHint: "Опишите людей, которым может быть интересно ваше предложение и с кем вы хотели бы встретиться." };
-  return <form className="occasion-form" onSubmit={async (event) => { event.preventDefault(); if (!value.type) return; setSaving(true); try { await onSave(value); } finally { setSaving(false); } }}><div className="profile-title-row"><div><span className="section-subtitle">Поводы познакомиться</span><h2>{initial ? "Редактировать повод" : "Предложить повод для знакомства"}</h2></div></div><label>Тип предложения<CustomSelect ariaLabel="Тип предложения" value={value.type} onChange={changeType} options={[{ value: "", label: "Выберите тип предложения" }, { value: "meet", label: "1. Просто познакомиться" }, { value: "discuss", label: "2. Обсудить что-то" }, { value: "invite", label: "3. Встретиться" }]} /></label>{value.type && <><label>{texts.primary}<textarea required rows={5} value={value.primaryText} onChange={(event) => setValue({ ...value, primaryText: event.target.value })} placeholder={value.type === "invite" ? "Вы можете предложить сходить в книжный, музей или театр, выпить кофе, посмотреть кино, выйти на прогулку или посетить любое другое мероприятие." : undefined} /></label><fieldset className="occasion-audience-box"><legend>Кого вы ищете</legend><label>{texts.audience}<textarea required rows={4} value={value.audienceText} onChange={(event) => setValue({ ...value, audienceText: event.target.value })} placeholder={texts.audienceHint} /></label><div className="occasion-audience-grid"><label>Пол собеседника<CustomSelect ariaLabel="Пол собеседника" value={value.targetGender} onChange={(targetGender) => setValue({ ...value, targetGender })} options={["Все", "Мужской", "Женский"].map((item) => ({ value: item as Occasion["targetGender"], label: item }))} /></label><label>Тип профиля собеседника<CustomSelect ariaLabel="Тип профиля собеседника" value={value.targetProfileType} onChange={(targetProfileType) => setValue({ ...value, targetProfileType })} options={["Все", "Читатель", "Писатель", "Блогер"].map((item) => ({ value: item as Occasion["targetProfileType"], label: item }))} /></label></div></fieldset><MultiCityPicker values={value.targetCities} onChange={(targetCities) => setValue({ ...value, targetCities })} /></>}<div className="form-actions"><button type="button" onClick={onCancel}>Отмена</button><button className="primary-button" disabled={saving || !value.type || !value.targetCities.length} type="submit">{saving ? "Сохраняем…" : submitLabel}</button></div></form>;
+  return <form className="occasion-form" onSubmit={async (event) => { event.preventDefault(); if (!value.type) return; setSaving(true); try { await onSave(value); } finally { setSaving(false); } }}><div className="profile-title-row"><div><span className="section-subtitle">Поводы познакомиться</span><h2>{initial ? "Редактировать повод" : "Предложить повод для знакомства"}</h2></div></div><label>Тип предложения<CustomSelect ariaLabel="Тип предложения" value={value.type} onChange={changeType} options={[{ value: "", label: "Выберите тип предложения" }, { value: "meet", label: "1. Просто познакомиться" }, { value: "discuss", label: "2. Обсудить что-то" }, { value: "invite", label: "3. Встретиться" }]} /></label>{value.type && <><label>{texts.primary}<textarea required rows={5} value={value.primaryText} onChange={(event) => setValue({ ...value, primaryText: event.target.value })} placeholder={value.type === "invite" ? "Вы можете предложить сходить в книжный, музей или театр, выпить кофе, посмотреть кино, выйти на прогулку или посетить любое другое мероприятие." : undefined} /></label><fieldset className="occasion-audience-box"><legend>Кого вы ищете</legend><label>{texts.audience}<textarea required rows={4} value={value.audienceText} onChange={(event) => setValue({ ...value, audienceText: event.target.value })} placeholder={texts.audienceHint} /></label><div className="occasion-audience-grid"><label>Пол собеседника<CustomSelect ariaLabel="Пол собеседника" value={value.targetGender} onChange={(targetGender) => setValue({ ...value, targetGender })} options={["Все", "Мужской", "Женский"].map((item) => ({ value: item as Occasion["targetGender"], label: item }))} /></label><label>Тип профиля собеседника<CustomSelect ariaLabel="Тип профиля собеседника" value={value.targetProfileType} onChange={(targetProfileType) => setValue({ ...value, targetProfileType })} options={["Все", "Читатель", "Писатель", "Блогер"].map((item) => ({ value: item as Occasion["targetProfileType"], label: item }))} /></label></div></fieldset><MultiCityPicker values={value.targetCities} onChange={(targetCities) => setValue({ ...value, targetCities })} /><label className="adult-material-checkbox"><input type="checkbox" checked={value.isAdult} onChange={(event) => setValue({ ...value, isAdult: event.target.checked })} />Повод не предназначен для лиц младше 18 лет</label></>}<div className="form-actions"><button type="button" onClick={onCancel}>Отмена</button><button className="primary-button" disabled={saving || !value.type || !value.targetCities.length} type="submit">{saving ? "Сохраняем…" : submitLabel}</button></div></form>;
 }
 
 export function OccasionCard({ item, own, onOpen, onEdit }: { item: Occasion; own: boolean; onOpen: () => void; onEdit?: () => void }) {
-  return <article className="occasion-card material-clickable-card" role="button" tabIndex={0} onClick={onOpen} onKeyDown={(event) => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); onOpen(); } }}><div><span className="section-subtitle">{occasionLabels[item.type]}</span>{own && <EventStatusLabel status={item.status} />}</div><h3>{item.primaryText}</h3><p>{item.audienceText}</p><small>{item.targetCities.join(" · ")} · {item.targetProfileType} · {item.targetGender === "Все" ? "любой пол" : item.targetGender}</small>{own && item.status === "needs_changes" && onEdit && <button className="outline-button card-inline-action" type="button" onClick={(event) => { event.stopPropagation(); onEdit(); }}>Редактировать</button>}</article>;
+  return <article className="occasion-card material-clickable-card" role="button" tabIndex={0} onClick={onOpen} onKeyDown={(event) => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); onOpen(); } }}><div><span className="section-subtitle">{occasionLabels[item.type]}{item.isAdult ? " · 18+" : ""}</span>{own && <EventStatusLabel status={item.status} />}</div><h3>{item.primaryText}</h3><p>{item.audienceText}</p><small>{item.targetCities.join(" · ")} · {item.targetProfileType} · {item.targetGender === "Все" ? "любой пол" : item.targetGender}</small>{own && item.status === "needs_changes" && onEdit && <button className="outline-button card-inline-action" type="button" onClick={(event) => { event.stopPropagation(); onEdit(); }}>Редактировать</button>}</article>;
 }
 
 export function OccasionModal({ item, onClose, onOpenUser, onEdit, onDelete, onReport }: { item: Occasion; onClose: () => void; onOpenUser?: (id: number) => void; onEdit?: () => void; onDelete?: () => void; onReport?: () => void }) {
@@ -291,15 +308,15 @@ export function ReadingModal({ item, currentUser, users = [], likedUserIds = [],
     <div className="modal-backdrop" role="presentation" onMouseDown={routedClose}>
       <article className="reading-modal" role="dialog" aria-modal="true" aria-labelledby="reading-title" onMouseDown={(event) => event.stopPropagation()}>
         <ModalIconActions onEdit={onEdit} onDelete={onDelete} onReport={onReport} onClose={routedClose} />
-        <span className="section-subtitle">{item.kind === "review" ? `Рецензия${item.rating ? ` · ★ ${item.rating}` : ""}` : "Публикация блога"}</span>
+        <span className="section-subtitle">{item.kind === "review" ? `Рецензия${item.rating ? ` · ★ ${item.rating}` : ""}` : "Публикация блога"}{item.isAdult ? " · 18+" : ""}</span>
         {item.kind === "review" ? <button className="review-book-heading" type="button" onClick={() => matchingBook && setBookPopup(matchingBook)}><span className={`mini-book mini-book-${matchingBook?.coverTone ?? "blue"}`} style={matchingBook?.coverUrl ? { backgroundImage: `url(${matchingBook.coverUrl})` } : undefined}>{!matchingBook?.coverUrl && item.title.replace(/[«»]/g, "").slice(0, 1)}</span><span><small>{item.bookAuthor ?? matchingBook?.author ?? "Автор книги"}</small><strong id="reading-title">{item.title}</strong></span></button> : matchingBook && item.linkedBookId ? <h2 id="reading-title"><button className="reading-book-title-link" type="button" onClick={() => setBookPopup(matchingBook)}>{item.title}</button></h2> : <h2 id="reading-title">{item.title}</h2>}
         <p className="reading-author">{item.ownerId ? <button className="inline-user-link" type="button" onClick={() => onOpenUser?.(item.ownerId!)}>{item.author}</button> : item.author}{item.createdAt ? ` · ${item.createdAt}` : ""}</p>
         {item.preview && <div className="reading-text reading-preview-text">{item.preview}</div>}
-        {item.kind === "excerpt" ? (item.bodyHtml ? <div className="reading-text rich-reading-text" dangerouslySetInnerHTML={{ __html: sanitizeRichHtml(item.bodyHtml) }} /> : !item.preview && <div className="reading-text">{item.text}</div>) : <div className="reading-text">{item.text}</div>}
+        {item.kind === "excerpt" ? (item.bodyHtml ? <div className="reading-text rich-reading-text" onClick={(event) => { const spoiler = (event.target as Element).closest?.(".spoiler"); if (spoiler) spoiler.classList.add("is-revealed"); }} dangerouslySetInnerHTML={{ __html: sanitizeRichHtml(item.bodyHtml) }} /> : !item.preview && <div className="reading-text"><SpoilerText text={item.text} /></div>) : <div className="reading-text"><SpoilerText text={item.text} /></div>}
         <div className="reading-social-row"><button type="button" className={liked ? "outline-button liked" : "outline-button"} onClick={() => { if (currentUser) setHydratedLikedIds((current) => current.includes(currentUser.id) ? current.filter((id) => id !== currentUser.id) : [...current, currentUser.id]); onToggleLike?.(); }}>{liked ? "♥" : "♡"} Нравится · {effectiveLikedIds.length}</button>{item.ownerId && relationship === "none" && <button type="button" className="outline-button tooltip-button" data-tooltip="При добавлении пользователя в друзья, вы подписываетесь на все его обновления и начинаете переписку. Внимание: Пользователь может не принять ваше предложение дружбы" onClick={() => setRequesting(true)}>Добавить автора в друзья</button>}{item.ownerId && relationship === "outgoing" && <button type="button" className="outline-button" disabled>Предложение отправлено</button>}{item.ownerId && relationship !== "friends" && !isFollowing && <button type="button" className="outline-button tooltip-button" data-tooltip="Вы подписываетесь на все обновления пользователя, но переписываться можно только с друзьями" onClick={onFollow}>Подписаться на автора</button>}</div>
         {requesting && <form className="friend-request-form" onSubmit={(event) => { event.preventDefault(); onAddFriend?.(requestNote); setRequesting(false); }}><textarea value={requestNote} onChange={(event) => setRequestNote(event.target.value)} placeholder="Напишите пользователю, почему вы хотите добавиться в друзья и начать переписку" /><button className="primary-button" type="submit">Отправить</button></form>}
         {currentUser?.id === item.ownerId && likedUsers.length > 0 && <section className="material-likes"><h3>Нравится · {likedUsers.length}</h3><div>{likedUsers.slice(0, 4).map((user) => <button type="button" key={user.id} onClick={() => onOpenUser?.(user.id)}><span className={`avatar avatar-sm avatar-${user.color}`}>{user.initials}</span><strong>{user.profile.name}</strong></button>)}{likedUsers.length > 4 && <button className="other-likes-button" type="button" onClick={() => setShowAllLikes(true)}>и другие</button>}</div></section>}
-        <section className="comments-block"><h3>Комментарии · {comments.length}</h3><form onSubmit={async (event) => { event.preventDefault(); const clean = comment.trim(); if (!clean) return; const saved = await onComment?.(clean); setComments((current) => [...current, saved ?? { id: Date.now(), text: clean, userId: currentUser?.id ?? 0, createdAt: new Date().toISOString() }]); setComment(""); }}><textarea rows={3} value={comment} onChange={(event) => setComment(event.target.value)} placeholder="Написать комментарий" /><button className="primary-button" type="submit">Отправить</button></form>{comments.slice((page - 1) * 10, page * 10).map((entry) => { const author = users.find((user) => user.id === entry.userId); const canDelete = Boolean(currentUser && (currentUser.isAdmin || currentUser.id === entry.userId)); const canReport = Boolean(currentUser && !currentUser.isAdmin && currentUser.id !== entry.userId); return <article key={entry.id}><div className="comment-actions">{canReport && <button className="comment-report-button" type="button" onClick={() => openReportDialog({ kind: "comment", id: entry.id })} aria-label="Пожаловаться на комментарий" title="Пожаловаться"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3 2.8 20h18.4L12 3Z" /><path d="M12 8v6" /><circle cx="12" cy="17" r="1" /></svg></button>}{canDelete && <button className="comment-delete-button" type="button" onClick={() => void deleteComment(entry)} aria-label="Удалить комментарий" title="Удалить комментарий">×</button>}</div><button type="button" onClick={() => entry.userId && onOpenUser?.(entry.userId)}>{author?.profile.name ?? "Пользователь"}</button><small>{formatCommentDate(entry.createdAt)}</small><p>{entry.text}</p></article>; })}{comments.length > 10 && <div className="comment-pages">{Array.from({ length: Math.ceil(comments.length / 10) }, (_, index) => <button className={page === index + 1 ? "active" : ""} type="button" key={index} onClick={() => setPage(index + 1)}>{index + 1}</button>)}</div>}</section>
+        <section className="comments-block"><h3>Комментарии · {comments.length}</h3><form onSubmit={async (event) => { event.preventDefault(); const clean = comment.trim(); if (!clean) return; const saved = await onComment?.(clean); setComments((current) => [...current, saved ?? { id: Date.now(), text: clean, userId: currentUser?.id ?? 0, createdAt: new Date().toISOString() }]); setComment(""); }}><SpoilerTextarea rows={3} value={comment} onChange={setComment} placeholder="Написать комментарий" /><button className="primary-button" type="submit">Отправить</button></form>{comments.slice((page - 1) * 10, page * 10).map((entry) => { const author = users.find((user) => user.id === entry.userId); const canDelete = Boolean(currentUser && (currentUser.isAdmin || currentUser.id === entry.userId)); const canReport = Boolean(currentUser && !currentUser.isAdmin && currentUser.id !== entry.userId); return <article key={entry.id}><div className="comment-actions">{canReport && <button className="comment-report-button" type="button" onClick={() => openReportDialog({ kind: "comment", id: entry.id })} aria-label="Пожаловаться на комментарий" title="Пожаловаться"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3 2.8 20h18.4L12 3Z" /><path d="M12 8v6" /><circle cx="12" cy="17" r="1" /></svg></button>}{canDelete && <button className="comment-delete-button" type="button" onClick={() => void deleteComment(entry)} aria-label="Удалить комментарий" title="Удалить комментарий">×</button>}</div><button type="button" onClick={() => entry.userId && onOpenUser?.(entry.userId)}>{author?.profile.name ?? "Пользователь"}</button><small>{formatCommentDate(entry.createdAt)}</small><p><SpoilerText text={entry.text} /></p></article>; })}{comments.length > 10 && <div className="comment-pages">{Array.from({ length: Math.ceil(comments.length / 10) }, (_, index) => <button className={page === index + 1 ? "active" : ""} type="button" key={index} onClick={() => setPage(index + 1)}>{index + 1}</button>)}</div>}</section>
         {showAllLikes && <div className="nested-modal-backdrop" onMouseDown={() => setShowAllLikes(false)}><section className="likes-list-modal" onMouseDown={(event) => event.stopPropagation()}><button className="modal-close" type="button" onClick={() => setShowAllLikes(false)}>×</button><h2>Кому нравится</h2>{likedUsers.map((user) => <button type="button" key={user.id} onClick={() => onOpenUser?.(user.id)}><span className={`avatar avatar-sm avatar-${user.color}`}>{user.initials}</span><span><strong>{user.profile.name}</strong><small>{user.profile.type} · {user.profile.city}</small></span></button>)}</section></div>}
         {bookPopup && <UnifiedBookModal book={bookPopup} users={users} nested onClose={() => setBookPopup(null)} onOpenUser={onOpenUser} />}
       </article>
@@ -343,6 +360,8 @@ function PublicProfileDetails({ user }: { user: DemoUser }) {
     {(user.profile.publisherSalesLinks ?? []).length > 0 && <div><span>Где продаются книги</span><div className="writer-book-links">{user.profile.publisherSalesLinks!.map((link) => <a className="outline-button" href={link.url} target="_blank" rel="noreferrer" key={link.id}>{link.label}</a>)}</div></div>}
   </div>;
   return <div className="public-profile-details">
+    {typeof user.profile.age === "number" && <div><span>Возраст</span><p>{user.profile.age}</p></div>}
+    {user.profile.birthDate && <div><span>Дата рождения</span><p>{new Intl.DateTimeFormat("ru-RU", { day: "numeric", month: "long", year: "numeric", timeZone: "UTC" }).format(new Date(`${user.profile.birthDate}T00:00:00Z`))}</p></div>}
     {textField("О себе", user.profile.bio, "profile-bio-wide")}
     {user.profile.type === "Писатель" && textField("Книги, повлиявшие на меня, как на автора", user.profile.authorInfluences)}
     {user.profile.type === "Писатель" && textField("О чем мои тексты", user.profile.writingThemes)}
@@ -378,7 +397,7 @@ export function UserProfileModal({ user, viewer, users, events = [], likes, frie
   const commonFavoriteGenres = viewer.profile.favoriteGenres.filter((genre) => user.profile.favoriteGenres.includes(genre));
   const commonDislikedGenres = viewer.profile.dislikedGenres.filter((genre) => user.profile.dislikedGenres.includes(genre));
   const hasMatches = commonBooks.length + commonFavoriteGenres.length + commonDislikedGenres.length > 0;
-  const openedReadingItem: ReadingItem | null = openedReview ? ("kind" in openedReview ? openedReview : { id: openedReview.id, kind: "review", title: openedReview.bookTitle, author: user.profile.name, text: openedReview.fullText, ownerId: user.id, createdAt: openedReview.createdAt, preview: openedReview.preview, bookAuthor: openedReview.bookAuthor, rating: openedReview.rating }) : null;
+  const openedReadingItem: ReadingItem | null = openedReview ? ("kind" in openedReview ? openedReview : { id: openedReview.id, kind: "review", title: openedReview.bookTitle, author: user.profile.name, text: openedReview.fullText, ownerId: user.id, createdAt: openedReview.createdAt, preview: openedReview.preview, bookAuthor: openedReview.bookAuthor, rating: openedReview.rating, isAdult: openedReview.isAdult }) : null;
 
   useEffect(() => {
     const close = (event: KeyboardEvent) => event.key === "Escape" && routedClose();
@@ -465,7 +484,7 @@ export function UnifiedBookModal({ book: sourceBook, users, onClose, onOpenUser,
         <div className="unified-book-layout">
           <div className={`library-book-cover library-cover-${book.coverTone}`} style={book.coverUrl ? { backgroundImage: `url(${book.coverUrl})` } : undefined}>{!book.coverUrl && <><em>{book.author}</em><strong>{book.title}</strong><span>Book Meet</span></>}</div>
           <div className="unified-book-copy">
-            <span className="section-subtitle">Карточка книги</span><h2>{book.title}</h2>{bookAuthorProfile && onOpenUser ? <button className="book-author-profile" type="button" onClick={() => onOpenUser(bookAuthorProfile.id)}><span className={`avatar avatar-sm avatar-${bookAuthorProfile.color} ${bookAuthorProfile.avatarUrl ? "has-photo" : ""}`} style={bookAuthorProfile.avatarUrl ? { backgroundImage: `url(${bookAuthorProfile.avatarUrl})` } : undefined}>{!bookAuthorProfile.avatarUrl && bookAuthorProfile.initials}</span><span>{book.author}</span></button> : <p className="library-author">{book.author}</p>}
+            <span className="section-subtitle">Карточка книги{book.isAdult ? " · 18+" : ""}</span><h2>{book.title}</h2>{bookAuthorProfile && onOpenUser ? <button className="book-author-profile" type="button" onClick={() => onOpenUser(bookAuthorProfile.id)}><span className={`avatar avatar-sm avatar-${bookAuthorProfile.color} ${bookAuthorProfile.avatarUrl ? "has-photo" : ""}`} style={bookAuthorProfile.avatarUrl ? { backgroundImage: `url(${bookAuthorProfile.avatarUrl})` } : undefined}>{!bookAuthorProfile.avatarUrl && bookAuthorProfile.initials}</span><span>{book.author}</span></button> : <p className="library-author">{book.author}</p>}
             <div className="profile-tags">{book.genres.map((genre) => <span key={genre}>{genre}</span>)}</div>
             <nav className="book-detail-tabs">
               <button className={tab === "about" ? "active" : ""} type="button" onClick={() => setTab("about")}>О книге</button>
@@ -474,13 +493,13 @@ export function UnifiedBookModal({ book: sourceBook, users, onClose, onOpenUser,
               <button className={tab === "wishers" ? "active" : ""} type="button" onClick={() => setTab("wishers")}>Хотят почитать</button>
             </nav>
             {tab === "about" && <div className="unified-book-section">{(book.isbn || book.publisher) && <dl className="book-edition-details">{book.isbn && <><dt>ISBN</dt><dd>{book.isbn}</dd></>}{book.publisher && <><dt>Издательство</dt><dd>{book.publisher}</dd></>}</dl>}<p>{book.annotation || "Аннотация пока не добавлена."}</p>{isLibraryBook && <><strong>★ {book.rating}</strong><blockquote>«{book.review}»</blockquote></>}{book.flipUrl && <div className="writer-book-links"><button type="button" onClick={() => setWarningLink({ id: -1, label: "Flip", url: book.flipUrl!, action: "Купить" })}>Купить на Flip</button></div>}{(book.links ?? []).filter((link) => link.url !== book.flipUrl).length > 0 && <div className="writer-book-links">{(book.links ?? []).filter((link) => link.url !== book.flipUrl).map((link) => <button type="button" key={link.id} onClick={() => setWarningLink(link)}>{link.action} · {link.label}</button>)}</div>}</div>}
-            {tab === "readers" && <div className="book-readers-list">{readers.length ? readers.map(({ reader, item }) => <article className="book-reader-row" key={`${reader.id}-${item.id}`}><button type="button" className={`avatar avatar-sm avatar-${reader.color}`} onClick={() => onOpenUser?.(reader.id)}>{reader.initials}</button><div><button className="inline-user-link" type="button" onClick={() => onOpenUser?.(reader.id)}>{reader.profile.name}</button>{(item.readingStatus ?? "read") === "read" && item.rating > 0 && <strong> · ★ {item.rating}</strong>}<small className="book-reader-status">{item.readingStatus === "reading" ? "Читает сейчас" : "Прочитано"}</small>{item.review && <p>«{item.review}»</p>}</div></article>) : <p>Пока никто не читает и не прочитал эту книгу.</p>}</div>}
+            {tab === "readers" && <div className="book-readers-list">{readers.length ? readers.map(({ reader, item }) => <article className="book-reader-row" key={`${reader.id}-${item.id}`}><button type="button" className={`avatar avatar-sm avatar-${reader.color}`} onClick={() => onOpenUser?.(reader.id)}>{reader.initials}</button><div><button className="inline-user-link" type="button" onClick={() => onOpenUser?.(reader.id)}>{reader.profile.name}</button>{(item.readingStatus ?? "read") === "read" && item.rating > 0 && <strong> · ★ {item.rating}</strong>}<small className="book-reader-status">{item.readingStatus === "reading" ? `Читает сейчас${item.lastReadChapter ? ` · глава ${item.lastReadChapter}` : ""}` : "Прочитано"}</small>{item.readingStatus === "reading" && item.readingComment && <p>«{item.readingComment}»</p>}{item.review && <p>«{item.review}»</p>}</div></article>) : <p>Пока никто не читает и не прочитал эту книгу.</p>}</div>}
             {tab === "reviews" && <div className="book-review-results">{bookReviews.length ? bookReviews.map(({ reviewer, review }) => <button type="button" key={`${reviewer.id}-${review.id}`} onClick={() => onOpenReview ? onOpenReview(review, reviewer) : setOpenedReview({ review, reviewer })}><strong>★ {review.rating} · {review.createdAt}</strong><p>{review.preview}</p><span className="inline-user-link">{reviewer.profile.name}</span></button>) : <div><p>Рецензий пока нет</p><button className="primary-button" type="button" onClick={() => window.dispatchEvent(new CustomEvent("bookmeet:create-review"))}>Напишите рецензию первым</button></div>}</div>}
             {tab === "wishers" && <div className="book-readers-list">{wishers.length ? wishers.map((user) => <article className="book-reader-row" key={user.id}><button type="button" className={`avatar avatar-sm avatar-${user.color}`} onClick={() => onOpenUser?.(user.id)}>{user.initials}</button><div><button className="inline-user-link" type="button" onClick={() => onOpenUser?.(user.id)}>{user.profile.name}</button><p>{user.profile.type} · {user.profile.city}</p></div></article>) : <p>Пока никто не добавил эту книгу в список «Хочу почитать!».</p>}</div>}
           </div>
         </div>
         {warningLink && <div className="nested-modal-backdrop" onMouseDown={() => setWarningLink(null)}><section className="external-warning" onMouseDown={(event) => event.stopPropagation()}><h2>Вы переходите на другой сайт</h2><p>{warningLink.url}</p><div className="form-actions"><button type="button" onClick={() => setWarningLink(null)}>Отмена</button><button className="primary-button" type="button" onClick={() => window.open(warningLink.url, "_blank", "noopener,noreferrer")}>Перейти</button></div></section></div>}
-        {openedReview && <ReadingModal item={{ id: openedReview.review.id, kind: "review", title: openedReview.review.bookTitle, author: openedReview.reviewer.profile.name, text: openedReview.review.fullText, ownerId: openedReview.reviewer.id, createdAt: openedReview.review.createdAt, preview: openedReview.review.preview, bookAuthor: openedReview.review.bookAuthor, rating: openedReview.review.rating }} users={users} onOpenUser={onOpenUser} onClose={() => setOpenedReview(null)} />}
+        {openedReview && <ReadingModal item={{ id: openedReview.review.id, kind: "review", title: openedReview.review.bookTitle, author: openedReview.reviewer.profile.name, text: openedReview.review.fullText, ownerId: openedReview.reviewer.id, createdAt: openedReview.review.createdAt, preview: openedReview.review.preview, bookAuthor: openedReview.review.bookAuthor, rating: openedReview.review.rating, isAdult: openedReview.review.isAdult }} users={users} onOpenUser={onOpenUser} onClose={() => setOpenedReview(null)} />}
       </section>
     </div>
   );
@@ -778,7 +797,7 @@ export function BookEditor({ book, catalog, onClose, onSave }: { book: LibraryBo
             <label className={`cover-upload-button ${coverLocked ? "is-disabled" : ""}`}>{coverLocked ? "Обложка книги уже сохранена" : "Загрузить обложку"}<input type="file" accept="image/*" disabled={coverLocked} onChange={uploadCover} /></label>
           </div>
           <div className="book-fields">
-            <div className="book-reading-status library-editor-status" role="group" aria-label="Статус книги в библиотеке"><button className={(form.readingStatus ?? "read") === "want" ? "active" : ""} type="button" onClick={() => { setForm((current) => ({ ...current, readingStatus: "want", rating: 0, review: "", readMonth: undefined, readYear: undefined })); setRatingError(false); }}>Хочу прочитать</button><button className={form.readingStatus === "reading" ? "active" : ""} type="button" onClick={() => { setForm((current) => ({ ...current, readingStatus: "reading", rating: 0, review: "", readMonth: undefined, readYear: undefined })); setRatingError(false); }}>Читаю</button><button className={(form.readingStatus ?? "read") === "read" ? "active" : ""} type="button" onClick={() => setForm((current) => ({ ...current, readingStatus: "read" }))}>Прочитано</button></div>
+            <div className="book-reading-status library-editor-status" role="group" aria-label="Статус книги в библиотеке"><button className={(form.readingStatus ?? "read") === "want" ? "active" : ""} type="button" onClick={() => { setForm((current) => ({ ...current, readingStatus: "want", rating: 0, review: "", readMonth: undefined, readYear: undefined, lastReadChapter: undefined, readingComment: "" })); setRatingError(false); }}>Хочу прочитать</button><button className={form.readingStatus === "reading" ? "active" : ""} type="button" onClick={() => { setForm((current) => ({ ...current, readingStatus: "reading", rating: 0, review: "", readMonth: undefined, readYear: undefined })); setRatingError(false); }}>Читаю</button><button className={(form.readingStatus ?? "read") === "read" ? "active" : ""} type="button" onClick={() => setForm((current) => ({ ...current, readingStatus: "read", lastReadChapter: undefined, readingComment: "" }))}>Прочитано</button></div>
             <BookAutofillField hidePlaceholder value={autofillUrl} onChange={(value) => { setAutofillUrl(value); if (!value.trim()) setSourceFieldsLocked(false); }} onProduct={(product) => {
               const match = catalog.find((item) => item.id === product.catalogBookId)
                 ?? catalog.find((item) => product.isbn && item.isbn?.replace(/\D/g, "") === product.isbn.replace(/\D/g, ""))
@@ -800,6 +819,7 @@ export function BookEditor({ book, catalog, onClose, onSave }: { book: LibraryBo
               <BookMatchSuggestions books={catalog} queryAuthor={form.author} queryTitle={form.title} queryIsbn={form.isbn} onSelect={(match) => { setSelectedCatalogId(match.id); setAutofillUrl(match.flipUrl ?? ""); setForm((current) => ({ ...current, id: match.id, catalogBookId: match.id, author: match.author, title: match.title, isbn: match.isbn, publisher: match.publisher, genres: [...match.genres], annotation: match.annotation, coverUrl: match.coverUrl, coverTone: match.coverTone, flipUrl: match.flipUrl, links: match.links?.length ? match.links.map((link) => ({ ...link, id: Date.now() + link.id })) : current.links })); }} />
               <label>Аннотация<textarea rows={3} readOnly={fieldLocked(selectedCatalogBook?.annotation, form.annotation)} value={form.annotation} onChange={(event) => setForm({ ...form, annotation: event.target.value })} /></label>
             </div>
+            {form.readingStatus === "reading" && <div className="library-reading-progress"><label>Прочитано глав<input min={1} step={1} type="number" inputMode="numeric" value={form.lastReadChapter ?? ""} onChange={(event) => setForm({ ...form, lastReadChapter: event.target.value ? Math.max(1, Math.floor(Number(event.target.value))) : undefined })} /></label><label>Комментарий<textarea rows={4} placeholder="Ваши впечатления от прочитанного" value={form.readingComment ?? ""} onChange={(event) => setForm({ ...form, readingComment: event.target.value })} /></label></div>}
             {(form.readingStatus ?? "read") === "read" && <div className="library-reading-details">
               <div className="book-rating-field"><span>Оценка *</span><RatingStars allowHalf value={form.rating} onChange={(rating) => { setForm({ ...form, rating }); setRatingError(false); }} />{ratingError && <small>Поставьте оценку книге</small>}</div>
               <label>Краткий отзыв *<textarea required rows={4} value={form.review} onChange={(event) => setForm({ ...form, review: event.target.value })} /></label>
@@ -813,6 +833,7 @@ export function BookEditor({ book, catalog, onClose, onSave }: { book: LibraryBo
               <BookLinksEditor links={form.links ?? []} lockedUrls={lockedLinkUrls} restricted onChange={(links) => { setForm((current) => ({ ...current, links })); setLinksError(false); }} />
               {linksError && <p className="form-error">Проверьте ссылки в блоке «Где купить, читать или слушать»</p>}
             </div>
+            <label className="adult-material-checkbox"><input type="checkbox" checked={Boolean(form.isAdult)} onChange={(event) => setForm({ ...form, isAdult: event.target.checked })} />Книга не предназначена для лиц младше 18 лет</label>
             <div className="form-actions"><button type="button" onClick={onClose}>Отмена</button><button className="primary-button creation-action-button" type="submit">Сохранить книгу</button></div>
           </div>
         </form>
@@ -870,14 +891,14 @@ export function LibraryTab({ books, setBooks, userId, users, initialAdd = false 
   async function updateRating(id: number, rating: number) {
     const book = books.find((item) => item.id === id);
     if (!book) return;
-    const response = await fetch("/api/books", { method: "POST", credentials: "same-origin", headers: { "content-type": "application/json" }, body: JSON.stringify({ author: book.author, title: book.title, isbn: book.isbn, publisher: book.publisher, genres: book.genres, annotation: book.annotation, coverUrl: book.coverUrl, coverTone: book.coverTone, flipUrl: book.flipUrl, links: book.links, rating, shortReview: book.review, readMonth: book.readMonth, readYear: book.readYear, readingStatus: book.readingStatus ?? "read", useExistingId: book.id }) });
+    const response = await fetch("/api/books", { method: "POST", credentials: "same-origin", headers: { "content-type": "application/json" }, body: JSON.stringify({ author: book.author, title: book.title, isbn: book.isbn, publisher: book.publisher, genres: book.genres, annotation: book.annotation, isAdult: book.isAdult, coverUrl: book.coverUrl, coverTone: book.coverTone, flipUrl: book.flipUrl, links: book.links, rating, shortReview: book.review, readMonth: book.readMonth, readYear: book.readYear, readingStatus: book.readingStatus ?? "read", lastReadChapter: book.lastReadChapter, readingComment: book.readingComment, useExistingId: book.id }) });
     if (!response.ok) { window.alert("Не удалось сохранить оценку"); return; }
     setBooks((current) => current.map((item) => item.id === id ? { ...item, rating } : item));
   }
 
   async function saveBook(book: LibraryBook) {
     const existingBook = books.some((item) => item.id === book.id) || catalogFromUsers(users).some((item) => item.id === book.id);
-    const payload = { userId, author: book.author, title: book.title, isbn: book.isbn, publisher: book.publisher, genres: book.genres, annotation: book.annotation, coverUrl: book.coverUrl, coverTone: book.coverTone, flipUrl: book.flipUrl, links: book.links?.map(({ label, url, action }) => ({ label, url, action })), format: "Книга", rating: book.rating, shortReview: book.review, readMonth: book.readMonth, readYear: book.readYear, readingStatus: book.readingStatus ?? "read", useExistingId: book.catalogBookId ?? (existingBook ? book.id : undefined) };
+    const payload = { userId, author: book.author, title: book.title, isbn: book.isbn, publisher: book.publisher, genres: book.genres, annotation: book.annotation, isAdult: book.isAdult, coverUrl: book.coverUrl, coverTone: book.coverTone, flipUrl: book.flipUrl, links: book.links?.map(({ label, url, action }) => ({ label, url, action })), format: "Книга", rating: book.rating, shortReview: book.review, readMonth: book.readMonth, readYear: book.readYear, readingStatus: book.readingStatus ?? "read", lastReadChapter: book.lastReadChapter, readingComment: book.readingComment, useExistingId: book.catalogBookId ?? (existingBook ? book.id : undefined) };
     try {
       let response = await fetch("/api/books", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(payload) });
       if (response.status === 409) {
@@ -928,7 +949,7 @@ export function LibraryTab({ books, setBooks, userId, users, initialAdd = false 
 }
 
 export function ReviewEditor({ review, catalog, onClose, onSave }: { review?: UserReview | null; catalog: (LibraryBook | AuthorBook)[]; onClose: () => void; onSave: (review: UserReview) => void }) {
-  const [form, setForm] = useState({ bookTitle: review?.bookTitle ?? "", bookAuthor: review?.bookAuthor ?? "", rating: review?.rating ?? 0, preview: review?.preview ?? "", fullText: review?.fullText ?? "" });
+  const [form, setForm] = useState({ bookTitle: review?.bookTitle ?? "", bookAuthor: review?.bookAuthor ?? "", rating: review?.rating ?? 0, preview: review?.preview ?? "", fullText: review?.fullText ?? "", isAdult: review?.isAdult ?? false });
   const [ratingError, setRatingError] = useState(false);
 
   function submit(event: FormEvent) {
@@ -947,7 +968,8 @@ export function ReviewEditor({ review, catalog, onClose, onSave }: { review?: Us
           <BookMatchSuggestions books={catalog} queryAuthor={form.bookAuthor} queryTitle={form.bookTitle} onSelect={(book) => setForm({ ...form, bookTitle: book.title, bookAuthor: book.author })} />
           <div className="book-rating-field"><span>Оценка *</span><RatingStars value={form.rating} onChange={(rating) => { setForm({ ...form, rating }); setRatingError(false); }} />{ratingError && <small>Поставьте оценку книге</small>}</div>
           <label className="review-preview-field">Краткое описание к рецензии *<span className="review-preview-shell"><textarea required rows={4} maxLength={500} placeholder="Кратко расскажите, чем интересна ваша рецензия" value={form.preview} onChange={(event) => setForm({ ...form, preview: event.target.value })} /><small className={Array.from(form.preview).length >= 500 ? "limit-reached" : ""}>{Array.from(form.preview).length}/500</small></span></label>
-          <label>Полная рецензия *<textarea required rows={9} value={form.fullText} onChange={(event) => setForm({ ...form, fullText: event.target.value })} /></label>
+          <label>Полная рецензия *<SpoilerTextarea required rows={9} value={form.fullText} onChange={(fullText) => setForm({ ...form, fullText })} /></label>
+          <label className="adult-material-checkbox"><input type="checkbox" checked={form.isAdult} onChange={(event) => setForm({ ...form, isAdult: event.target.checked })} />Рецензия не предназначена для лиц младше 18 лет</label>
           <div className="form-actions"><button type="button" onClick={onClose}>Отмена</button><button className="primary-button creation-action-button" type="submit">Опубликовать</button></div>
         </form>
       </section>
@@ -1073,6 +1095,7 @@ export function WriterBookEditor({ book, author, allowFreeAuthor = false, onClos
             <label>Аннотация<textarea rows={4} readOnly={fieldLocked(book?.annotation, form.annotation)} value={form.annotation} onChange={(event) => setForm({ ...form, annotation: event.target.value })} /></label>
           </div>
           <BookLinksEditor links={form.links} lockedUrls={lockedLinkUrls} onChange={(links) => setForm((current) => ({ ...current, links }))} />
+          <label className="adult-material-checkbox"><input type="checkbox" checked={Boolean(form.isAdult)} onChange={(event) => setForm({ ...form, isAdult: event.target.checked })} />Книга не предназначена для лиц младше 18 лет</label>
           <div className="form-actions"><button type="button" onClick={onClose}>Отмена</button><button className="primary-button" type="submit">Сохранить книгу</button></div>
         </div>
       </form>
@@ -1098,6 +1121,7 @@ export function AuthorBooksTab({ books, setBooks, userId, author, users, publish
 export function RichTextEditor({ value, onChange }: { value: string; onChange: (value: string) => void }) {
   const editorRef = useRef<HTMLDivElement>(null);
   const [fontSizeValue, setFontSizeValue] = useState("16");
+  const [spoilerHint, setSpoilerHint] = useState(false);
   useEffect(() => {
     if (editorRef.current && document.activeElement !== editorRef.current && editorRef.current.innerHTML !== value) editorRef.current.innerHTML = value;
   }, [value]);
@@ -1122,6 +1146,29 @@ export function RichTextEditor({ value, onChange }: { value: string; onChange: (
     onChange(sanitizeRichHtml(editorRef.current?.innerHTML ?? ""));
   }
 
+  function toggleRichSpoiler() {
+    const selection = window.getSelection();
+    const editor = editorRef.current;
+    if (!editor || !selection || selection.rangeCount === 0 || selection.isCollapsed) {
+      setSpoilerHint(true);
+      window.setTimeout(() => setSpoilerHint(false), 1800);
+      return;
+    }
+    const range = selection.getRangeAt(0);
+    if (!editor.contains(range.commonAncestorContainer)) return;
+    const parent = range.commonAncestorContainer.nodeType === Node.ELEMENT_NODE ? range.commonAncestorContainer as HTMLElement : range.commonAncestorContainer.parentElement;
+    const existing = parent?.closest("span.spoiler");
+    if (existing && editor.contains(existing)) existing.replaceWith(...Array.from(existing.childNodes));
+    else {
+      const spoiler = document.createElement("span");
+      spoiler.className = "spoiler";
+      spoiler.append(range.extractContents());
+      range.insertNode(spoiler);
+    }
+    selection.removeAllRanges();
+    onChange(sanitizeRichHtml(editor.innerHTML));
+  }
+
   return <div className="rich-editor-shell">
     <div className="rich-editor-toolbar" aria-label="Форматирование текста">
       <button type="button" title="Жирный" onMouseDown={(event) => event.preventDefault()} onClick={() => run("bold")}><b>Ж</b></button>
@@ -1137,6 +1184,9 @@ export function RichTextEditor({ value, onChange }: { value: string; onChange: (
       <span className="toolbar-divider" />
       <button type="button" title="Маркированный список" onMouseDown={(event) => event.preventDefault()} onClick={() => run("insertUnorderedList")}>•≡</button>
       <button type="button" title="Нумерованный список" onMouseDown={(event) => event.preventDefault()} onClick={() => run("insertOrderedList")}>1≡</button>
+      <span className="toolbar-divider" />
+      <button type="button" title="Скрыть под спойлер" onMouseDown={(event) => event.preventDefault()} onClick={toggleRichSpoiler}>▦</button>
+      {spoilerHint && <span className="toolbar-hint">Выделите текст для скрытия под спойлер</span>}
     </div>
     <div ref={editorRef} className="rich-editor-content" contentEditable suppressContentEditableWarning data-placeholder="Продолжите публикацию…" onInput={(event) => { if (!event.currentTarget.textContent?.trim()) event.currentTarget.innerHTML = ""; onChange(sanitizeRichHtml(event.currentTarget.innerHTML)); }} />
   </div>;
@@ -1150,7 +1200,7 @@ export function PublisherNewsTab({ news, setNews, owner, canCreate = true }: {
 }) {
   const [editing, setEditing] = useState<PublisherNews | null | undefined>(undefined);
   const [opened, setOpened] = useState<PublisherNews | null>(null);
-  const empty = { id: 0, ownerId: owner.id, title: "", previewText: "", bodyHtml: "", body: "", createdAt: new Date().toLocaleDateString("ru-RU") };
+  const empty = { id: 0, ownerId: owner.id, title: "", previewText: "", bodyHtml: "", body: "", isAdult: false, createdAt: new Date().toLocaleDateString("ru-RU") };
   const [form, setForm] = useState<PublisherNews>(empty);
   const begin = (item: PublisherNews | null) => { setForm(item ? { ...item } : { ...empty, id: Date.now() }); setEditing(item); };
   const save = (event: FormEvent) => {
@@ -1162,9 +1212,9 @@ export function PublisherNewsTab({ news, setNews, owner, canCreate = true }: {
   };
   return <div className="publisher-news-tab">
     <div className="profile-title-row"><div><h1>Новости издательства</h1><p>{news.length} публикаций</p></div>{canCreate && <button className="primary-button" type="button" onClick={() => begin(null)}>＋ Добавить новость</button>}</div>
-    {news.length ? <div className="publisher-news-grid">{news.map((item) => <article className="material-clickable-card" role="button" tabIndex={0} key={item.id} onClick={() => setOpened(item)} onKeyDown={(event) => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); setOpened(item); } }}><span className="section-subtitle">{item.createdAt}</span><h3>{item.title}</h3><p>{item.previewText}</p></article>)}</div> : <div className="profile-tab-placeholder">Новости пока не опубликованы.</div>}
+    {news.length ? <div className="publisher-news-grid">{news.map((item) => <article className="material-clickable-card" role="button" tabIndex={0} key={item.id} onClick={() => setOpened(item)} onKeyDown={(event) => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); setOpened(item); } }}><span className="section-subtitle">{item.createdAt}{item.isAdult ? " · 18+" : ""}</span><h3>{item.title}</h3><p>{item.previewText}</p></article>)}</div> : <div className="profile-tab-placeholder">Новости пока не опубликованы.</div>}
     {opened && <div className="modal-backdrop" onMouseDown={() => setOpened(null)}><section className="reading-modal publisher-news-modal" onMouseDown={(event) => event.stopPropagation()}><ModalIconActions onEdit={canCreate ? () => { begin(opened); setOpened(null); } : undefined} onDelete={canCreate ? () => { if (window.confirm(`Удалить новость «${opened.title}»?`)) { setNews((current) => current.filter((item) => item.id !== opened.id)); setOpened(null); } } : undefined} onClose={() => setOpened(null)} /><span className="section-subtitle">Новости издательства · {opened.createdAt}</span><h2>{opened.title}</h2><p className="reading-preview">{opened.previewText}</p><div dangerouslySetInnerHTML={{ __html: sanitizeRichHtml(opened.bodyHtml) }} /></section></div>}
-    {editing !== undefined && <div className="modal-backdrop" onMouseDown={() => setEditing(undefined)}><section className="review-editor publisher-news-editor" onMouseDown={(event) => event.stopPropagation()}><button className="modal-close" type="button" onClick={() => setEditing(undefined)}>×</button><h2>{editing ? "Редактировать новость" : "Добавить новость"}</h2><form onSubmit={save}><label>Заголовок<input required value={form.title} onChange={(event) => setForm({ ...form, title: event.target.value })} /></label><label>Краткий текст<textarea required maxLength={500} rows={5} value={form.previewText} onChange={(event) => setForm({ ...form, previewText: event.target.value })} /></label><small>{form.previewText.length}/500</small><label>Полный текст<RichTextEditor value={form.bodyHtml} onChange={(bodyHtml) => setForm({ ...form, bodyHtml })} /></label><div className="form-actions"><button type="button" onClick={() => setEditing(undefined)}>Отмена</button><button className="primary-button" type="submit">Сохранить новость</button></div></form></section></div>}
+    {editing !== undefined && <div className="modal-backdrop" onMouseDown={() => setEditing(undefined)}><section className="review-editor publisher-news-editor" onMouseDown={(event) => event.stopPropagation()}><button className="modal-close" type="button" onClick={() => setEditing(undefined)}>×</button><h2>{editing ? "Редактировать новость" : "Добавить новость"}</h2><form onSubmit={save}><label>Заголовок<input required value={form.title} onChange={(event) => setForm({ ...form, title: event.target.value })} /></label><label>Краткий текст<textarea required maxLength={500} rows={5} value={form.previewText} onChange={(event) => setForm({ ...form, previewText: event.target.value })} /></label><small>{form.previewText.length}/500</small><label>Полный текст<RichTextEditor value={form.bodyHtml} onChange={(bodyHtml) => setForm({ ...form, bodyHtml })} /></label><label className="adult-material-checkbox"><input type="checkbox" checked={Boolean(form.isAdult)} onChange={(event) => setForm({ ...form, isAdult: event.target.checked })} />Новость не предназначена для лиц младше 18 лет</label><div className="form-actions"><button type="button" onClick={() => setEditing(undefined)}>Отмена</button><button className="primary-button" type="submit">Сохранить новость</button></div></form></section></div>}
   </div>;
 }
 
@@ -1193,6 +1243,7 @@ export function ExcerptsTab({ excerpts, setExcerpts, owner, users, likes, onTogg
       <div className="blog-book-toggle"><span>Публикация связана с вашей книгой?</span><button className={`switch-control ${linkedToBook ? "active" : ""}`} type="button" role="switch" aria-checked={linkedToBook} onClick={() => { setLinkedToBook((current) => !current); if (linkedToBook) setForm({ ...form, bookId: undefined, bookTitle: "" }); }}><span /></button></div>
       {linkedToBook && <div className="blog-book-picker">{writerBooks.length ? writerBooks.map((book) => <button className={`blog-book-option ${form.bookId === book.id ? "selected" : ""}`} type="button" key={book.id} onClick={() => setForm({ ...form, bookId: book.id, bookTitle: book.title, link: "" })}><div className={`library-book-cover library-cover-${book.coverTone}`} style={book.coverUrl ? { backgroundImage: `url(${book.coverUrl})` } : undefined}>{!book.coverUrl && <><em>{book.author}</em><strong>{book.title}</strong><span>Book Meet</span></>}</div><strong>{book.title}</strong></button>) : <p>Сначала добавьте книгу во вкладке «Мои книги».</p>}</div>}
       <div className="blog-composer"><span className="field-label blog-composer-title">Что нового?</span><label className="blog-text-block blog-preview-field"><span className="blog-block-title">Эта часть текста будет видна на главной странице и внутри публикации</span><textarea required rows={7} maxLength={500} placeholder="Напишите то, что привлечет читателей" value={form.previewText} onChange={(event) => setForm({ ...form, previewText: event.target.value, text: event.target.value })} /><small className={form.previewText.length >= 500 ? "limit-reached" : ""}>{form.previewText.length}/500</small></label><div className="blog-text-block blog-rich-block"><span className="blog-block-title">Эта часть текста будет видна только внутри публикации</span><RichTextEditor value={form.bodyHtml ?? ""} onChange={(bodyHtml) => setForm({ ...form, bodyHtml })} /></div></div>
+      <label className="adult-material-checkbox"><input type="checkbox" checked={Boolean(form.isAdult)} onChange={(event) => setForm({ ...form, isAdult: event.target.checked })} />Публикация не предназначена для лиц младше 18 лет</label>
       <div className="form-actions"><button type="button" onClick={closeEditor}>Отмена</button><button className="primary-button" type="submit" disabled={linkedToBook && !form.bookId}>Сохранить</button></div>
     </form></section></div>}
   </div>;
@@ -1216,8 +1267,8 @@ export function AdminCatalogOverlay({ item, users, onClose, onEdit, onDelete }: 
   if (item.kind === "occasion") return <OccasionModal item={item.source} onClose={onClose} onEdit={onEdit} onDelete={onDelete} />;
   const source = item.source as (UserReview | UserExcerpt) & { ownerId: number; ownerName: string };
   const readingItem: ReadingItem = item.kind === "review"
-    ? { id: item.id, kind: "review", title: (source as UserReview).bookTitle, bookAuthor: (source as UserReview).bookAuthor, author: source.ownerName, ownerId: source.ownerId, text: (source as UserReview).fullText, preview: (source as UserReview).preview, createdAt: (source as UserReview).createdAt }
-    : { id: item.id, kind: "excerpt", title: (source as UserExcerpt).bookTitle || "Публикация", linkedBookId: (source as UserExcerpt).bookId, author: source.ownerName, ownerId: source.ownerId, text: (source as UserExcerpt).text, preview: (source as UserExcerpt).previewText, bodyHtml: (source as UserExcerpt).bodyHtml, createdAt: (source as UserExcerpt).createdAt };
+    ? { id: item.id, kind: "review", title: (source as UserReview).bookTitle, bookAuthor: (source as UserReview).bookAuthor, author: source.ownerName, ownerId: source.ownerId, text: (source as UserReview).fullText, preview: (source as UserReview).preview, createdAt: (source as UserReview).createdAt, isAdult: (source as UserReview).isAdult }
+    : { id: item.id, kind: "excerpt", title: (source as UserExcerpt).bookTitle || "Публикация", linkedBookId: (source as UserExcerpt).bookId, author: source.ownerName, ownerId: source.ownerId, text: (source as UserExcerpt).text, preview: (source as UserExcerpt).previewText, bodyHtml: (source as UserExcerpt).bodyHtml, createdAt: (source as UserExcerpt).createdAt, isAdult: (source as UserExcerpt).isAdult };
   return <ReadingModal item={readingItem} currentUser={admin} users={users} onClose={onClose} onEdit={onEdit} onDelete={onDelete} />;
 }
 

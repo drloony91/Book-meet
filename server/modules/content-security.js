@@ -6,7 +6,8 @@ export function validateRichHtml(value) {
   const source = String(value ?? "");
   return sanitizeHtml(source, {
     allowedTags,
-    allowedAttributes: { div: ["style"], p: ["style"], span: ["style"] },
+    allowedAttributes: { div: ["style"], p: ["style"], span: ["style", "class"] },
+    allowedClasses: { span: ["spoiler"] },
     allowedStyles: {
       "*": {
         "font-size": [/^(?:12|14|16|18|22|28)px$/],

@@ -24,6 +24,7 @@ import { PublishingDirectoryPage, UsersDirectoryPage } from "../screens/UsersDir
 import { EventsDirectoryPage, HomeContent, MaterialsDirectoryPage, OccasionsDirectoryPage } from "../screens/ContentScreens";
 import { AdminProfile, MyProfile } from "../screens/ProfileScreens";
 import {
+  AdminCatalogEditor,
   EventForm,
   EventModal,
   OccasionForm,
@@ -121,6 +122,7 @@ export function useBookMeetController() {
   const [commenters, setCommenters] = useState<Record<string, number[]>>({});
   const [selectedBook, setSelectedBook] = useState<LibraryBook | AuthorBook | null>(null);
   const [selectedMaterial, setSelectedMaterial] = useState<ReadingItem | null>(null);
+  const [adminEditingMaterial, setAdminEditingMaterial] = useState<AdminCatalogItem | null>(null);
   const [events, setEvents] = useState<BookEvent[]>([]);
   const [eventFormOpen, setEventFormOpen] = useState(false);
   const [editingEvent, setEditingEvent] = useState<BookEvent | null>(null);
@@ -266,8 +268,17 @@ export function useBookMeetController() {
 
   useEffect(() => {
     const openEditor = (event: Event) => {
-      const detail = (event as CustomEvent<{ kind: "review" | "excerpt"; id: number }>).detail;
+      const detail = (event as CustomEvent<{ kind: "review" | "excerpt"; id: number; admin?: boolean }>).detail;
       if (!detail?.id || !["review", "excerpt"].includes(detail.kind)) return;
+      if (detail.admin && currentUser?.isAdmin) {
+        const owner = users.find((user) => detail.kind === "review" ? user.reviews.some((item) => item.id === detail.id) : (user.excerpts ?? []).some((item) => item.id === detail.id));
+        const source = detail.kind === "review" ? owner?.reviews.find((item) => item.id === detail.id) : owner?.excerpts?.find((item) => item.id === detail.id);
+        if (owner && source) {
+          setSelectedMaterial(null);
+          setAdminEditingMaterial({ id: detail.id, kind: detail.kind, title: detail.kind === "review" ? (source as UserReview).bookTitle : (source as UserExcerpt).bookTitle || "Публикация", subtitle: owner.profile.name, text: detail.kind === "review" ? (source as UserReview).preview : (source as UserExcerpt).previewText, source: { ...source, ownerId: owner.id, ownerName: owner.profile.name } });
+        }
+        return;
+      }
       setProfileAction(detail.kind);
       setProfileEditId(detail.id);
       setSelectedMaterial(null);
@@ -275,7 +286,7 @@ export function useBookMeetController() {
     };
     window.addEventListener("bookmeet:edit-material", openEditor);
     return () => window.removeEventListener("bookmeet:edit-material", openEditor);
-  }, []);
+  }, [currentUser?.isAdmin, users]);
 
   useEffect(() => {
     if (!notificationsOpen) return;
@@ -299,8 +310,8 @@ export function useBookMeetController() {
   const supportRow: Friend[] = currentUser && !currentUser.isAdmin && adminUser && !friendRows.some((friend) => friend.id === adminUser.id) ? (() => { const conversation = messages[conversationKey(currentUser.id, adminUser.id)] ?? []; const last = [...conversation].reverse().find((message) => !message.system); return [{ id: adminUser.id, name: "Служба поддержки", type: adminUser.profile.type, city: adminUser.profile.city, initials: "✓", color: "navy", online: Boolean(adminUser.online), support: true, unread: conversation.filter((message) => message.unread && !message.mine && !message.system).length || undefined, lastMessage: last?.text ?? "Мы всегда на связи", time: last?.time ?? "", bio: "Официальная служба поддержки Book Meet", books: "" }]; })() : [];
   const adminSupportRows: Friend[] = currentUser?.isAdmin ? users.filter((user) => user.id !== currentUser.id && !friendIds.includes(user.id) && Object.prototype.hasOwnProperty.call(messages, conversationKey(currentUser.id, user.id))).map((user) => { const conversation = messages[conversationKey(currentUser.id, user.id)] ?? []; const last = [...conversation].reverse().find((message) => !message.system); return { id: user.id, name: user.profile.name, type: user.profile.type, city: user.profile.city, initials: user.initials, avatarUrl: user.avatarUrl, color: user.color, online: Boolean(user.online), supportCase: true, unread: conversation.filter((message) => message.unread && !message.mine && !message.system).length || undefined, lastMessage: last?.text || (last?.attachment ? "Вложение" : "Обращение в поддержку"), time: last?.time ?? "", bio: user.profile.bio, books: user.profile.favoriteGenres.join(", ") }; }) : [];
   const currentFriends: Friend[] = currentUser?.isAdmin ? [...friendRows, ...adminSupportRows] : [...friendRows.filter((friend) => friend.id !== adminUser?.id), ...(currentUser && adminUser ? (friendRows.some((friend) => friend.id === adminUser.id) ? friendRows.filter((friend) => friend.id === adminUser.id).map((friend) => ({ ...friend, name: "Служба поддержки", support: true })) : supportRow) : [])];
-  const allReviews: Review[] = visibleUsers.flatMap((user, userIndex) => user.reviews.map((review, reviewIndex) => ({ id: review.id, ownerId: user.id, quote: review.preview, fullText: review.fullText, book: `«${review.bookTitle}»`, author: review.bookAuthor, user: user.profile.name, rating: String(review.rating), tone: ["blue", "green", "red"][(userIndex + reviewIndex) % 3], createdAt: review.createdAt, createdAtValue: review.createdAtValue })));
-  const allExcerpts: Excerpt[] = visibleUsers.flatMap((user) => (user.excerpts ?? []).map((excerpt) => ({ id: excerpt.id, ownerId: user.id, text: excerpt.previewText || excerpt.text.slice(0, 500), fullText: excerpt.text || excerpt.previewText, bodyHtml: excerpt.bodyHtml, linkedBookId: excerpt.bookId, title: excerpt.bookTitle || "Публикация", author: user.profile.name, genre: "", createdAt: excerpt.createdAt, createdAtValue: excerpt.createdAtValue })));
+  const allReviews: Review[] = visibleUsers.flatMap((user, userIndex) => user.reviews.map((review, reviewIndex) => ({ id: review.id, ownerId: user.id, quote: review.preview, fullText: review.fullText, book: `«${review.bookTitle}»`, author: review.bookAuthor, user: user.profile.name, rating: String(review.rating), tone: ["blue", "green", "red"][(userIndex + reviewIndex) % 3], createdAt: review.createdAt, createdAtValue: review.createdAtValue, isAdult: review.isAdult })));
+  const allExcerpts: Excerpt[] = visibleUsers.flatMap((user) => (user.excerpts ?? []).map((excerpt) => ({ id: excerpt.id, ownerId: user.id, text: excerpt.previewText || excerpt.text.slice(0, 500), fullText: excerpt.text || excerpt.previewText, bodyHtml: excerpt.bodyHtml, linkedBookId: excerpt.bookId, title: excerpt.bookTitle || "Публикация", author: user.profile.name, genre: "", createdAt: excerpt.createdAt, createdAtValue: excerpt.createdAtValue, isAdult: excerpt.isAdult })));
   const shareItems = useMemo<ChatShareItem[]>(() => {
     const books: ChatShareItem[] = catalogFromUsers(users).map((book) => ({ kind: "book", id: book.id, title: book.title, subtitle: book.author, preview: book.annotation, imageUrl: book.coverUrl, path: `/books/${book.id}` }));
     const people: ChatShareItem[] = users.filter((user) => !user.isAdmin).map((user) => ({ kind: "user", id: user.id, title: user.profile.name, subtitle: `${user.profile.type} · ${user.profile.city}`, preview: user.profile.bio, imageUrl: user.avatarUrl, path: `/users/${user.id}` }));
@@ -879,6 +890,7 @@ export function useBookMeetController() {
 
       {selectedBook && <UnifiedBookModal book={selectedBook} users={visibleUsers} onClose={() => setSelectedBook(null)} onReport={currentUser.isAdmin || selectedBook.creatorUserId === currentUser.id || users.some((user) => user.id === currentUser.id && (user.authorBooks ?? []).some((book) => book.id === selectedBook.id)) ? undefined : () => openReportDialog({ kind: "book", id: selectedBook.id })} onOpenUser={openUserProfile} onOpenReview={(review, user) => setSelectedMaterial({ id: review.id, kind: "review", title: review.bookTitle, author: user.profile.name, text: review.fullText, ownerId: user.id, createdAt: review.createdAt, preview: review.preview, bookAuthor: review.bookAuthor, rating: review.rating })} />}
       {selectedMaterial && <ReadingModal item={selectedMaterial} currentUser={currentUser} users={visibleUsers} likedUserIds={likes[`${selectedMaterial.kind}-${selectedMaterial.id}`] ?? []} onToggleLike={() => toggleLike(selectedMaterial)} onComment={(text) => addComment(selectedMaterial, text)} onOpenUser={openUserProfile} onClose={() => setSelectedMaterial(null)} onReport={selectedMaterial.ownerId !== currentUser.id && !currentUser.isAdmin ? () => openReportDialog({ kind: selectedMaterial.kind, id: selectedMaterial.id }) : undefined} onEdit={currentUser.isAdmin || selectedMaterial.ownerId === currentUser.id ? () => void editReadingMaterial(selectedMaterial, currentUser) : undefined} onDelete={currentUser.isAdmin || selectedMaterial.ownerId === currentUser.id ? () => void deleteReadingMaterial(selectedMaterial, currentUser) : undefined} />}
+      {adminEditingMaterial && <AdminCatalogEditor item={adminEditingMaterial} users={users} onClose={() => setAdminEditingMaterial(null)} onSave={async (payload) => { const response = await fetch(`/api/admin/materials/${adminEditingMaterial.kind}/${adminEditingMaterial.id}`, { method: "PATCH", credentials: "same-origin", headers: { "content-type": "application/json" }, body: JSON.stringify(payload) }); const data = await response.json().catch(() => ({})) as { error?: string }; if (!response.ok) { window.alert(data.error ?? "Не удалось сохранить изменения"); return; } setAdminEditingMaterial(null); await refreshBootstrap(); }} />}
       {detailNotification && <NotificationDetail notification={detailNotification} actor={users.find((user) => user.id === detailNotification.actorId)} isFollowing={follows.some((follow) => follow.followerId === currentUser.id && follow.targetId === detailNotification.actorId)} onClose={() => setDetailNotification(null)} onFollow={() => followUser(detailNotification.actorId)} />}
       {eventFormOpen && <div className="modal-backdrop" onMouseDown={() => setEventFormOpen(false)}><section className="event-editor-modal" onMouseDown={(event) => event.stopPropagation()}><EventForm catalog={catalogFromUsers(users)} onCreateBook={() => { setEventFormOpen(false); startCreating("book"); }} onCancel={() => setEventFormOpen(false)} onSave={createEvent} /></section></div>}
       {editingEvent && <div className="modal-backdrop" onMouseDown={() => setEditingEvent(null)}><section className="event-editor-modal" onMouseDown={(event) => event.stopPropagation()}><EventForm initial={editingEvent} catalog={catalogFromUsers(users)} onCreateBook={() => { setEditingEvent(null); startCreating("book"); }} submitLabel="Отправить повторно" onCancel={() => setEditingEvent(null)} onSave={resubmitEvent} /></section></div>}

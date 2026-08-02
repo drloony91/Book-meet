@@ -44,6 +44,15 @@ import type {
   UserProfileData,
 } from "../types/domain";
 
+function ageFromDateInput(value?: string) {
+  if (!value) return undefined;
+  const [year, month, day] = value.split("-").map(Number);
+  const now = new Date();
+  let age = now.getFullYear() - year;
+  if (now.getMonth() + 1 < month || now.getMonth() + 1 === month && now.getDate() < day) age -= 1;
+  return Number.isFinite(age) && age >= 0 ? age : undefined;
+}
+
 function AdminStatisticsPanel({ statistics }: { statistics: AdminStatistics | null }) {
   const userTypes = [
     ["Читатели", statistics?.usersByType["Читатель"] ?? 0],
@@ -333,8 +342,11 @@ export function MyProfile({ onBack, user, users, friends, friendRequests, follow
   const [publisherNews, setPublisherNews] = useState(user.publisherNews ?? []);
   const [wishBooks, setWishBooks] = useState(user.wishBooks ?? []);
   const [profile, setProfile] = useState(user.profile);
+  const [tabOrderDraft, setTabOrderDraft] = useState<ProfileTab[]>(user.profile.tabOrder ?? []);
+  const [reorderingTabs, setReorderingTabs] = useState(false);
+  const [draggedTab, setDraggedTab] = useState<ProfileTab | null>(null);
   const [avatarUrl, setAvatarUrl] = useState(user.avatarUrl);
-  const [invalidFields, setInvalidFields] = useState({ name: false, city: false });
+  const [invalidFields, setInvalidFields] = useState({ name: false, city: false, birthDate: false });
   const [requiredNotice, setRequiredNotice] = useState(false);
   const [unsavedNotice, setUnsavedNotice] = useState(false);
   const [publisherTypeNotice, setPublisherTypeNotice] = useState(false);
@@ -380,7 +392,7 @@ export function MyProfile({ onBack, user, users, friends, friendRequests, follow
     const action = pendingExitRef.current;
     setProfile(savedProfileRef.current);
     setAvatarUrl(savedAvatarUrlRef.current);
-    setInvalidFields({ name: false, city: false });
+    setInvalidFields({ name: false, city: false, birthDate: false });
     setEditing(false);
     setUnsavedNotice(false);
     pendingExitRef.current = null;
@@ -395,13 +407,13 @@ export function MyProfile({ onBack, user, users, friends, friendRequests, follow
       profile.publisherAccount, profile.publisherBik, profile.publisherBank,
       profile.publisherLegalAddress, profile.publisherPostalAddress,
     ].some((value) => !String(value ?? "").trim());
-    const nextInvalid = { name: !profile.name.trim(), city: !profile.cityId };
-    if (nextInvalid.name || nextInvalid.city || publisherRequired) {
+    const nextInvalid = { name: !profile.name.trim(), city: !profile.cityId, birthDate: profile.type !== "Издатель" && !profile.birthDate };
+    if (nextInvalid.name || nextInvalid.city || nextInvalid.birthDate || publisherRequired) {
       setInvalidFields(nextInvalid);
       setRequiredNotice(true);
       return;
     }
-    const cleanProfile = { ...profile, name: profile.name.trim() };
+    const cleanProfile = { ...profile, name: profile.name.trim(), age: profile.type === "Издатель" ? undefined : ageFromDateInput(profile.birthDate) };
     try {
       await onUserChange({ ...user, initials: cleanProfile.name.slice(0, 2).toUpperCase(), avatarUrl, profile: cleanProfile, books, reviews, authorBooks, excerpts: userExcerpts, publisherNews, wishBooks });
     } catch (error) {
@@ -412,7 +424,7 @@ export function MyProfile({ onBack, user, users, friends, friendRequests, follow
     savedProfileRef.current = cleanProfile;
     savedAvatarUrlRef.current = avatarUrl;
     setProfile(cleanProfile);
-    setInvalidFields({ name: false, city: false });
+    setInvalidFields({ name: false, city: false, birthDate: false });
     setEditing(false);
     onProfileCompleted?.();
     setSaved(true);
@@ -459,6 +471,34 @@ export function MyProfile({ onBack, user, users, friends, friendRequests, follow
     });
   }
 
+  const profileTabs = ([
+    { key: "main", label: "Основное" },
+    profile.type === "Писатель" ? { key: "author-books", label: `Мои книги · ${authorBooks.length}` } : null,
+    profile.type === "Издатель" ? { key: "author-books", label: `Книги издательства · ${authorBooks.length}` } : null,
+    profile.type === "Писатель" || profile.type === "Блогер" ? { key: "excerpts", label: `Мой блог · ${userExcerpts.length}` } : null,
+    profile.type === "Издатель" ? { key: "events", label: `События издательства · ${events.filter((item) => item.creatorId === user.id).length}` } : null,
+    profile.type === "Издатель" ? { key: "publisher-news", label: `Новости издательства · ${publisherNews.length}` } : null,
+    profile.type !== "Издатель" ? { key: "library", label: `Моя библиотека · ${books.length}` } : null,
+    profile.type === "Читатель" || profile.type === "Блогер" ? { key: "wishlist", label: `Хочу почитать! · ${wishBooks.length}` } : null,
+    profile.type === "Читатель" || profile.type === "Блогер" ? { key: "reviews", label: `Мои рецензии · ${reviews.length}` } : null,
+    profile.type !== "Издатель" ? { key: "events", label: `Мои мероприятия · ${events.filter((item) => item.creatorId === user.id).length + events.filter((item) => item.creatorId !== user.id && item.reminderSet).length}` } : null,
+    { key: "friends", label: `Мои друзья · ${friends.length}` },
+  ].filter(Boolean) as Array<{ key: ProfileTab; label: string }>);
+  const defaultTabOrder = profileTabs.map((item) => item.key);
+  const normalizedTabOrder = [...tabOrderDraft.filter((tab) => defaultTabOrder.includes(tab)), ...defaultTabOrder.filter((tab) => !tabOrderDraft.includes(tab))];
+  const orderedProfileTabs = normalizedTabOrder.map((tab) => profileTabs.find((item) => item.key === tab)).filter(Boolean) as Array<{ key: ProfileTab; label: string }>;
+
+  async function applyTabOrder() {
+    const nextProfile = { ...profile, tabOrder: normalizedTabOrder };
+    await onUserChange({ ...user, profile: nextProfile, books, reviews, authorBooks, excerpts: userExcerpts, publisherNews, wishBooks });
+    setProfile(nextProfile);
+    savedProfileRef.current = nextProfile;
+    setTabOrderDraft(normalizedTabOrder);
+    setReorderingTabs(false);
+    setSaved(true);
+    window.setTimeout(() => setSaved(false), 2200);
+  }
+
   return (
     <main className="my-profile-page">
       <div className="profile-page-topbar">
@@ -471,17 +511,10 @@ export function MyProfile({ onBack, user, users, friends, friendRequests, follow
           <input ref={avatarInputRef} className="visually-hidden" type="file" accept="image/jpeg,image/png,image/webp" onChange={(event) => void changeAvatar(event.target.files?.[0])} />
           <button type="button" className="change-photo" onClick={() => avatarInputRef.current?.click()}>Сменить фото</button>
           <nav aria-label="Разделы профиля">
-            <button className={activeTab === "main" ? "active" : ""} type="button" onClick={() => openTab("main")}>Основное</button>
-            {profile.type === "Писатель" && <button className={activeTab === "author-books" ? "active" : ""} type="button" onClick={() => openTab("author-books")}>Мои книги <span>{authorBooks.length}</span></button>}
-            {(profile.type === "Писатель" || profile.type === "Блогер") && <button className={activeTab === "excerpts" ? "active" : ""} type="button" onClick={() => openTab("excerpts")}>Мой блог <span>{userExcerpts.length}</span></button>}
-            {profile.type === "Издатель" && <button className={activeTab === "author-books" ? "active" : ""} type="button" onClick={() => openTab("author-books")}>Книги издательства <span>{authorBooks.length}</span></button>}
-            {profile.type === "Издатель" && <button className={activeTab === "events" ? "active" : ""} type="button" onClick={() => openTab("events")}>События издательства <span>{events.filter((item) => item.creatorId === user.id).length}</span></button>}
-            {profile.type === "Издатель" && <button className={activeTab === "publisher-news" ? "active" : ""} type="button" onClick={() => openTab("publisher-news")}>Новости издательства <span>{publisherNews.length}</span></button>}
-            {profile.type !== "Издатель" && <button className={activeTab === "library" ? "active" : ""} type="button" onClick={() => openTab("library")}>Моя библиотека <span>{books.length}</span></button>}
-            {(profile.type === "Читатель" || profile.type === "Блогер") && <button className={activeTab === "wishlist" ? "active" : ""} type="button" onClick={() => openTab("wishlist")}>Хочу почитать! <span>{wishBooks.length}</span></button>}
-            {(profile.type === "Читатель" || profile.type === "Блогер") && <button className={activeTab === "reviews" ? "active" : ""} type="button" onClick={() => openTab("reviews")}>Мои рецензии <span>{reviews.length}</span></button>}
-            {profile.type !== "Издатель" && <button className={activeTab === "events" ? "active" : ""} type="button" onClick={() => openTab("events")}>Мои мероприятия <span>{events.filter((item) => item.creatorId === user.id).length + events.filter((item) => item.creatorId !== user.id && item.reminderSet).length}</span></button>}
-            <button className={activeTab === "friends" ? "active" : ""} type="button" onClick={() => openTab("friends")}>Мои друзья <span>{friends.length}</span></button>
+            {orderedProfileTabs.map((item) => <div className={`profile-nav-row ${reorderingTabs ? "is-reordering" : ""}`} key={item.key} onDragOver={(event) => { if (reorderingTabs) event.preventDefault(); }} onDrop={() => { if (!draggedTab || draggedTab === item.key) return; const next = normalizedTabOrder.filter((tab) => tab !== draggedTab); next.splice(next.indexOf(item.key), 0, draggedTab); setTabOrderDraft(next); setDraggedTab(null); }}>
+              {reorderingTabs && <span className="profile-tab-drag-handle" draggable onDragStart={() => setDraggedTab(item.key)} onDragEnd={() => setDraggedTab(null)} aria-label={`Переместить вкладку ${item.label}`} title="Перетащите вкладку">☰</span>}
+              <button className={activeTab === item.key ? "active" : ""} type="button" onClick={() => openTab(item.key)}>{item.label}</button>
+            </div>)}
             <button className={activeTab === "settings" ? "active" : ""} type="button" onClick={() => openTab("settings")}>Настройки</button>
           </nav>
         </div>
@@ -495,9 +528,10 @@ export function MyProfile({ onBack, user, users, friends, friendRequests, follow
               <form className="profile-form" noValidate onSubmit={save}>
                 <div className="form-row">
                   <label className={invalidFields.name ? "field-invalid" : ""}>{profile.type === "Издатель" ? "Название издательства *" : "Имя *"}<input required aria-invalid={invalidFields.name} value={profile.name} onChange={(event) => { setProfile({ ...profile, name: event.target.value }); setInvalidFields((current) => ({ ...current, name: false })); }} /></label>
-                  <CityAutocomplete value={profile.city} required invalid={invalidFields.city} onChange={(city, cityId, country) => { setProfile({ ...profile, city, cityId, country }); setInvalidFields((current) => ({ ...current, city: false })); }} />
+                  <label>Тип профиля<CustomSelect ariaLabel="Тип профиля" value={profile.type} onChange={(type) => { if (type === "Издатель" && profile.type !== "Издатель") setPublisherTypeNotice(true); else setProfile({ ...profile, type }); }} options={["Читатель", "Писатель", "Блогер", "Издатель"].map((item) => ({ value: item as UserProfileData["type"], label: item }))} /></label>
                 </div>
-                <div className="form-row"><label>Тип профиля<CustomSelect ariaLabel="Тип профиля" value={profile.type} onChange={(type) => { if (type === "Издатель" && profile.type !== "Издатель") setPublisherTypeNotice(true); else setProfile({ ...profile, type }); }} options={["Читатель", "Писатель", "Блогер", "Издатель"].map((item) => ({ value: item as UserProfileData["type"], label: item }))} /></label>{profile.type !== "Издатель" && <label>Пол<CustomSelect ariaLabel="Пол" value={profile.gender} onChange={(gender) => setProfile({ ...profile, gender })} options={["Не указан", "Мужской", "Женский"].map((item) => ({ value: item as UserProfileData["gender"], label: item }))} /></label>}</div>
+                <div className="form-row profile-identity-row"><CityAutocomplete value={profile.city} required invalid={invalidFields.city} onChange={(city, cityId, country) => { setProfile({ ...profile, city, cityId, country }); setInvalidFields((current) => ({ ...current, city: false })); }} />{profile.type !== "Издатель" && <><label className={invalidFields.birthDate ? "field-invalid" : ""}>Дата рождения *<input required aria-invalid={invalidFields.birthDate} type="date" max={new Date().toISOString().slice(0, 10)} value={profile.birthDate ?? ""} onChange={(event) => { setProfile({ ...profile, birthDate: event.target.value }); setInvalidFields((current) => ({ ...current, birthDate: false })); }} /></label><label>Пол<CustomSelect ariaLabel="Пол" value={profile.gender} onChange={(gender) => setProfile({ ...profile, gender })} options={["Не указан", "Мужской", "Женский"].map((item) => ({ value: item as UserProfileData["gender"], label: item }))} /></label></>}</div>
+                {profile.type !== "Издатель" && <label className="profile-checkbox"><input type="checkbox" checked={Boolean(profile.showBirthDateToFriends)} onChange={(event) => setProfile({ ...profile, showBirthDateToFriends: event.target.checked })} />Показывать дату рождения друзьям</label>}
                 {profile.type === "Издатель" ? <>
                   <label>Ссылка на сайт издательства *<input required type="url" value={profile.publisherWebsite ?? ""} onChange={(event) => setProfile({ ...profile, publisherWebsite: event.target.value })} /></label>
                   <label>Об издательстве *<textarea required rows={5} value={profile.bio} onChange={(event) => setProfile({ ...profile, bio: event.target.value })} /></label>
@@ -529,6 +563,7 @@ export function MyProfile({ onBack, user, users, friends, friendRequests, follow
                   <div><span>Где продаются книги</span><div className="writer-book-links">{(profile.publisherSalesLinks ?? []).map((link) => <a className="outline-button" key={link.id} href={link.url} target="_blank" rel="noreferrer">{link.label}</a>)}</div></div>
                   <div className="publisher-private-details profile-wide-field"><span>Юридические данные · видны только вам и администратору</span><p><b>{profile.publisherLegalName}</b><br />БИН: {profile.publisherBin}<br />Расчётный счёт: {profile.publisherAccount}<br />БИК: {profile.publisherBik} · {profile.publisherBank}<br />Юридический адрес: {profile.publisherLegalAddress}<br />Почтовый адрес: {profile.publisherPostalAddress}</p></div>
                 </> : <>
+                <div><span>Возраст</span><p>{profile.age !== undefined ? `${profile.age}` : "Будет рассчитан по дате рождения"}</p></div>
                 <div><span>О себе</span><p>{profile.bio}</p></div>
                 {profile.type === "Писатель" && <><div><span>Книги, повлиявшие на меня, как на автора</span><p>{profile.authorInfluences}</p></div><div><span>О чем мои тексты</span><p>{profile.writingThemes}</p></div></>}
                 <div><span>Мой идеальный выходной</span><p>{profile.weekend}</p></div>
@@ -555,7 +590,7 @@ export function MyProfile({ onBack, user, users, friends, friendRequests, follow
           {activeTab === "reviews" && (profile.type === "Читатель" || profile.type === "Блогер") && <ReviewsTab reviews={reviews} setReviews={setReviews} owner={{ ...user, profile, books, reviews }} users={users} likes={likes} onToggleLike={onToggleLike} onComment={onComment} onOpenUser={onOpenUser} initialAdd={initialAction === "review" && !initialEditId} initialEditId={initialAction === "review" ? initialEditId : null} />}
           {activeTab === "events" && <MyEventsTab createdEvents={events.filter((item) => item.creatorId === user.id)} participatingEvents={events.filter((item) => item.creatorId !== user.id && item.reminderSet)} users={users} currentUserId={user.id} onOpenUser={onOpenUser} onEdit={onEditEvent} onDeleted={onDeleteEvent} />}
           {activeTab === "friends" && <ProfileFriendsTab friends={friends} outgoing={friendRequests.filter((request) => request.status === "pending" && request.fromId === user.id).map((request) => users.find((item) => item.id === request.toId)).filter(Boolean) as DemoUser[]} incoming={friendRequests.filter((request) => request.status === "pending" && request.toId === user.id).map((request) => users.find((item) => item.id === request.fromId)).filter(Boolean) as DemoUser[]} subscriptions={follows.filter((follow) => follow.followerId === user.id).map((follow) => users.find((item) => item.id === follow.targetId)).filter((item): item is DemoUser => Boolean(item) && !item!.isAdmin)} followers={follows.filter((follow) => follow.targetId === user.id).map((follow) => users.find((item) => item.id === follow.followerId)).filter((item): item is DemoUser => Boolean(item) && !item!.isAdmin)} onOpenUser={onOpenUser} />}
-          {activeTab === "settings" && <div className="simple-profile-tab"><div className="profile-title-row"><div><h1>Настройки</h1><p>Управление профилем Book Meet</p></div></div><section className="blocked-users-settings"><h2>Заблокированные пользователи</h2>{users.some((item) => item.blockedByMe) ? <div className="blocked-user-grid">{users.filter((item) => item.blockedByMe).map((item) => <button type="button" key={item.id} className="blocked-user-card" onClick={() => onOpenUser(item.id)}><span className={`avatar avatar-sm avatar-${item.color} ${item.avatarUrl ? "has-photo" : ""}`} style={item.avatarUrl ? { backgroundImage: `url(${item.avatarUrl})` } : undefined}>{!item.avatarUrl && item.initials}</span><span><strong>{item.profile.name}</strong><small>{item.profile.type} · {item.profile.city}</small></span></button>)}</div> : <p>Заблокированных пользователей нет.</p>}</section></div>}
+          {activeTab === "settings" && <div className="simple-profile-tab"><div className="profile-title-row"><div><h1>Настройки</h1><p>Управление профилем Book Meet</p></div></div><section className="profile-menu-order-settings"><h2>Изменить порядок пунктов меню профиля</h2><div className="profile-menu-order-actions"><button className="outline-button" type="button" onClick={() => { setTabOrderDraft(profile.tabOrder ?? defaultTabOrder); setReorderingTabs(true); }}>Изменить</button>{reorderingTabs && <button className="primary-button" type="button" onClick={() => void applyTabOrder()}>Применить</button>}</div><p>В режиме изменения перетащите вкладку за значок из трёх полосок слева. «Настройки» всегда остаются последними.</p></section><section className="blocked-users-settings"><h2>Заблокированные пользователи</h2>{users.some((item) => item.blockedByMe) ? <div className="blocked-user-grid">{users.filter((item) => item.blockedByMe).map((item) => <button type="button" key={item.id} className="blocked-user-card" onClick={() => onOpenUser(item.id)}><span className={`avatar avatar-sm avatar-${item.color} ${item.avatarUrl ? "has-photo" : ""}`} style={item.avatarUrl ? { backgroundImage: `url(${item.avatarUrl})` } : undefined}>{!item.avatarUrl && item.initials}</span><span><strong>{item.profile.name}</strong><small>{item.profile.type} · {item.profile.city}</small></span></button>)}</div> : <p>Заблокированных пользователей нет.</p>}</section></div>}
         </div>
       </section>
       {requiredNotice && <div className="notice-backdrop" role="presentation" onMouseDown={() => setRequiredNotice(false)}><section className="required-fields-notice" role="alertdialog" aria-modal="true" aria-labelledby="required-fields-title" onMouseDown={(event) => event.stopPropagation()}><h2 id="required-fields-title">Заполните обязательные поля</h2><button className="primary-button" type="button" autoFocus onClick={() => setRequiredNotice(false)}>Ок</button></section></div>}

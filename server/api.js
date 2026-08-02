@@ -6,7 +6,7 @@ import { createPublicKey, randomBytes, verify as verifySignature } from "node:cr
 import https from "node:https";
 import { fileURLToPath } from "node:url";
 import { getPool, withTransaction } from "./db.js";
-import { loadBootstrap, resolveBook } from "./data.js";
+import { ageFromBirthDate, loadBootstrap, resolveBook } from "./data.js";
 import { createBootstrapRouter } from "./modules/bootstrap-router.js";
 import { plainTextFromHtml, validateRichHtml } from "./modules/content-security.js";
 import { previewRemoteCover, saveAvatar, saveCover, saveRemoteCover } from "./modules/image-storage.js";
@@ -28,6 +28,18 @@ let googleJwksRefreshPromise;
 const realtimeClients = new Set();
 const presenceTouches = new Map();
 const CYRILLIC_CITY_PATTERN = /^[А-ЯЁа-яёІіҢңҒғҮүҰұҚқӨөҺһӘәЎўЇїЄєҐґЏџЉљЊњЋћЌќ\s.'’()-]+$/u;
+const PROFILE_TABS = new Set(["main", "author-books", "excerpts", "publisher-news", "library", "wishlist", "reviews", "events", "friends"]);
+
+async function assertAdultMaterialAllowed(connection, userId, isAdult) {
+  if (!isAdult) return;
+  const [[account]] = await connection.query(
+    "SELECT u.role, p.birth_date FROM users u JOIN profiles p ON p.user_id = u.id WHERE u.id = ?",
+    [userId],
+  );
+  if (account?.role !== "admin" && Number(ageFromBirthDate(account?.birth_date) ?? -1) < 18) {
+    throw Object.assign(new Error("Материалы 18+ могут создавать только совершеннолетние пользователи"), { statusCode: 403 });
+  }
+}
 
 function broadcastRealtime() {
   const payload = `event: update\ndata: ${Date.now()}\n\n`;
@@ -590,6 +602,7 @@ function eventPayload(body = {}) {
     title: String(body.title ?? "").trim().slice(0, 200),
     summary: String(body.summary ?? "").trim().slice(0, 1200),
     description: String(body.description ?? "").trim(),
+    isAdult: Boolean(body.isAdult),
     date: String(body.date ?? "").trim(),
     time: String(body.time ?? "").trim(),
     city: String(body.city ?? "").trim().slice(0, 120),
@@ -623,7 +636,7 @@ function occasionPayload(body = {}) {
     throw Object.assign(new Error("Заполните все поля повода для знакомства"), { statusCode: 400 });
   }
   if (targetCities.some((city) => !CYRILLIC_CITY_PATTERN.test(city))) throw Object.assign(new Error("Выберите города из списка на кириллице"), { statusCode: 400 });
-  return { type, primaryText, audienceText, targetGender, targetCities, targetProfileType };
+  return { type, primaryText, audienceText, isAdult: Boolean(body.isAdult), targetGender, targetCities, targetProfileType };
 }
 
 async function knownCity(connection, name, preferredId) {
@@ -1216,6 +1229,7 @@ router.post("/events", asyncRoute(async (request, response) => {
   const userId = request.bookMeetUser.id;
   const payload = eventPayload(request.body);
   const event = await withTransaction(async (connection) => {
+    await assertAdultMaterialAllowed(connection, userId, payload.isAdult);
     const city = await knownCity(connection, payload.city, request.body?.cityId);
     let linkedBook = null;
     if (payload.linkedBookId) {
@@ -1223,9 +1237,9 @@ router.post("/events", asyncRoute(async (request, response) => {
       if (!linkedBook) throw Object.assign(new Error("Выбранная книга не найдена"), { statusCode: 400 });
     }
     const [created] = await connection.query(
-      `INSERT INTO events (creator_user_id, title, summary, description, event_date, event_time, city, city_id, address, map_url, details_url, book_id)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      [userId, payload.title, payload.summary, payload.description, payload.date, payload.time, city.name, city.id, payload.address, payload.mapUrl || null, payload.detailsUrl || null, linkedBook?.id ?? null],
+      `INSERT INTO events (creator_user_id, title, summary, description, is_adult, event_date, event_time, city, city_id, address, map_url, details_url, book_id)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      [userId, payload.title, payload.summary, payload.description, payload.isAdult ? 1 : 0, payload.date, payload.time, city.name, city.id, payload.address, payload.mapUrl || null, payload.detailsUrl || null, linkedBook?.id ?? null],
     );
     await connection.query(
       `INSERT INTO notifications (user_id, actor_user_id, notification_type, title, body, material_kind, material_id)
@@ -1281,6 +1295,7 @@ router.patch("/events/:id", asyncRoute(async (request, response) => {
   const eventId = Number(request.params.id);
   const payload = eventPayload(request.body);
   const event = await withTransaction(async (connection) => {
+    await assertAdultMaterialAllowed(connection, userId, payload.isAdult);
     const [[current]] = await connection.query("SELECT status FROM events WHERE id = ? AND creator_user_id = ? FOR UPDATE", [eventId, userId]);
     if (!current) throw Object.assign(new Error("Событие не найдено"), { statusCode: 404 });
     const city = await knownCity(connection, payload.city, request.body?.cityId);
@@ -1290,8 +1305,8 @@ router.patch("/events/:id", asyncRoute(async (request, response) => {
       if (!linkedBook) throw Object.assign(new Error("Выбранная книга не найдена"), { statusCode: 400 });
     }
     await connection.query(
-      `UPDATE events SET title = ?, summary = ?, description = ?, event_date = ?, event_time = ?, city = ?, city_id = ?, address = ?, map_url = ?, details_url = ?, book_id = ?, status = 'pending', moderation_note = NULL, is_pinned = 0 WHERE id = ?`,
-      [payload.title, payload.summary, payload.description, payload.date, payload.time, city.name, city.id, payload.address, payload.mapUrl || null, payload.detailsUrl || null, linkedBook?.id ?? null, eventId],
+      `UPDATE events SET title = ?, summary = ?, description = ?, is_adult = ?, event_date = ?, event_time = ?, city = ?, city_id = ?, address = ?, map_url = ?, details_url = ?, book_id = ?, status = 'pending', moderation_note = NULL, is_pinned = 0 WHERE id = ?`,
+      [payload.title, payload.summary, payload.description, payload.isAdult ? 1 : 0, payload.date, payload.time, city.name, city.id, payload.address, payload.mapUrl || null, payload.detailsUrl || null, linkedBook?.id ?? null, eventId],
     );
     return {
       id: eventId, creatorId: userId, ...payload, city: city.name, cityId: city.id,
@@ -1332,8 +1347,8 @@ router.patch("/admin/events/:id", asyncRoute(async (request, response) => {
         if (!book) throw Object.assign(new Error("Выбранная книга не найдена"), { statusCode: 400 });
       }
       await connection.query(
-        `UPDATE events SET title = ?, summary = ?, description = ?, event_date = ?, event_time = ?, city = ?, city_id = ?, address = ?, map_url = ?, details_url = ?, book_id = ? WHERE id = ?`,
-        [payload.title, payload.summary, payload.description, payload.date, payload.time, city.name, city.id, payload.address, payload.mapUrl || null, payload.detailsUrl || null, payload.linkedBookId ?? null, eventId],
+        `UPDATE events SET title = ?, summary = ?, description = ?, is_adult = ?, event_date = ?, event_time = ?, city = ?, city_id = ?, address = ?, map_url = ?, details_url = ?, book_id = ? WHERE id = ?`,
+        [payload.title, payload.summary, payload.description, payload.isAdult ? 1 : 0, payload.date, payload.time, city.name, city.id, payload.address, payload.mapUrl || null, payload.detailsUrl || null, payload.linkedBookId ?? null, eventId],
       );
     } else {
       const statuses = { accept: "published", revision: "needs_changes", reject: "rejected" };
@@ -1360,15 +1375,16 @@ router.post("/occasions", asyncRoute(async (request, response) => {
   const userId = request.bookMeetUser.id;
   const payload = occasionPayload(request.body);
   const occasion = await withTransaction(async (connection) => {
+    await assertAdultMaterialAllowed(connection, userId, payload.isAdult);
     const access = await publisherAccess(connection, userId);
     if (access.isPublisher) throw Object.assign(new Error("Издательства не могут создавать поводы познакомиться"), { statusCode: 403 });
     const cities = await knownCities(connection, payload.targetCities);
     payload.targetCities = cities.map((city) => city.name);
     const [[creator]] = await connection.query("SELECT display_name FROM profiles WHERE user_id = ?", [userId]);
     const [created] = await connection.query(
-      `INSERT INTO occasions (creator_user_id, occasion_type, primary_text, audience_text, target_gender, target_cities, target_profile_type)
-       VALUES (?, ?, ?, ?, ?, ?, ?)`,
-      [userId, payload.type, payload.primaryText, payload.audienceText, payload.targetGender, JSON.stringify(payload.targetCities), payload.targetProfileType],
+      `INSERT INTO occasions (creator_user_id, occasion_type, primary_text, audience_text, is_adult, target_gender, target_cities, target_profile_type)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+      [userId, payload.type, payload.primaryText, payload.audienceText, payload.isAdult ? 1 : 0, payload.targetGender, JSON.stringify(payload.targetCities), payload.targetProfileType],
     );
     await connection.query(
       `INSERT INTO notifications (user_id, actor_user_id, notification_type, title, body, material_kind, material_id)
@@ -1385,13 +1401,14 @@ router.patch("/occasions/:id", asyncRoute(async (request, response) => {
   const occasionId = Number(request.params.id);
   const payload = occasionPayload(request.body);
   const occasion = await withTransaction(async (connection) => {
+    await assertAdultMaterialAllowed(connection, userId, payload.isAdult);
     const cities = await knownCities(connection, payload.targetCities);
     payload.targetCities = cities.map((city) => city.name);
     const [[current]] = await connection.query("SELECT status, created_at FROM occasions WHERE id = ? AND creator_user_id = ? FOR UPDATE", [occasionId, userId]);
     if (!current) throw Object.assign(new Error("Повод не найден"), { statusCode: 404 });
     await connection.query(
-      `UPDATE occasions SET occasion_type = ?, primary_text = ?, audience_text = ?, target_gender = ?, target_cities = ?, target_profile_type = ?, status = 'pending', moderation_note = NULL WHERE id = ?`,
-      [payload.type, payload.primaryText, payload.audienceText, payload.targetGender, JSON.stringify(payload.targetCities), payload.targetProfileType, occasionId],
+      `UPDATE occasions SET occasion_type = ?, primary_text = ?, audience_text = ?, is_adult = ?, target_gender = ?, target_cities = ?, target_profile_type = ?, status = 'pending', moderation_note = NULL WHERE id = ?`,
+      [payload.type, payload.primaryText, payload.audienceText, payload.isAdult ? 1 : 0, payload.targetGender, JSON.stringify(payload.targetCities), payload.targetProfileType, occasionId],
     );
     const [[creator]] = await connection.query("SELECT display_name FROM profiles WHERE user_id = ?", [userId]);
     return { id: occasionId, creatorId: userId, ...payload, status: "pending", moderationNote: "", creatorName: creator?.display_name ?? "", createdAt: new Date(current.created_at).toISOString() };
@@ -1424,8 +1441,8 @@ router.patch("/admin/occasions/:id", asyncRoute(async (request, response) => {
       const cities = await knownCities(connection, payload.targetCities);
       payload.targetCities = cities.map((city) => city.name);
       await connection.query(
-        `UPDATE occasions SET occasion_type = ?, primary_text = ?, audience_text = ?, target_gender = ?, target_cities = ?, target_profile_type = ? WHERE id = ?`,
-        [payload.type, payload.primaryText, payload.audienceText, payload.targetGender, JSON.stringify(payload.targetCities), payload.targetProfileType, occasionId],
+        `UPDATE occasions SET occasion_type = ?, primary_text = ?, audience_text = ?, is_adult = ?, target_gender = ?, target_cities = ?, target_profile_type = ? WHERE id = ?`,
+        [payload.type, payload.primaryText, payload.audienceText, payload.isAdult ? 1 : 0, payload.targetGender, JSON.stringify(payload.targetCities), payload.targetProfileType, occasionId],
       );
     } else {
       const statuses = { accept: "published", revision: "needs_changes", reject: "rejected" };
@@ -1483,6 +1500,14 @@ router.put("/users/me/state", asyncRoute(async (request, response) => {
   const { profile, avatarUrl, reviews = [], excerpts = [], publisherNews = [] } = request.body ?? {};
   const requestedType = profile?.type === "Писатель" ? "Писатель" : profile?.type === "Блогер" ? "Блогер" : profile?.type === "Издатель" ? "Издатель" : "Читатель";
   if (!String(profile?.name ?? "").trim() || !Number(profile?.cityId)) return response.status(400).json({ error: "Заполните обязательные поля" });
+  const birthDate = requestedType === "Издатель" ? null : String(profile?.birthDate ?? "").trim();
+  const birthAge = birthDate ? ageFromBirthDate(birthDate) : null;
+  if (requestedType !== "Издатель" && (birthAge === null || birthAge < 0 || birthAge > 120)) {
+    return response.status(400).json({ error: "Укажите корректную дату рождения" });
+  }
+  const tabOrder = Array.isArray(profile?.tabOrder)
+    ? [...new Set(profile.tabOrder.filter((tab) => PROFILE_TABS.has(tab)))]
+    : [];
   await withTransaction(async (connection) => {
     const city = await knownCity(connection, profile.city, profile.cityId);
     const [[currentProfile]] = await connection.query("SELECT profile_type, publisher_status FROM profiles WHERE user_id = ? FOR UPDATE", [userId]);
@@ -1512,13 +1537,14 @@ router.put("/users/me/state", asyncRoute(async (request, response) => {
     const initials = profile.name.trim().split(/\s+/).slice(0, 2).map((part) => part[0]).join("").toLocaleUpperCase("ru-RU").slice(0, 4) || "BM";
     await connection.query("UPDATE users SET initials = ?, avatar_path = ? WHERE id = ?", [initials, avatarPath, userId]);
     await connection.query(
-      `UPDATE profiles SET display_name = ?, city = ?, city_id = ?, profile_type = ?, gender = ?, bio = ?, author_influences = ?, writing_themes = ?, weekend = ?, joy = ?, talk = ?, stranger_message = ?, favorite_genres = ?, disliked_genres = ?,
+      `UPDATE profiles SET display_name = ?, city = ?, city_id = ?, profile_type = ?, gender = ?, birth_date = ?, show_birth_date_to_friends = ?, profile_tab_order = ?, bio = ?, author_influences = ?, writing_themes = ?, weekend = ?, joy = ?, talk = ?, stranger_message = ?, favorite_genres = ?, disliked_genres = ?,
               publisher_status = ?, publisher_website = ?, publisher_sales_links = ?, publisher_legal_name = ?, publisher_bin = ?, publisher_account = ?, publisher_bik = ?, publisher_bank = ?, publisher_legal_address = ?, publisher_postal_address = ?,
               publisher_moderation_note = CASE WHEN ? = 'pending' THEN NULL ELSE publisher_moderation_note END
         WHERE user_id = ?`,
       [
         profile.name.trim(), city?.name ?? "", city?.id ?? null, requestedType,
         requestedType === "Издатель" ? "Не указан" : ["Мужской", "Женский", "Не указан"].includes(profile.gender) ? profile.gender : "Не указан",
+        birthDate || null, requestedType === "Издатель" ? 0 : profile.showBirthDateToFriends ? 1 : 0, JSON.stringify(tabOrder),
         profile.bio ?? "", requestedType === "Писатель" ? profile.authorInfluences ?? "" : "", requestedType === "Писатель" ? profile.writingThemes ?? "" : "",
         requestedType === "Издатель" ? "" : profile.weekend ?? "", requestedType === "Издатель" ? "" : profile.joy ?? "",
         requestedType === "Издатель" ? "" : profile.talk ?? "", requestedType === "Издатель" ? "" : profile.strangerMessage ?? "",
@@ -1544,14 +1570,15 @@ router.put("/users/me/state", asyncRoute(async (request, response) => {
         if (Array.from(previewText).length > 500) throw Object.assign(new Error("Краткий текст новости не должен превышать 500 знаков"), { statusCode: 400 });
         const bodyHtml = validateRichHtml(item.bodyHtml);
         const body = plainTextFromHtml(bodyHtml) || String(item.body ?? "").trim();
+        await assertAdultMaterialAllowed(connection, userId, Boolean(item.isAdult));
         const desiredId = Number(item.id);
         const [[existing]] = desiredId ? await connection.query("SELECT user_id FROM publisher_news WHERE id = ?", [desiredId]) : [[]];
         if (existing && Number(existing.user_id) !== userId) throw Object.assign(new Error("Нельзя изменить чужую новость"), { statusCode: 403 });
         if (existing) {
-          await connection.query("UPDATE publisher_news SET title = ?, preview_text = ?, body_html = ?, body = ? WHERE id = ? AND user_id = ?", [title, previewText, bodyHtml, body, desiredId, userId]);
+          await connection.query("UPDATE publisher_news SET title = ?, preview_text = ?, body_html = ?, body = ?, is_adult = ? WHERE id = ? AND user_id = ?", [title, previewText, bodyHtml, body, item.isAdult ? 1 : 0, desiredId, userId]);
           newsIds.push(desiredId);
         } else if (publisherStatus === "approved") {
-          const [created] = await connection.query("INSERT INTO publisher_news (user_id, title, preview_text, body_html, body) VALUES (?, ?, ?, ?, ?)", [userId, title, previewText, bodyHtml, body]);
+          const [created] = await connection.query("INSERT INTO publisher_news (user_id, title, preview_text, body_html, body, is_adult) VALUES (?, ?, ?, ?, ?, ?)", [userId, title, previewText, bodyHtml, body, item.isAdult ? 1 : 0]);
           newsIds.push(Number(created.insertId));
         }
       }
@@ -1567,16 +1594,17 @@ router.put("/users/me/state", asyncRoute(async (request, response) => {
       }
       if (Array.from(String(review.preview)).length > 500) throw Object.assign(new Error("Краткое описание рецензии не должно превышать 500 знаков"), { statusCode: 400 });
       const book = await resolveBook(connection, review.bookAuthor, review.bookTitle);
+      await assertAdultMaterialAllowed(connection, userId, Boolean(review.isAdult));
       const desiredId = Number(review.id);
       const [[existing]] = desiredId ? await connection.query("SELECT user_id FROM reviews WHERE id = ?", [desiredId]) : [[]];
       if (existing && Number(existing.user_id) !== userId) throw new Error("Нельзя изменить чужую рецензию");
       if (existing) {
-        await connection.query("UPDATE reviews SET book_id = ?, rating = ?, preview = ?, body = ? WHERE id = ? AND user_id = ?", [book.id, review.rating, review.preview.trim(), review.fullText.trim(), desiredId, userId]);
+        await connection.query("UPDATE reviews SET book_id = ?, rating = ?, preview = ?, body = ?, is_adult = ? WHERE id = ? AND user_id = ?", [book.id, review.rating, review.preview.trim(), review.fullText.trim(), review.isAdult ? 1 : 0, desiredId, userId]);
         reviewIds.push(desiredId);
       } else {
         const [result] = desiredId
-          ? await connection.query("INSERT INTO reviews (id, user_id, book_id, rating, preview, body) VALUES (?, ?, ?, ?, ?, ?)", [desiredId, userId, book.id, review.rating, review.preview.trim(), review.fullText.trim()])
-          : await connection.query("INSERT INTO reviews (user_id, book_id, rating, preview, body) VALUES (?, ?, ?, ?, ?)", [userId, book.id, review.rating, review.preview.trim(), review.fullText.trim()]);
+          ? await connection.query("INSERT INTO reviews (id, user_id, book_id, rating, preview, body, is_adult) VALUES (?, ?, ?, ?, ?, ?, ?)", [desiredId, userId, book.id, review.rating, review.preview.trim(), review.fullText.trim(), review.isAdult ? 1 : 0])
+          : await connection.query("INSERT INTO reviews (user_id, book_id, rating, preview, body, is_adult) VALUES (?, ?, ?, ?, ?, ?)", [userId, book.id, review.rating, review.preview.trim(), review.fullText.trim(), review.isAdult ? 1 : 0]);
         reviewIds.push(desiredId || Number(result.insertId));
         await notifyFollowersAboutPublication(connection, userId, "review", desiredId || Number(result.insertId), review.bookTitle.trim());
         await notifyWriterAboutBook(connection, book.id, userId, "review");
@@ -1600,16 +1628,17 @@ router.put("/users/me/state", asyncRoute(async (request, response) => {
       }
       const bodyHtml = validateRichHtml(excerpt.bodyHtml);
       const plainBody = plainTextFromHtml(bodyHtml);
+      await assertAdultMaterialAllowed(connection, userId, Boolean(excerpt.isAdult));
       const desiredId = Number(excerpt.id);
       const [[existing]] = desiredId ? await connection.query("SELECT user_id FROM excerpts WHERE id = ?", [desiredId]) : [[]];
       if (existing && Number(existing.user_id) !== userId) throw new Error("Нельзя изменить чужой отрывок");
       if (existing) {
-        await connection.query("UPDATE excerpts SET book_id = ?, book_title = ?, preview_text = ?, body_html = ?, body = ?, read_url = NULL WHERE id = ? AND user_id = ?", [linkedBook?.id ?? null, linkedBook?.title ?? "", previewText, bodyHtml, plainBody, desiredId, userId]);
+        await connection.query("UPDATE excerpts SET book_id = ?, book_title = ?, preview_text = ?, body_html = ?, body = ?, is_adult = ?, read_url = NULL WHERE id = ? AND user_id = ?", [linkedBook?.id ?? null, linkedBook?.title ?? "", previewText, bodyHtml, plainBody, excerpt.isAdult ? 1 : 0, desiredId, userId]);
         excerptIds.push(desiredId);
       } else {
         const [result] = desiredId
-          ? await connection.query("INSERT INTO excerpts (id, user_id, book_id, book_title, preview_text, body_html, body, read_url) VALUES (?, ?, ?, ?, ?, ?, ?, NULL)", [desiredId, userId, linkedBook?.id ?? null, linkedBook?.title ?? "", previewText, bodyHtml, plainBody])
-          : await connection.query("INSERT INTO excerpts (user_id, book_id, book_title, preview_text, body_html, body, read_url) VALUES (?, ?, ?, ?, ?, ?, NULL)", [userId, linkedBook?.id ?? null, linkedBook?.title ?? "", previewText, bodyHtml, plainBody]);
+          ? await connection.query("INSERT INTO excerpts (id, user_id, book_id, book_title, preview_text, body_html, body, is_adult, read_url) VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL)", [desiredId, userId, linkedBook?.id ?? null, linkedBook?.title ?? "", previewText, bodyHtml, plainBody, excerpt.isAdult ? 1 : 0])
+          : await connection.query("INSERT INTO excerpts (user_id, book_id, book_title, preview_text, body_html, body, is_adult, read_url) VALUES (?, ?, ?, ?, ?, ?, ?, NULL)", [userId, linkedBook?.id ?? null, linkedBook?.title ?? "", previewText, bodyHtml, plainBody, excerpt.isAdult ? 1 : 0]);
         excerptIds.push(desiredId || Number(result.insertId));
         await notifyFollowersAboutPublication(connection, userId, "excerpt", desiredId || Number(result.insertId), linkedBook?.title ?? "Публикация");
       }
@@ -1631,8 +1660,10 @@ router.get("/books", asyncRoute(async (request, response) => {
   if (!query) return response.json({ books: [] });
   const like = `%${query}%`;
   const isbnKey = normalizeIsbn(query);
-  const [rows] = await getPool().query("SELECT id, author, title, isbn, publisher, genres, annotation, cover_path AS coverUrl, cover_tone AS coverTone, flip_url AS flipUrl FROM books WHERE author LIKE ? OR title LIKE ? OR (? <> '' AND isbn_key = ?) ORDER BY updated_at DESC LIMIT 8", [like, like, isbnKey, isbnKey]);
-  response.json({ books: rows.map((row) => ({ ...row, id: Number(row.id), genres: JSON.parse(row.genres || "[]") })) });
+  const [[viewer]] = await getPool().query("SELECT u.role, p.birth_date FROM users u JOIN profiles p ON p.user_id = u.id WHERE u.id = ?", [request.bookMeetUser.id]);
+  const adultViewer = viewer?.role === "admin" || Number(ageFromBirthDate(viewer?.birth_date) ?? -1) >= 18;
+  const [rows] = await getPool().query("SELECT id, author, title, isbn, publisher, genres, annotation, is_adult AS isAdult, cover_path AS coverUrl, cover_tone AS coverTone, flip_url AS flipUrl FROM books WHERE (? = 1 OR is_adult = 0) AND (author LIKE ? OR title LIKE ? OR (? <> '' AND isbn_key = ?)) ORDER BY updated_at DESC LIMIT 8", [adultViewer ? 1 : 0, like, like, isbnKey, isbnKey]);
+  response.json({ books: rows.map((row) => ({ ...row, id: Number(row.id), isAdult: Boolean(row.isAdult), genres: JSON.parse(row.genres || "[]") })) });
 }));
 
 router.post("/books", asyncRoute(async (request, response) => {
@@ -1650,6 +1681,8 @@ router.post("/books", asyncRoute(async (request, response) => {
   const readingStatus = ["want", "reading", "read"].includes(payload.readingStatus) ? payload.readingStatus : "read";
   const readMonth = Number(payload.readMonth) || null;
   const readYear = Number(payload.readYear) || null;
+  const lastReadChapter = readingStatus === "reading" && Number(payload.lastReadChapter) > 0 ? Math.floor(Number(payload.lastReadChapter)) : null;
+  const readingComment = readingStatus === "reading" ? String(payload.readingComment ?? "").trim().slice(0, 3000) : null;
   if (!payload.isAuthor && ((readMonth && (readMonth < 1 || readMonth > 12)) || (readYear && (readYear < 1900 || readYear > new Date().getFullYear())))) {
     return response.status(400).json({ error: "Укажите корректную дату прочтения" });
   }
@@ -1659,6 +1692,7 @@ router.post("/books", asyncRoute(async (request, response) => {
   const authorKey = normalizeIdentity(author);
   const titleKey = normalizeIdentity(title);
   const result = await withTransaction(async (connection) => {
+    await assertAdultMaterialAllowed(connection, userId, Boolean(payload.isAdult));
     const access = await publisherAccess(connection, userId);
     if (payload.isAuthor) {
       const [[profile]] = await connection.query("SELECT profile_type, publisher_status FROM profiles WHERE user_id = ?", [userId]);
@@ -1693,8 +1727,8 @@ router.post("/books", asyncRoute(async (request, response) => {
       if (match) return { conflict: { id: Number(match.id), author: match.author, title: match.title } };
       uploadedCoverPath = await saveCover(payload.coverUrl);
       const [created] = await connection.query(
-        "INSERT INTO books (creator_user_id, author, author_key, title, title_key, isbn, isbn_key, publisher, genres, annotation, cover_path, cover_tone, flip_url) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-        [payload.isAuthor ? userId : null, author, authorKey, title, titleKey, isbn || null, isbn || null, publisher || null, JSON.stringify(payload.genres ?? []), payload.annotation ?? "", uploadedCoverPath, payload.coverTone ?? "blue", flipUrl || null],
+        "INSERT INTO books (creator_user_id, author, author_key, title, title_key, isbn, isbn_key, publisher, genres, annotation, is_adult, cover_path, cover_tone, flip_url) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        [payload.isAuthor ? userId : null, author, authorKey, title, titleKey, isbn || null, isbn || null, publisher || null, JSON.stringify(payload.genres ?? []), payload.annotation ?? "", payload.isAdult ? 1 : 0, uploadedCoverPath, payload.coverTone ?? "blue", flipUrl || null],
       );
       bookId = Number(created.insertId);
       createdCanonical = true;
@@ -1719,15 +1753,15 @@ router.post("/books", asyncRoute(async (request, response) => {
     }
     const [[existingUserBook]] = await connection.query("SELECT user_id FROM user_books WHERE user_id = ? AND book_id = ?", [userId, bookId]);
     await connection.query(
-      `INSERT INTO user_books (user_id, book_id, rating, short_review, read_month, read_year, reading_status, is_author)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-       ON DUPLICATE KEY UPDATE rating = VALUES(rating), short_review = VALUES(short_review), read_month = VALUES(read_month), read_year = VALUES(read_year), reading_status = VALUES(reading_status), is_author = VALUES(is_author)`,
-      [userId, bookId, payload.isAuthor || readingStatus !== "read" ? null : rating, payload.isAuthor || readingStatus !== "read" ? null : String(payload.shortReview ?? "").trim(), payload.isAuthor || readingStatus !== "read" ? null : readMonth, payload.isAuthor || readingStatus !== "read" ? null : readYear, payload.isAuthor ? "read" : readingStatus, payload.isAuthor ? 1 : 0],
+      `INSERT INTO user_books (user_id, book_id, rating, short_review, read_month, read_year, reading_status, last_read_chapter, reading_comment, is_author)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+       ON DUPLICATE KEY UPDATE rating = VALUES(rating), short_review = VALUES(short_review), read_month = VALUES(read_month), read_year = VALUES(read_year), reading_status = VALUES(reading_status), last_read_chapter = VALUES(last_read_chapter), reading_comment = VALUES(reading_comment), is_author = VALUES(is_author)`,
+      [userId, bookId, payload.isAuthor || readingStatus !== "read" ? null : rating, payload.isAuthor || readingStatus !== "read" ? null : String(payload.shortReview ?? "").trim(), payload.isAuthor || readingStatus !== "read" ? null : readMonth, payload.isAuthor || readingStatus !== "read" ? null : readYear, payload.isAuthor ? "read" : readingStatus, payload.isAuthor ? null : lastReadChapter, payload.isAuthor ? null : readingComment, payload.isAuthor ? 1 : 0],
     );
     if (payload.isAuthor) {
       if (createdCanonical || canonicalOwnerId === userId) {
         const coverPath = uploadedCoverPath ?? (payload.coverUrl ? await saveCover(payload.coverUrl) : null);
-        await connection.query("UPDATE books SET creator_user_id = COALESCE(creator_user_id, ?), genres = ?, annotation = ?, isbn = COALESCE(isbn, ?), isbn_key = COALESCE(isbn_key, ?), publisher = COALESCE(publisher, ?), cover_path = COALESCE(?, cover_path), cover_tone = ?, flip_url = COALESCE(?, flip_url) WHERE id = ?", [userId, JSON.stringify(payload.genres ?? []), payload.annotation ?? "", isbn || null, isbn || null, publisher || null, coverPath, payload.coverTone ?? "blue", flipUrl || null, bookId]);
+        await connection.query("UPDATE books SET creator_user_id = COALESCE(creator_user_id, ?), genres = ?, annotation = ?, is_adult = ?, isbn = COALESCE(isbn, ?), isbn_key = COALESCE(isbn_key, ?), publisher = COALESCE(publisher, ?), cover_path = COALESCE(?, cover_path), cover_tone = ?, flip_url = COALESCE(?, flip_url) WHERE id = ?", [userId, JSON.stringify(payload.genres ?? []), payload.annotation ?? "", payload.isAdult ? 1 : 0, isbn || null, isbn || null, publisher || null, coverPath, payload.coverTone ?? "blue", flipUrl || null, bookId]);
       } else if (!canonicalOwnerId) {
         await connection.query("UPDATE books SET creator_user_id = COALESCE(creator_user_id, ?) WHERE id = ?", [userId, bookId]);
       }
@@ -1802,8 +1836,8 @@ router.patch("/admin/materials/:kind/:id", asyncRoute(async (request, response) 
       if (flipUrl) marketplaceFromUrl(flipUrl);
       const coverPath = payload.coverUrl ? await saveCover(payload.coverUrl) : null;
       [updated] = await connection.query(
-        "UPDATE books SET author = ?, author_key = ?, title = ?, title_key = ?, genres = ?, annotation = ?, cover_path = COALESCE(?, cover_path), cover_tone = ?, flip_url = COALESCE(?, flip_url) WHERE id = ?",
-        [author, normalizeIdentity(author), title, normalizeIdentity(title), JSON.stringify(payload.genres ?? []), String(payload.annotation ?? text), coverPath, String(payload.coverTone ?? "blue"), flipUrl || null, materialId],
+        "UPDATE books SET author = ?, author_key = ?, title = ?, title_key = ?, genres = ?, annotation = ?, is_adult = ?, cover_path = COALESCE(?, cover_path), cover_tone = ?, flip_url = COALESCE(?, flip_url) WHERE id = ?",
+        [author, normalizeIdentity(author), title, normalizeIdentity(title), JSON.stringify(payload.genres ?? []), String(payload.annotation ?? text), payload.isAdult ? 1 : 0, coverPath, String(payload.coverTone ?? "blue"), flipUrl || null, materialId],
       );
       if (Array.isArray(payload.links)) {
         await connection.query("DELETE FROM book_links WHERE book_id = ?", [materialId]);
@@ -1817,10 +1851,10 @@ router.patch("/admin/materials/:kind/:id", asyncRoute(async (request, response) 
       const requestedBookId = Number(payload.bookId) || null;
       const [[existingBook]] = requestedBookId ? await connection.query("SELECT id FROM books WHERE id = ?", [requestedBookId]) : [[]];
       const book = existingBook ?? await resolveBook(connection, String(payload.bookAuthor ?? "").trim(), title);
-      [updated] = await connection.query("UPDATE reviews SET book_id = ?, rating = ?, preview = ?, body = ? WHERE id = ?", [book.id, Number(payload.rating) || 0, String(payload.preview ?? text).trim(), String(payload.fullText ?? payload.body ?? "").trim(), materialId]);
+      [updated] = await connection.query("UPDATE reviews SET book_id = ?, rating = ?, preview = ?, body = ?, is_adult = ? WHERE id = ?", [book.id, Number(payload.rating) || 0, String(payload.preview ?? text).trim(), String(payload.fullText ?? payload.body ?? "").trim(), payload.isAdult ? 1 : 0, materialId]);
     } else {
       const linkedBookId = Number(payload.bookId) || null;
-      [updated] = await connection.query("UPDATE excerpts SET book_id = ?, book_title = ?, preview_text = ?, body_html = ?, body = ? WHERE id = ?", [linkedBookId, title === "Публикация" ? "" : title, String(payload.previewText ?? text).trim(), String(payload.bodyHtml ?? ""), String(payload.body ?? payload.text ?? text).trim(), materialId]);
+      [updated] = await connection.query("UPDATE excerpts SET book_id = ?, book_title = ?, preview_text = ?, body_html = ?, body = ?, is_adult = ? WHERE id = ?", [linkedBookId, title === "Публикация" ? "" : title, String(payload.previewText ?? text).trim(), validateRichHtml(payload.bodyHtml), String(payload.body ?? payload.text ?? text).trim(), payload.isAdult ? 1 : 0, materialId]);
     }
     if (!updated.affectedRows) throw Object.assign(new Error("Материал не найден"), { statusCode: 404 });
   });

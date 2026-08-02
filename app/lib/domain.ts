@@ -16,7 +16,9 @@ export function sanitizeRichHtml(value: string) {
       }
       const textAlign = element.style.textAlign;
       const fontSize = element.style.fontSize;
+      const spoiler = element.tagName === "SPAN" && element.classList.contains("spoiler");
       for (const attribute of Array.from(element.attributes)) element.removeAttribute(attribute.name);
+      if (spoiler) element.className = "spoiler";
       if (["left", "right", "center", "justify"].includes(textAlign)) element.style.textAlign = textAlign;
       if (["12px", "14px", "16px", "18px", "22px", "28px"].includes(fontSize)) element.style.fontSize = fontSize;
       clean(element);
@@ -53,7 +55,7 @@ export function catalogFromUsers(users: DemoUser[]) {
 export function reviewReadingItemById(users: DemoUser[], id: number): ReadingItem | null {
   for (const user of users) {
     const review = user.reviews.find((item) => item.id === id);
-    if (review) return { id: review.id, kind: "review", title: review.bookTitle, author: user.profile.name, text: review.fullText, ownerId: user.id, createdAt: review.createdAt, preview: review.preview, bookAuthor: review.bookAuthor, rating: review.rating };
+    if (review) return { id: review.id, kind: "review", title: review.bookTitle, author: user.profile.name, text: review.fullText, ownerId: user.id, createdAt: review.createdAt, preview: review.preview, bookAuthor: review.bookAuthor, rating: review.rating, isAdult: review.isAdult };
   }
   return null;
 }
@@ -61,7 +63,7 @@ export function reviewReadingItemById(users: DemoUser[], id: number): ReadingIte
 export function excerptReadingItemById(users: DemoUser[], id: number): ReadingItem | null {
   for (const user of users) {
     const excerpt = (user.excerpts ?? []).find((item) => item.id === id);
-    if (excerpt) return { id: excerpt.id, kind: "excerpt", title: excerpt.bookTitle || "Публикация", author: user.profile.name, text: excerpt.text, preview: excerpt.previewText, bodyHtml: excerpt.bodyHtml, linkedBookId: excerpt.bookId, ownerId: user.id, createdAt: excerpt.createdAt };
+    if (excerpt) return { id: excerpt.id, kind: "excerpt", title: excerpt.bookTitle || "Публикация", author: user.profile.name, text: excerpt.text, preview: excerpt.previewText, bodyHtml: excerpt.bodyHtml, linkedBookId: excerpt.bookId, ownerId: user.id, createdAt: excerpt.createdAt, isAdult: excerpt.isAdult };
   }
   return null;
 }

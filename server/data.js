@@ -21,15 +21,34 @@ function sqlDate(value) {
   return `${date.getUTCFullYear()}-${String(date.getUTCMonth() + 1).padStart(2, "0")}-${String(date.getUTCDate()).padStart(2, "0")}`;
 }
 
+export function ageFromBirthDate(value, now = new Date()) {
+  if (!value) return null;
+  const normalized = sqlDate(value);
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(normalized)) return null;
+  const birth = new Date(`${normalized}T00:00:00Z`);
+  if (Number.isNaN(birth.getTime()) || birth > now) return null;
+  if (sqlDate(birth) !== normalized) return null;
+  let age = now.getUTCFullYear() - birth.getUTCFullYear();
+  const birthdayPassed = now.getUTCMonth() > birth.getUTCMonth()
+    || now.getUTCMonth() === birth.getUTCMonth() && now.getUTCDate() >= birth.getUTCDate();
+  if (!birthdayPassed) age -= 1;
+  return age;
+}
+
 export async function loadUsers(connection = getPool(), viewerId = null) {
   const [blockRows] = viewerId ? await connection.query(
     "SELECT blocker_user_id, blocked_user_id FROM user_blocks WHERE blocker_user_id = ? OR blocked_user_id = ?",
     [viewerId, viewerId],
   ) : [[]];
+  const [viewerFriendRows] = viewerId ? await connection.query(
+    "SELECT user_low_id, user_high_id FROM friendships WHERE user_low_id = ? OR user_high_id = ?",
+    [viewerId, viewerId],
+  ) : [[]];
   const [userRows] = await connection.query(
     `SELECT u.id, u.username, u.initials, u.color, u.avatar_path, u.role, u.created_at, u.last_seen_at,
             u.suspension_reason, u.suspended_until, u.suspended_permanently,
-            p.display_name, p.city, p.city_id, c.country_name, p.profile_type, p.gender, p.bio, p.author_influences, p.writing_themes, p.weekend, p.joy, p.talk,
+            p.display_name, p.city, p.city_id, c.country_name, p.profile_type, p.gender, p.birth_date, p.show_birth_date_to_friends, p.profile_tab_order,
+            p.bio, p.author_influences, p.writing_themes, p.weekend, p.joy, p.talk,
             p.stranger_message, p.favorite_genres, p.disliked_genres,
             p.publisher_status, p.publisher_website, p.publisher_sales_links, p.publisher_legal_name,
             p.publisher_bin, p.publisher_account, p.publisher_bik, p.publisher_bank,
@@ -40,8 +59,8 @@ export async function loadUsers(connection = getPool(), viewerId = null) {
       ORDER BY u.id`,
   );
   const [bookRows] = await connection.query(
-    `SELECT ub.user_id, ub.rating, ub.short_review, ub.read_month, ub.read_year, ub.reading_status, ub.is_author,
-             b.id, b.creator_user_id, b.author, b.title, b.isbn, b.publisher, b.genres, b.annotation, b.cover_path, b.cover_tone, b.flip_url
+    `SELECT ub.user_id, ub.rating, ub.short_review, ub.read_month, ub.read_year, ub.reading_status, ub.last_read_chapter, ub.reading_comment, ub.is_author,
+             b.id, b.creator_user_id, b.author, b.title, b.isbn, b.publisher, b.genres, b.annotation, b.is_adult, b.cover_path, b.cover_tone, b.flip_url
        FROM user_books ub
        JOIN books b ON b.id = ub.book_id
       ORDER BY ub.created_at DESC`,
@@ -52,24 +71,32 @@ export async function loadUsers(connection = getPool(), viewerId = null) {
       ORDER BY id`,
   );
   const [reviewRows] = await connection.query(
-    `SELECT r.id, r.user_id, r.rating, r.preview, r.body, r.created_at,
+    `SELECT r.id, r.user_id, r.rating, r.preview, r.body, r.is_adult, r.created_at,
             b.id AS book_id, b.title AS book_title, b.author AS book_author
        FROM reviews r
        JOIN books b ON b.id = r.book_id
       ORDER BY r.created_at DESC`,
   );
   const [excerptRows] = await connection.query(
-    `SELECT e.id, e.user_id, e.book_id, e.book_title, e.preview_text, e.body_html, e.body, e.read_url, e.created_at
+    `SELECT e.id, e.user_id, e.book_id, e.book_title, e.preview_text, e.body_html, e.body, e.is_adult, e.read_url, e.created_at
        FROM excerpts e
       ORDER BY e.created_at DESC`,
   );
   const [publisherNewsRows] = await connection.query(
-    `SELECT id, user_id, title, preview_text, body_html, body, created_at
+    `SELECT id, user_id, title, preview_text, body_html, body, is_adult, created_at
        FROM publisher_news
       ORDER BY created_at DESC`,
   );
 
   const viewerIsAdmin = userRows.some((row) => Number(row.id) === Number(viewerId) && row.role === "admin");
+  const viewerRow = userRows.find((row) => Number(row.id) === Number(viewerId));
+  const viewerAge = ageFromBirthDate(viewerRow?.birth_date);
+  const hideAdultMaterials = !viewerIsAdmin && (viewerAge === null || viewerAge < 18);
+  const isViewerFriend = (targetId) => viewerFriendRows.some((friendship) => (
+    Number(friendship.user_low_id) === Number(viewerId) && Number(friendship.user_high_id) === Number(targetId)
+  ) || (
+    Number(friendship.user_high_id) === Number(viewerId) && Number(friendship.user_low_id) === Number(targetId)
+  ));
   return userRows.filter((row) => row.role === "admin"
     || row.profile_type !== "Издатель"
     || row.publisher_status === "approved"
@@ -78,7 +105,7 @@ export async function loadUsers(connection = getPool(), viewerId = null) {
       || Number(row.id) === Number(viewerId)
       || !blockRows.some((block) => Number(block.blocker_user_id) === Number(row.id) && Number(block.blocked_user_id) === Number(viewerId)))
     .map((row) => {
-    const userBooks = bookRows.filter((book) => Number(book.user_id) === Number(row.id));
+    const userBooks = bookRows.filter((book) => Number(book.user_id) === Number(row.id) && (!hideAdultMaterials || !book.is_adult));
     const library = userBooks.filter((book) => !book.is_author).map((book) => ({
       id: Number(book.id),
       creatorUserId: book.creator_user_id ? Number(book.creator_user_id) : undefined,
@@ -97,6 +124,9 @@ export async function loadUsers(connection = getPool(), viewerId = null) {
       readMonth: book.read_month ? Number(book.read_month) : undefined,
       readYear: book.read_year ? Number(book.read_year) : undefined,
       readingStatus: book.reading_status || "read",
+      lastReadChapter: book.last_read_chapter ? Number(book.last_read_chapter) : undefined,
+      readingComment: book.reading_comment ?? "",
+      isAdult: Boolean(book.is_adult),
       coverUrl: book.cover_path ?? undefined,
       coverTone: book.cover_tone ?? "blue",
       flipUrl: book.flip_url ?? undefined,
@@ -120,6 +150,7 @@ export async function loadUsers(connection = getPool(), viewerId = null) {
       coverUrl: book.cover_path ?? undefined,
       coverTone: book.cover_tone ?? "blue",
       flipUrl: book.flip_url ?? undefined,
+      isAdult: Boolean(book.is_adult),
       links: linkRows.filter((link) => Number(link.book_id) === Number(book.id)).filter((link, index, all) => all.findIndex((item) => item.url === link.url) === index).map((link) => ({
         id: Number(link.id), label: link.label, url: link.url, action: link.action,
       })),
@@ -148,6 +179,10 @@ export async function loadUsers(connection = getPool(), viewerId = null) {
         country: row.country_name ?? undefined,
         type: row.profile_type,
         gender: row.gender ?? "Не указан",
+        birthDate: Number(row.id) === Number(viewerId) || viewerIsAdmin || row.show_birth_date_to_friends && isViewerFriend(row.id) ? sqlDate(row.birth_date) || undefined : undefined,
+        age: ageFromBirthDate(row.birth_date) ?? undefined,
+        showBirthDateToFriends: Number(row.id) === Number(viewerId) || viewerIsAdmin ? Boolean(row.show_birth_date_to_friends) : undefined,
+        tabOrder: parseJson(row.profile_tab_order),
         bio: row.bio ?? "",
         authorInfluences: row.author_influences ?? "",
         writingThemes: row.writing_themes ?? "",
@@ -171,7 +206,7 @@ export async function loadUsers(connection = getPool(), viewerId = null) {
       },
       books: library,
       authorBooks,
-      reviews: reviewRows.filter((review) => Number(review.user_id) === Number(row.id)).map((review) => ({
+      reviews: reviewRows.filter((review) => Number(review.user_id) === Number(row.id) && (!hideAdultMaterials || !review.is_adult)).map((review) => ({
         id: Number(review.id),
         bookId: Number(review.book_id),
         bookTitle: review.book_title,
@@ -179,27 +214,30 @@ export async function loadUsers(connection = getPool(), viewerId = null) {
         rating: Number(review.rating),
         preview: review.preview,
         fullText: review.body,
+        isAdult: Boolean(review.is_adult),
         createdAt: formatDate(review.created_at),
         createdAtValue: new Date(review.created_at).toISOString(),
       })),
-      excerpts: excerptRows.filter((excerpt) => Number(excerpt.user_id) === Number(row.id)).map((excerpt) => ({
+      excerpts: excerptRows.filter((excerpt) => Number(excerpt.user_id) === Number(row.id) && (!hideAdultMaterials || !excerpt.is_adult)).map((excerpt) => ({
         id: Number(excerpt.id),
         bookId: excerpt.book_id ? Number(excerpt.book_id) : undefined,
         bookTitle: excerpt.book_title ?? "",
         previewText: excerpt.preview_text ?? excerpt.body?.slice(0, 500) ?? "",
         bodyHtml: excerpt.body_html ?? "",
         text: excerpt.body ?? "",
+        isAdult: Boolean(excerpt.is_adult),
         link: excerpt.read_url ?? "",
         createdAt: formatDate(excerpt.created_at),
         createdAtValue: new Date(excerpt.created_at).toISOString(),
       })),
-      publisherNews: publisherNewsRows.filter((item) => Number(item.user_id) === Number(row.id)).map((item) => ({
+      publisherNews: publisherNewsRows.filter((item) => Number(item.user_id) === Number(row.id) && (!hideAdultMaterials || !item.is_adult)).map((item) => ({
         id: Number(item.id),
         ownerId: Number(item.user_id),
         title: item.title,
         previewText: item.preview_text,
         bodyHtml: item.body_html,
         body: item.body,
+        isAdult: Boolean(item.is_adult),
         createdAt: formatDate(item.created_at),
         createdAtValue: new Date(item.created_at).toISOString(),
       })),
@@ -214,7 +252,7 @@ export async function loadBootstrap(userId, options = {}) {
   const includeSocial = sections.has("social");
   const includeModeration = sections.has("moderation");
   const [[accountState]] = await pool.query(
-    `SELECT u.profile_completed, u.role, p.gender, p.profile_type
+    `SELECT u.profile_completed, u.role, p.gender, p.profile_type, p.birth_date
        FROM users u
        JOIN profiles p ON p.user_id = u.id
       WHERE u.id = ?
@@ -223,7 +261,7 @@ export async function loadBootstrap(userId, options = {}) {
   );
   const account = {
     isAdmin: accountState?.role === "admin",
-    profile: { gender: accountState?.gender, type: accountState?.profile_type },
+    profile: { gender: accountState?.gender, type: accountState?.profile_type, age: ageFromBirthDate(accountState?.birth_date) ?? undefined },
   };
   const [blockRows] = includeCatalog || includeSocial ? await pool.query(
     "SELECT blocker_user_id, blocked_user_id, created_at FROM user_blocks WHERE blocker_user_id = ? OR blocked_user_id = ?",
@@ -271,7 +309,7 @@ export async function loadBootstrap(userId, options = {}) {
   const [likeRows] = includeSocial ? await pool.query("SELECT user_id, material_kind, material_id FROM material_likes") : [[]];
   const [eventRows] = includeCatalog ? await pool.query(
     `SELECT e.id, e.creator_user_id, e.title, e.summary, e.description, e.event_date, e.event_time,
-            e.city, e.city_id, e.address, e.map_url, e.details_url, e.book_id, e.is_pinned,
+            e.city, e.city_id, e.address, e.map_url, e.details_url, e.book_id, e.is_pinned, e.is_adult,
             e.status, e.moderation_note, e.created_at,
             b.title AS book_title, b.author AS book_author, b.annotation AS book_annotation,
             b.cover_path AS book_cover_path, b.cover_tone AS book_cover_tone,
@@ -291,7 +329,7 @@ export async function loadBootstrap(userId, options = {}) {
   ) : [[]];
   const [occasionRows] = includeCatalog ? await pool.query(
     `SELECT o.id, o.creator_user_id, o.occasion_type, o.primary_text, o.audience_text,
-            o.target_gender, o.target_cities, o.target_profile_type, o.status,
+            o.target_gender, o.target_cities, o.target_profile_type, o.status, o.is_adult,
             o.moderation_note, o.created_at, p.display_name AS creator_name
        FROM occasions o
        JOIN profiles p ON p.user_id = o.creator_user_id
@@ -402,6 +440,7 @@ export async function loadBootstrap(userId, options = {}) {
   }));
   const visibleOccasionRows = occasionRows.filter((row) => {
     if (currentUser?.isAdmin || Number(row.creator_user_id) === Number(userId)) return true;
+    if (row.is_adult && Number(currentUser?.profile.age ?? -1) < 18) return false;
     if (row.status !== "published") return false;
     const genderMatch = row.target_gender === "Все" || row.target_gender === currentUser?.profile.gender;
     const typeMatch = row.target_profile_type === "Все" || row.target_profile_type === currentUser?.profile.type;
@@ -420,9 +459,10 @@ export async function loadBootstrap(userId, options = {}) {
     notifications: notificationRows.filter((row) => currentUser?.isAdmin || !hiddenUserIds.has(Number(row.actor_user_id))).map((row) => ({ id: Number(row.id), userId: Number(row.user_id), actorId: Number(row.actor_user_id ?? row.user_id), type: row.notification_type, title: row.title, text: row.body, unread: Boolean(row.is_unread), createdAt: formatDate(row.created_at), materialId: row.material_id ? Number(row.material_id) : undefined, materialKind: row.material_kind ?? undefined })),
     messages,
     likes,
-    events: eventRows.filter((row) => currentUser?.isAdmin || !hiddenUserIds.has(Number(row.creator_user_id))).map((row) => ({
+    events: eventRows.filter((row) => (currentUser?.isAdmin || !hiddenUserIds.has(Number(row.creator_user_id))) && (currentUser?.isAdmin || !row.is_adult || Number(currentUser?.profile.age ?? -1) >= 18)).map((row) => ({
       id: Number(row.id), creatorId: Number(row.creator_user_id), title: row.title,
       summary: row.summary, description: row.description, date: sqlDate(row.event_date),
+      isAdult: Boolean(row.is_adult),
       time: String(row.event_time).slice(0, 5), city: row.city,
       cityId: row.city_id ? Number(row.city_id) : undefined, address: row.address,
       mapUrl: row.map_url ?? "", detailsUrl: row.details_url ?? "", status: row.status,
@@ -438,6 +478,7 @@ export async function loadBootstrap(userId, options = {}) {
     occasions: visibleOccasionRows.filter((row) => currentUser?.isAdmin || !hiddenUserIds.has(Number(row.creator_user_id))).map((row) => ({
       id: Number(row.id), creatorId: Number(row.creator_user_id), type: row.occasion_type,
       primaryText: row.primary_text, audienceText: row.audience_text,
+      isAdult: Boolean(row.is_adult),
       targetGender: row.target_gender, targetCities: parseJson(row.target_cities),
       targetProfileType: row.target_profile_type, status: row.status,
       moderationNote: row.moderation_note ?? "", creatorName: row.creator_name,
