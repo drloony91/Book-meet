@@ -1,0 +1,48 @@
+# See https://help.github.com/articles/ignoring-files/ for more about ignoring files.
+
+# dependencies
+/node_modules
+/.pnp
+.pnp.*
+.yarn/*
+!.yarn/patches
+!.yarn/plugins
+!.yarn/releases
+!.yarn/versions
+
+# testing
+/coverage
+
+# misc
+.DS_Store
+*.pem
+
+# debug
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.pnpm-debug.log*
+
+# env files (can opt-in for committing if needed)
+.env*
+!.env.example
+
+# typescript
+*.tsbuildinfo
+/dist/
+/uploads/
+
+# local production and release artifacts
+/.deploy-*/
+/.prod-*/
+/.release-*/
+/deploy-*/
+/release-*/
+/tmp/
+/.wrangler/
+*.zip
+*.tar.gz
+
+# local authentication and generated runtime data
+/production-test.cookies
+/server/.google-jwks-cache.json

@@ -1,0 +1,43 @@
+{
+  "name": "book-meet-web",
+  "version": "0.2.0",
+  "private": true,
+  "type": "module",
+  "packageManager": "pnpm@11.9.0",
+  "engines": {
+    "node": ">=22.13.0"
+  },
+  "scripts": {
+    "dev": "node server/index.js",
+    "demo": "node scripts/demo.js",
+    "build": "vite build",
+    "start": "node server/index.js",
+    "test": "vite build && node --test tests/security.test.mjs tests/production-contract.test.mjs",
+    "lint": "tsc --noEmit",
+    "db:migrate": "node scripts/migrate.js",
+    "db:seed": "node scripts/seed.js",
+    "db:seed-publisher": "node scripts/seed-publisher.js",
+    "deploy:publisher": "node scripts/deploy-publisher-release.js",
+    "deploy:social-events": "node scripts/deploy-social-events-release.js",
+    "deploy:safety": "node deploy-safety-release.js",
+    "db:setup": "node scripts/migrate.js && node scripts/seed.js"
+  },
+  "dependencies": {
+    "dotenv": "^16.4.5",
+    "express": "^4.21.2",
+    "mysql2": "^3.11.3",
+    "qrcode": "1.5.4",
+    "react": "19.2.6",
+    "react-dom": "19.2.6"
+  },
+  "devDependencies": {
+    "@tailwindcss/postcss": "4.2.1",
+    "@types/node": "22.19.19",
+    "@types/react": "19.2.14",
+    "@types/react-dom": "19.2.3",
+    "@vitejs/plugin-react": "6.0.2",
+    "tailwindcss": "4.2.1",
+    "typescript": "5.9.3",
+    "vite": "8.0.13"
+  }
+}
