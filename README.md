@@ -10,6 +10,8 @@
 - локальная папка `uploads` — загруженные обложки;
 - защищённые cookie-сессии; пароли хэшируются через `scrypt`.
 
+Приложение разворачивается единым процессом, но код разделён на внутренние клиентские и серверные модули. Текущая схема и границы модулей описаны в [docs/architecture.md](./docs/architecture.md).
+
 В MySQL сохраняются профили, единые карточки книг, библиотеки, книги писателей и ссылки, рецензии, отрывки, дружба, подписки, переписка, лайки, комментарии и уведомления.
 
 ## Локальный запуск с MySQL
@@ -18,9 +20,9 @@
 
 ```bash
 cp .env.example .env
-npm install
-npm run db:setup
-npm run dev
+corepack pnpm install --frozen-lockfile
+corepack pnpm run db:setup
+corepack pnpm run dev
 ```
 
 После заполнения `.env` сайт откроется по адресу `http://localhost:3000`.
@@ -46,8 +48,11 @@ NODE_ENV=production corepack pnpm start
 ## Проверки
 
 ```bash
-npm run lint
-npm test
+corepack pnpm run lint
+corepack pnpm test
+corepack pnpm audit --audit-level high
 ```
 
 Интеграционную проверку MySQL нужно выполнить на отдельной пустой базе перед переключением домена: миграция, seed, вход обоими аккаунтами и сценарий дружбы/сообщения/комментария.
+
+Результаты и оставшиеся эксплуатационные проверки зафиксированы в [docs/security-audit.md](./docs/security-audit.md).

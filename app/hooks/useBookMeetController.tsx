@@ -10,8 +10,9 @@ import {
   initialMainView,
   mainViewPaths,
   mainViewTitles,
+  notifyAppNavigation,
   normalizedPathname,
-  useRoutedPopup,
+  useCurrentAppRoute,
   type ChatRouteState,
   type MainView,
   type RoutableMainView,
@@ -49,6 +50,7 @@ import {
   userBookMatches,
 } from "../lib/domain";
 import { apiFetch } from "../services/api";
+import { BootstrapRequestError, loadApplicationData } from "../services/bootstrap";
 import type {
   AdminCatalogItem,
   AdminMaterialKind,
@@ -102,6 +104,7 @@ export function useBookMeetController() {
   const [newlyRegistered, setNewlyRegistered] = useState(false);
   const [startupError, setStartupError] = useState("");
   const [view, setView] = useState<MainView>(initialMainView);
+  const currentRoute = useCurrentAppRoute();
   const [selectedFriend, setSelectedFriend] = useState<Friend | null>(null);
   const [chatExpanded, setChatExpanded] = useState(false);
   const [profileUserId, setProfileUserId] = useState<number | null>(null);
@@ -154,14 +157,7 @@ export function useBookMeetController() {
       if (refreshing || document.hidden) return;
       refreshing = true;
       try {
-        const response = await apiFetch("/api/bootstrap", { credentials: "same-origin", cache: "no-store" });
-        if (response.status === 423) {
-          const locked = await response.json() as { permanent?: boolean; until?: string; reason?: string };
-          setSuspension({ permanent: Boolean(locked.permanent), until: locked.until, reason: locked.reason ?? "" });
-          return;
-        }
-        if (!response.ok || !active) return;
-        const data = await response.json() as BootstrapData;
+        const data = await loadApplicationData(["catalog", "social", "moderation"]);
         if (!active) return;
         setUsers(data.users);
         setMessages(data.messages ?? {});
@@ -176,6 +172,10 @@ export function useBookMeetController() {
         setBlockedByUserIds(data.blockedByUserIds ?? []);
         setReports(data.reports ?? []);
       } catch (error) {
+        if (error instanceof BootstrapRequestError && error.status === 423) {
+          setSuspension({ permanent: Boolean(error.data.permanent), until: typeof error.data.until === "string" ? error.data.until : undefined, reason: typeof error.data.reason === "string" ? error.data.reason : "" });
+          return;
+        }
         console.warn("Realtime refresh failed", error);
       } finally {
         refreshing = false;
@@ -231,7 +231,6 @@ export function useBookMeetController() {
         }
         return;
       }
-      if (route.overlay && (window.history.state as { bookMeetOverlay?: boolean } | null)?.bookMeetOverlay) return;
       setView(route.view);
       if (!route.overlay) {
         document.title = route.view === "profile" ? "Мой профиль — Book Meet" : mainViewTitles[route.view];
@@ -354,15 +353,14 @@ export function useBookMeetController() {
   }
 
   async function refreshBootstrap() {
-    const response = await apiFetch("/api/bootstrap", { credentials: "same-origin", cache: "no-store" });
-    const data = await response.json().catch(() => ({})) as BootstrapData & { suspended?: boolean; permanent?: boolean; until?: string; reason?: string };
-    if (response.status === 423) {
-      setSuspension({ permanent: Boolean(data.permanent), until: data.until, reason: data.reason ?? "" });
+    try {
+      applyBootstrap(await loadApplicationData());
+    } catch (error) {
+      if (!(error instanceof BootstrapRequestError) || error.status !== 423) throw error;
+      setSuspension({ permanent: Boolean(error.data.permanent), until: typeof error.data.until === "string" ? error.data.until : undefined, reason: typeof error.data.reason === "string" ? error.data.reason : "" });
       setUsers([]);
       setActiveUserId(null);
-      return;
     }
-    if (response.ok) applyBootstrap(data);
   }
 
   useEffect(() => {
@@ -376,16 +374,8 @@ export function useBookMeetController() {
       setStartupError(authError.endsWith("not_configured") ? "Google-вход пока не настроен." : "Не удалось завершить вход через Google. Попробуйте ещё раз.");
       window.history.replaceState({}, "", window.location.pathname);
     }
-    apiFetch("/api/bootstrap", { credentials: "same-origin" }).then(async (response) => {
+    loadApplicationData().then(async (data) => {
       if (!active) return;
-      if (response.status === 401) return;
-      if (response.status === 423) {
-        const locked = await response.json() as { permanent?: boolean; until?: string; reason?: string };
-        setSuspension({ permanent: Boolean(locked.permanent), until: locked.until, reason: locked.reason ?? "" });
-        return;
-      }
-      if (!response.ok) throw new Error("Сервер Book Meet пока недоступен");
-      const data = await response.json() as BootstrapData;
       const needsProfile = oauthRegistration || data.profileCompleted === false;
       if (oauthSuccess) {
         setAuthTransition(true);
@@ -402,7 +392,15 @@ export function useBookMeetController() {
           window.history.replaceState({}, "", "/profile");
         }
       }
-    }).catch((error) => { if (active) setStartupError(error.message); }).finally(async () => { await finishMinimumLoading(loadingStartedAt); if (active) setAuthLoading(false); });
+    }).catch((error) => {
+      if (!active) return;
+      if (error instanceof BootstrapRequestError && error.status === 401) return;
+      if (error instanceof BootstrapRequestError && error.status === 423) {
+        setSuspension({ permanent: Boolean(error.data.permanent), until: typeof error.data.until === "string" ? error.data.until : undefined, reason: typeof error.data.reason === "string" ? error.data.reason : "" });
+        return;
+      }
+      setStartupError(error instanceof Error ? error.message : "Сервер Book Meet пока недоступен");
+    }).finally(async () => { await finishMinimumLoading(loadingStartedAt); if (active) setAuthLoading(false); });
     return () => { active = false; };
   }, []);
 
@@ -458,6 +456,7 @@ export function useBookMeetController() {
     const nextPath = mainViewPaths[nextView];
     if (normalizedPathname(window.location.pathname) !== nextPath) {
       window.history[options?.replace ? "replaceState" : "pushState"]({ bookMeetView: nextView }, "", nextPath);
+      notifyAppNavigation();
     }
   }
 
@@ -471,6 +470,7 @@ export function useBookMeetController() {
     if (normalizedPathname(window.location.pathname) !== "/profile") {
       const backgroundPath = normalizedPathname(window.location.pathname);
       window.history[options?.replace ? "replaceState" : "pushState"]({ bookMeetPage: true, backgroundPath }, "", "/profile");
+      notifyAppNavigation();
     }
   }
 
@@ -532,6 +532,7 @@ export function useBookMeetController() {
     const backgroundPath = isSwitchingChat ? (currentChatState.backgroundPath ?? "/chat") : currentPath;
     const nextState: ChatRouteState = { bookMeetChat: true, backgroundPath, chatMode: expanded ? "expanded" : "compact" };
     window.history[isSwitchingChat ? "replaceState" : "pushState"](nextState, "", `/chat/${userId}`);
+    notifyAppNavigation();
     document.title = `${user.isAdmin && !currentUser.isAdmin ? "Служба поддержки" : user.profile.name} — Диалоги Book Meet`;
     setSelectedFriend({ id: user.id, name: user.isAdmin && !currentUser.isAdmin ? "Служба поддержки" : user.profile.name, type: user.profile.type, city: user.profile.city, initials: user.initials, avatarUrl: user.avatarUrl, color: user.isAdmin ? "navy" : user.color, online: Boolean(user.online), support: Boolean(user.isAdmin && !currentUser.isAdmin), lastMessage: "", time: "", bio: user.profile.bio, books: user.profile.favoriteGenres.join(", ") });
     const key = conversationKey(currentUser.id, userId);
@@ -867,7 +868,7 @@ export function useBookMeetController() {
         </WorkspaceScreen>
       )}
 
-      {selectedFriend && !chatExpanded && <div className="chat-popup-layer"><div className="chat-popup">{chat}</div></div>}
+      {selectedFriend && !chatExpanded && (!currentRoute.overlay || currentRoute.overlay.kind === "chat") && <div className="chat-popup-layer"><div className="chat-popup">{chat}</div></div>}
 
       {selectedBook && <UnifiedBookModal book={selectedBook} users={visibleUsers} onClose={() => setSelectedBook(null)} onReport={currentUser.isAdmin || selectedBook.creatorUserId === currentUser.id || users.some((user) => user.id === currentUser.id && (user.authorBooks ?? []).some((book) => book.id === selectedBook.id)) ? undefined : () => openReportDialog({ kind: "book", id: selectedBook.id })} onOpenUser={openUserProfile} onOpenReview={(review, user) => setSelectedMaterial({ id: review.id, kind: "review", title: review.bookTitle, author: user.profile.name, text: review.fullText, ownerId: user.id, createdAt: review.createdAt, preview: review.preview, bookAuthor: review.bookAuthor })} />}
       {selectedMaterial && <ReadingModal item={selectedMaterial} currentUser={currentUser} users={visibleUsers} likedUserIds={likes[`${selectedMaterial.kind}-${selectedMaterial.id}`] ?? []} onToggleLike={() => toggleLike(selectedMaterial)} onComment={(text) => addComment(selectedMaterial, text)} onOpenUser={openUserProfile} onClose={() => setSelectedMaterial(null)} onReport={selectedMaterial.ownerId !== currentUser.id && !currentUser.isAdmin ? () => openReportDialog({ kind: selectedMaterial.kind, id: selectedMaterial.id }) : undefined} onEdit={currentUser.isAdmin || selectedMaterial.ownerId === currentUser.id ? () => void editReadingMaterial(selectedMaterial, currentUser) : undefined} onDelete={currentUser.isAdmin || selectedMaterial.ownerId === currentUser.id ? () => void deleteReadingMaterial(selectedMaterial, currentUser) : undefined} />}

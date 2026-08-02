@@ -7,6 +7,9 @@ import https from "node:https";
 import { fileURLToPath } from "node:url";
 import { getPool, withTransaction } from "./db.js";
 import { loadBootstrap, resolveBook } from "./data.js";
+import { createBootstrapRouter } from "./modules/bootstrap-router.js";
+import { plainTextFromHtml, validateRichHtml } from "./modules/content-security.js";
+import { previewRemoteCover, saveAvatar, saveCover, saveRemoteCover } from "./modules/image-storage.js";
 import { clearSessionCookie, clearTransientCookie, createSessionToken, generateRecoveryCodes, generateTotpSecret, hashPassword, hashRecoveryCode, hashSessionToken, isValidEmail, normalizeEmail, normalizeIdentity, readCookie, recoveryCodeIndex, sessionCookie, transientCookie, verifyPassword, verifyTotp } from "./security.js";
 
 const router = Router();
@@ -514,14 +517,28 @@ function bookProductFromHtml(html, source) {
 
 async function fetchBookProduct(productUrl, flipOnly = false) {
   const source = flipOnly ? { ...marketplaceFromUrl(productUrl), suggestedAction: "Купить" } : bookSourceFromUrl(productUrl);
-  const { url } = source;
+  let currentUrl = source.url;
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), 8500);
   try {
-    const result = await fetch(url, { signal: controller.signal, headers: { "user-agent": "Mozilla/5.0 BookMeet/1.0", "accept-language": "ru-KZ,ru;q=0.9" } });
-    if (!result.ok) throw Object.assign(new Error(`${source.name} не вернул карточку книги`), { statusCode: 502 });
-    const html = await result.text();
-    return bookProductFromHtml(html, source);
+    for (let redirect = 0; redirect <= 3; redirect += 1) {
+      const result = await fetch(currentUrl, { redirect: "manual", signal: controller.signal, headers: { "user-agent": "Mozilla/5.0 BookMeet/1.0", "accept-language": "ru-KZ,ru;q=0.9" } });
+      if ([301, 302, 303, 307, 308].includes(result.status)) {
+        const location = result.headers.get("location");
+        if (!location || redirect === 3) throw Object.assign(new Error("Слишком много перенаправлений книжного источника"), { statusCode: 502 });
+        const redirected = flipOnly ? { ...marketplaceFromUrl(new URL(location, currentUrl)), suggestedAction: "Купить" } : bookSourceFromUrl(new URL(location, currentUrl));
+        if (redirected.name !== source.name) throw Object.assign(new Error("Книжный источник перенаправил запрос на другой сайт"), { statusCode: 400 });
+        currentUrl = redirected.url;
+        continue;
+      }
+      if (!result.ok) throw Object.assign(new Error(`${source.name} не вернул карточку книги`), { statusCode: 502 });
+      const maximumHtmlBytes = 5 * 1024 * 1024;
+      if (Number(result.headers.get("content-length") || 0) > maximumHtmlBytes) throw Object.assign(new Error("Карточка книги слишком большая"), { statusCode: 502 });
+      const html = await result.text();
+      if (Buffer.byteLength(html, "utf8") > maximumHtmlBytes) throw Object.assign(new Error("Карточка книги слишком большая"), { statusCode: 502 });
+      return bookProductFromHtml(html, { ...source, url: currentUrl });
+    }
+    throw Object.assign(new Error("Не удалось получить карточку книги"), { statusCode: 502 });
   } catch (error) {
     if (error?.statusCode) throw error;
     console.warn(`Не удалось получить карточку ${source.name}`, error?.message ?? error);
@@ -730,99 +747,6 @@ async function consumeRecoveryCode(userId, code) {
     await connection.query("UPDATE users SET totp_recovery_codes = ? WHERE id = ?", [JSON.stringify(hashes), userId]);
     return true;
   });
-}
-
-function validateRichHtml(value) {
-  const html = String(value ?? "");
-  if (/<\/?(?:script|style|iframe|object|embed|svg|math)\b|\son\w+\s*=|javascript:/i.test(html)) {
-    throw Object.assign(new Error("Недопустимое форматирование публикации"), { statusCode: 400 });
-  }
-  return html;
-}
-
-function plainTextFromHtml(value) {
-  return String(value ?? "").replace(/<br\s*\/?>/gi, "\n").replace(/<\/p>/gi, "\n").replace(/<[^>]+>/g, "").replace(/&nbsp;/g, " ").replace(/&amp;/g, "&").replace(/&lt;/g, "<").replace(/&gt;/g, ">").trim();
-}
-
-async function saveCover(dataUrl) {
-  if (!String(dataUrl ?? "").startsWith("data:image/")) return dataUrl || null;
-  const match = String(dataUrl).match(/^data:image\/(png|jpeg|jpg|webp);base64,(.+)$/i);
-  if (!match) throw new Error("Неподдерживаемый формат обложки");
-  const content = Buffer.from(match[2], "base64");
-  const limit = Number(process.env.MAX_COVER_BYTES || 5 * 1024 * 1024);
-  if (content.length > limit) throw new Error("Обложка превышает допустимый размер");
-  const extension = match[1].toLowerCase() === "jpeg" ? "jpg" : match[1].toLowerCase();
-  const uploadRoot = path.resolve(projectRoot, process.env.UPLOAD_DIR || "uploads");
-  await mkdir(uploadRoot, { recursive: true });
-  const filename = `${Date.now()}-${randomBytes(8).toString("hex")}.${extension}`;
-  await writeFile(path.join(uploadRoot, filename), content, { flag: "wx" });
-  return `/uploads/${filename}`;
-}
-
-async function saveAvatar(dataUrl) {
-  if (!String(dataUrl ?? "").startsWith("data:image/")) return dataUrl || null;
-  const match = String(dataUrl).match(/^data:image\/(png|jpeg|jpg|webp);base64,(.+)$/i);
-  if (!match) throw Object.assign(new Error("Неподдерживаемый формат фотографии"), { statusCode: 400 });
-  const content = Buffer.from(match[2], "base64");
-  if (content.length > 600 * 1024) throw Object.assign(new Error("Фотография профиля слишком большая"), { statusCode: 400 });
-  const extension = match[1].toLowerCase() === "jpeg" ? "jpg" : match[1].toLowerCase();
-  const uploadRoot = path.resolve(projectRoot, process.env.UPLOAD_DIR || "uploads");
-  await mkdir(uploadRoot, { recursive: true });
-  const filename = `avatar-${Date.now()}-${randomBytes(8).toString("hex")}.${extension}`;
-  await writeFile(path.join(uploadRoot, filename), content, { flag: "wx" });
-  return `/uploads/${filename}`;
-}
-
-async function saveRemoteCover(coverUrl) {
-  if (!coverUrl) return null;
-  const url = new URL(cleanUrl(coverUrl));
-  const host = url.hostname.toLowerCase();
-  if (host !== "s.f.kz" && !host.endsWith(".s.f.kz")) throw new Error("Недопустимый адрес обложки Flip");
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), 8500);
-  try {
-    const result = await fetch(url, { signal: controller.signal, headers: { "user-agent": "Mozilla/5.0 BookMeet/1.0" } });
-    if (!result.ok) return null;
-    const content = Buffer.from(await result.arrayBuffer());
-    const limit = Number(process.env.MAX_COVER_BYTES || 5 * 1024 * 1024);
-    if (content.length > limit) throw new Error("Обложка превышает допустимый размер");
-    const mime = String(result.headers.get("content-type") || "").toLowerCase();
-    const extension = mime.includes("png") ? "png" : mime.includes("webp") ? "webp" : "jpg";
-    const uploadRoot = path.resolve(projectRoot, process.env.UPLOAD_DIR || "uploads");
-    await mkdir(uploadRoot, { recursive: true });
-    const filename = `${Date.now()}-${randomBytes(8).toString("hex")}.${extension}`;
-    await writeFile(path.join(uploadRoot, filename), content, { flag: "wx" });
-    return `/uploads/${filename}`;
-  } finally {
-    clearTimeout(timeout);
-  }
-}
-
-async function previewRemoteCover(coverUrl) {
-  if (!coverUrl) return "";
-  const url = new URL(cleanUrl(coverUrl));
-  const allowedHost = (hostname) => {
-    const host = hostname.toLowerCase();
-    return host === "s.f.kz" || host.endsWith(".s.f.kz") || host === "simg.marwin.kz" || host === "api.bookmate.ru" || host === "books.yandex.kz";
-  };
-  if (!allowedHost(url.hostname)) return "";
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), 8500);
-  try {
-    const result = await fetch(url, { signal: controller.signal, headers: { "user-agent": "Mozilla/5.0 BookMeet/1.0" } });
-    if (!result.ok || !allowedHost(new URL(result.url).hostname)) return "";
-    const content = Buffer.from(await result.arrayBuffer());
-    const limit = Number(process.env.MAX_COVER_BYTES || 5 * 1024 * 1024);
-    if (content.length > limit) return "";
-    const mime = String(result.headers.get("content-type") || "image/jpeg").split(";")[0];
-    if (!mime.startsWith("image/")) return "";
-    return `data:${mime};base64,${content.toString("base64")}`;
-  } catch (error) {
-    console.warn("Не удалось загрузить обложку для предпросмотра", error?.message ?? error);
-    return "";
-  } finally {
-    clearTimeout(timeout);
-  }
 }
 
 async function materialInfo(connection, kind, id) {
@@ -1064,12 +988,7 @@ router.post("/auth/logout", asyncRoute(async (request, response) => {
   response.json({ ok: true });
 }));
 
-router.get("/bootstrap", asyncRoute(async (request, response) => {
-  const user = await authenticatedUser(request);
-  if (!user) return response.status(401).json({ error: "Требуется вход" });
-  if (user.suspension) return response.status(423).json({ suspended: true, ...user.suspension });
-  response.json(await loadBootstrap(user.id));
-}));
+router.use(createBootstrapRouter({ authenticatedUser }));
 
 router.get("/admin/statistics", asyncRoute(async (request, response) => {
   const pool = getPool();

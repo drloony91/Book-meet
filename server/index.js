@@ -3,6 +3,7 @@ import express from "express";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { mkdir } from "node:fs/promises";
+import { apiRateLimit } from "./modules/request-limits.js";
 
 const app = express();
 const projectRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
@@ -26,6 +27,7 @@ async function start() {
     response.setHeader("X-Frame-Options", "DENY");
     response.setHeader("Referrer-Policy", "strict-origin-when-cross-origin");
     response.setHeader("Permissions-Policy", "camera=(), microphone=(), geolocation=()");
+    if (production) response.setHeader("Strict-Transport-Security", "max-age=31536000; includeSubDomains");
     response.setHeader("Content-Security-Policy", "default-src 'self'; script-src 'self' https://accounts.google.com/gsi/client; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; connect-src 'self' https://accounts.google.com/gsi/; frame-src https://accounts.google.com/gsi/; font-src 'self'; frame-ancestors 'none'; base-uri 'self'; form-action 'self'");
     next();
   });
@@ -40,6 +42,7 @@ async function start() {
     }
     next();
   });
+  app.use("/api", apiRateLimit);
   app.use("/book-meet-return", (request, response, next) => {
     request.url = "/auth/google/callback";
     api(request, response, next);

@@ -221,6 +221,22 @@ router.get("/bootstrap", (request, response) => {
   response.json(bootstrap(userId));
 });
 
+router.get("/bootstrap/:section", (request, response) => {
+  const userId = currentUserId(request);
+  if (!userId) return response.status(401).json({ error: "Требуется вход" });
+  const user = users.find((item) => item.id === userId);
+  if (user?.suspension && (user.suspension.permanent || new Date(user.suspension.until).getTime() > Date.now())) return response.status(423).json({ suspended: true, ...user.suspension });
+  const keys = {
+    session: ["activeUserId", "profileCompleted"],
+    catalog: ["activeUserId", "users", "events", "occasions"],
+    social: ["activeUserId", "blocks", "blockedByUserIds", "friendRequests", "friendships", "follows", "notifications", "messages", "likes"],
+    moderation: ["activeUserId", "reports"],
+  }[request.params.section];
+  if (!keys) return response.status(404).json({ error: "Неизвестный набор данных" });
+  const data = bootstrap(userId);
+  response.json(Object.fromEntries(keys.map((key) => [key, data[key]])));
+});
+
 router.use(requireUser);
 
 router.use((request, response, next) => {

@@ -132,7 +132,8 @@ function formatCommentDate(value: string) {
 }
 
 export function EventModal({ item, onClose, onOpenBook, onEdit, onDelete, onReport }: { item: BookEvent; onClose: () => void; onOpenBook?: () => void; onEdit?: () => void; onDelete?: () => void; onReport?: () => void }) {
-  const routedClose = useRoutedPopup(`/events/${item.id}`, "/events", onClose, `${item.title} — Book Meet`);
+  const routedPopup = useRoutedPopup(`/events/${item.id}`, "/events", onClose, `${item.title} — Book Meet`);
+  const routedClose = routedPopup.close;
   const [reminderSet, setReminderSet] = useState(Boolean(item.reminderSet));
   const [reminderDialog, setReminderDialog] = useState<"created" | "cancel" | null>(null);
   const [reminderBusy, setReminderBusy] = useState(false);
@@ -168,6 +169,7 @@ export function EventModal({ item, onClose, onOpenBook, onEdit, onDelete, onRepo
     setReminderDialog(null);
     window.location.assign("/profile/events");
   }
+  if (!routedPopup.active) return null;
   return <div className="modal-backdrop" onMouseDown={routedClose}><section className="event-modal" onMouseDown={(event) => event.stopPropagation()}><ModalIconActions onEdit={onEdit} onDelete={onDelete} onReport={onReport} onClose={routedClose} /><EventStatusLabel status={item.status} /><span className="section-subtitle">Книжное событие · {item.city}</span><h2>{item.title}</h2>{item.bookTitle && <button className="event-modal-book" type="button" onClick={onOpenBook}><div className={`event-modal-book-cover library-cover-${item.bookCoverTone ?? "blue"}`} style={item.bookCoverUrl ? { backgroundImage: `url(${item.bookCoverUrl})` } : undefined}>{!item.bookCoverUrl && item.bookTitle.slice(0, 1)}</div><span><strong>{item.bookTitle}</strong><small>{item.bookAuthor}</small><p>{item.bookAnnotation || "Аннотация пока не добавлена."}</p></span></button>}<div className="event-modal-meta"><strong>{new Date(`${item.date}T00:00:00`).toLocaleDateString("ru-RU", { day: "numeric", month: "long", year: "numeric" })} · {item.time}</strong><span>{item.address}</span></div><p>{item.description}</p>{item.moderationNote && item.status !== "published" && <div className="moderation-note"><strong>Комментарий модератора</strong><p>{item.moderationNote}</p></div>}<div className="event-links">{item.detailsUrl && <a className="primary-button" href={item.detailsUrl} target="_blank" rel="noreferrer">Регистрация</a>}{item.mapUrl && <a className="outline-button" href={item.mapUrl} target="_blank" rel="noreferrer">Смотреть в 2ГИС</a>}{item.status === "published" && <button className="outline-button" type="button" disabled={reminderBusy} onClick={() => reminderSet ? setReminderDialog("cancel") : void setReminder()}>{reminderSet ? "Напоминание установлено" : "Установить напоминание"}</button>}</div>{reminderDialog && <div className="nested-modal-backdrop" onMouseDown={() => setReminderDialog(null)}><section className="event-reminder-notice" role="alertdialog" aria-modal="true" onMouseDown={(event) => event.stopPropagation()}>{reminderDialog === "created" ? <><h2>Напоминание установлено</h2><p>Вы установили напоминание, за 24 часа до мероприятия вы получите уведомление с напоминанием. Мероприятие сохранено в раздел «Мои мероприятия» в вашем профиле. Не забудьте зарегистрироваться на мероприятие у организатора, если это требуется.</p><div className="form-actions"><button className="outline-button" type="button" onClick={() => setReminderDialog(null)}>Ок</button><button className="outline-button" type="button" onClick={openOwnProfile}>Перейти в профиль</button></div></> : <><h2>Отменить напоминание?</h2><div className="form-actions"><button className="outline-button" type="button" disabled={reminderBusy} onClick={() => void cancelReminder()}>Да</button><button className="outline-button" type="button" autoFocus onClick={() => setReminderDialog(null)}>Нет</button></div></>}</section></div>}</section></div>;
 }
 
@@ -213,7 +215,9 @@ export function OccasionCard({ item, own, onOpen, onEdit }: { item: Occasion; ow
 }
 
 export function OccasionModal({ item, onClose, onOpenUser, onEdit, onDelete, onReport }: { item: Occasion; onClose: () => void; onOpenUser?: (id: number) => void; onEdit?: () => void; onDelete?: () => void; onReport?: () => void }) {
-  const routedClose = useRoutedPopup(`/meet/${item.id}`, "/meet", onClose, "Повод познакомиться — Book Meet");
+  const routedPopup = useRoutedPopup(`/meet/${item.id}`, "/meet", onClose, "Повод познакомиться — Book Meet");
+  const routedClose = routedPopup.close;
+  if (!routedPopup.active) return null;
   return <div className="modal-backdrop" onMouseDown={routedClose}><section className="event-modal occasion-modal" onMouseDown={(event) => event.stopPropagation()}><ModalIconActions onEdit={onEdit} onDelete={onDelete} onReport={onReport} onClose={routedClose} /><EventStatusLabel status={item.status} /><span className="section-subtitle">{occasionLabels[item.type]}</span><h2>{item.primaryText}</h2><p>{item.audienceText}</p><div className="occasion-filter-summary"><span>Города: {item.targetCities.join(", ")}</span><span>Профиль: {item.targetProfileType}</span><span>Пол: {item.targetGender}</span></div><p>Автор: <button className="inline-user-link" type="button" onClick={() => onOpenUser?.(item.creatorId)}>{item.creatorName}</button></p>{item.moderationNote && item.status !== "published" && <div className="moderation-note"><strong>Комментарий модератора</strong><p>{item.moderationNote}</p></div>}</section></div>;
 }
 
@@ -228,7 +232,8 @@ export function HomeScopeSwitch({ city, value, onChange }: { city: string; value
 
 export function ReadingModal({ item, currentUser, users = [], likedUserIds = [], onToggleLike, onComment, onClose, onOpenUser, relationship, isFollowing, onAddFriend, onFollow, onEdit, onDelete, onReport }: { item: ReadingItem; currentUser?: DemoUser; users?: DemoUser[]; likedUserIds?: number[]; onToggleLike?: () => void; onComment?: (text: string) => Promise<MaterialComment | null>; onClose: () => void; onOpenUser?: (userId: number) => void; relationship?: "none" | "outgoing" | "incoming" | "friends"; isFollowing?: boolean; onAddFriend?: (message: string) => void; onFollow?: () => void; onEdit?: () => void; onDelete?: () => void; onReport?: () => void }) {
   const routeBase = item.kind === "review" ? "/reviews" : "/blog";
-  const routedClose = useRoutedPopup(`${routeBase}/${item.id}`, routeBase, onClose, `${item.kind === "review" ? "Рецензия" : "Публикация"} — Book Meet`);
+  const routedPopup = useRoutedPopup(`${routeBase}/${item.id}`, routeBase, onClose, `${item.kind === "review" ? "Рецензия" : "Публикация"} — Book Meet`);
+  const routedClose = routedPopup.close;
   const [comments, setComments] = useState<MaterialComment[]>([]);
   const [hydratedLikedIds, setHydratedLikedIds] = useState<number[]>(likedUserIds);
   const [comment, setComment] = useState("");
@@ -267,6 +272,7 @@ export function ReadingModal({ item, currentUser, users = [], likedUserIds = [],
     return () => { active = false; window.clearInterval(timer); };
   }, [item.id, item.kind]);
 
+  if (!routedPopup.active) return null;
   return (
     <div className="modal-backdrop" role="presentation" onMouseDown={routedClose}>
       <article className="reading-modal" role="dialog" aria-modal="true" aria-labelledby="reading-title" onMouseDown={(event) => event.stopPropagation()}>
@@ -336,7 +342,8 @@ function PublicProfileDetails({ user }: { user: DemoUser }) {
 }
 
 export function UserProfileModal({ user, viewer, users, events = [], likes, friendCount, relationship, incomingMessage, isFollowing, canMessage, blockedByMe = false, onClose, onAddFriend, onCancelFriendRequest, onAccept, onReject, onRemoveFriend, onOpenChat, onFollow, onUnfollow, onUnblock, onReport, onToggleLike, onComment, onOpenUser }: { user: DemoUser; viewer: DemoUser; users: DemoUser[]; events?: BookEvent[]; likes: Record<string, number[]>; friendCount: number; relationship: "none" | "outgoing" | "incoming" | "friends"; incomingMessage?: string; isFollowing: boolean; canMessage: boolean; blockedByMe?: boolean; onClose: () => void; onAddFriend: (message: string) => void; onCancelFriendRequest: () => Promise<void>; onAccept: () => void; onReject: (comment: string) => void; onRemoveFriend: () => void; onOpenChat: () => void; onFollow: () => void; onUnfollow: () => Promise<void>; onUnblock?: () => Promise<void>; onReport?: () => void; onToggleLike: (item: ReadingItem) => void; onComment: (item: ReadingItem, text: string) => Promise<MaterialComment | null>; onOpenUser: (userId: number) => void }) {
-  const routedClose = useRoutedPopup(`/users/${user.id}`, "/users", onClose, `${user.profile.name} — Book Meet`);
+  const routedPopup = useRoutedPopup(`/users/${user.id}`, "/users", onClose, `${user.profile.name} — Book Meet`);
+  const routedClose = routedPopup.close;
   const [rejecting, setRejecting] = useState(false);
   const [requesting, setRequesting] = useState(false);
   const [requestMessage, setRequestMessage] = useState("");
@@ -365,6 +372,7 @@ export function UserProfileModal({ user, viewer, users, events = [], likes, frie
     return () => window.removeEventListener("keydown", close);
   }, [routedClose]);
 
+  if (!routedPopup.active) return null;
   return (
     <div className="modal-backdrop profile-overlay-top" role="presentation" onMouseDown={routedClose}>
       <section className="public-profile-modal" role="dialog" aria-modal="true" aria-labelledby="public-profile-title" onMouseDown={(event) => event.stopPropagation()}>
@@ -424,7 +432,8 @@ export function UserProfileModal({ user, viewer, users, events = [], likes, frie
 
 export function UnifiedBookModal({ book: sourceBook, users, onClose, onOpenUser, onOpenReview, onEdit, onDelete, onReport, nested = false }: { book: LibraryBook | AuthorBook; users: DemoUser[]; onClose: () => void; onOpenUser?: (userId: number) => void; onOpenReview?: (review: UserReview, user: DemoUser) => void; onEdit?: () => void; onDelete?: () => void; onReport?: () => void; nested?: boolean }) {
   const book = resolveCanonicalBook(sourceBook, users);
-  const routedClose = useRoutedPopup(`/books/${book.id}`, "/", onClose, `${book.title} — Book Meet`);
+  const routedPopup = useRoutedPopup(`/books/${book.id}`, "/", onClose, `${book.title} — Book Meet`);
+  const routedClose = routedPopup.close;
   const [tab, setTab] = useState<"about" | "readers" | "reviews" | "wishers">("about");
   const [warningLink, setWarningLink] = useState<BookLink | null>(null);
   const [openedReview, setOpenedReview] = useState<{ review: UserReview; reviewer: DemoUser } | null>(null);
@@ -433,6 +442,7 @@ export function UnifiedBookModal({ book: sourceBook, users, onClose, onOpenUser,
   const readers = users.flatMap((reader) => reader.books.filter((item) => sameBook(item.title, item.author) && (item.readingStatus ?? "read") !== "want").map((item) => ({ reader, item })));
   const bookReviews = users.flatMap((reviewer) => reviewer.reviews.filter((review) => sameBook(review.bookTitle, review.bookAuthor)).map((review) => ({ reviewer, review })));
   const wishers = users.filter((user) => user.books.some((item) => sameBook(item.title, item.author) && item.readingStatus === "want") || (user.wishBooks ?? []).some((item) => item.catalogBookId === book.id || sameBook(item.title, item.author)));
+  if (!routedPopup.active) return null;
   return (
     <div className={nested ? "nested-modal-backdrop" : "modal-backdrop"} onMouseDown={routedClose}>
       <section className="unified-book-modal" onMouseDown={(event) => event.stopPropagation()}>

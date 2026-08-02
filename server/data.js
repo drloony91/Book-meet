@@ -205,27 +205,42 @@ export async function loadUsers(connection = getPool(), viewerId = null) {
   });
 }
 
-export async function loadBootstrap(userId) {
+export async function loadBootstrap(userId, options = {}) {
   const pool = getPool();
-  const [blockRows] = await pool.query(
+  const sections = new Set(options.sections ?? ["catalog", "social", "moderation"]);
+  const includeCatalog = sections.has("catalog");
+  const includeSocial = sections.has("social");
+  const includeModeration = sections.has("moderation");
+  const [[accountState]] = await pool.query(
+    `SELECT u.profile_completed, u.role, p.gender, p.profile_type
+       FROM users u
+       JOIN profiles p ON p.user_id = u.id
+      WHERE u.id = ?
+      LIMIT 1`,
+    [userId],
+  );
+  const account = {
+    isAdmin: accountState?.role === "admin",
+    profile: { gender: accountState?.gender, type: accountState?.profile_type },
+  };
+  const [blockRows] = includeCatalog || includeSocial ? await pool.query(
     "SELECT blocker_user_id, blocked_user_id, created_at FROM user_blocks WHERE blocker_user_id = ? OR blocked_user_id = ?",
     [userId, userId],
-  );
+  ) : [[]];
   const hiddenUserIds = new Set(blockRows.flatMap((row) => [Number(row.blocker_user_id), Number(row.blocked_user_id)]).filter((id) => id !== Number(userId)));
-  const users = await loadUsers(pool, userId);
-  const currentUser = users.find((user) => user.id === Number(userId));
-  const [[accountState]] = await pool.query("SELECT profile_completed FROM users WHERE id = ? LIMIT 1", [userId]);
-  const [requestRows] = await pool.query(
+  const users = includeCatalog ? await loadUsers(pool, userId) : [];
+  const currentUser = users.find((user) => user.id === Number(userId)) ?? account;
+  const [requestRows] = includeSocial ? await pool.query(
     `SELECT id, from_user_id, to_user_id, status, message, rejection_comment
        FROM friend_requests
       WHERE from_user_id = ? OR to_user_id = ?
       ORDER BY created_at`, [userId, userId],
-  );
-  const [friendshipRows] = await pool.query(
+  ) : [[]];
+  const [friendshipRows] = includeCatalog || includeSocial ? await pool.query(
     `SELECT user_low_id, user_high_id FROM friendships
       WHERE user_low_id = ? OR user_high_id = ?`, [userId, userId],
-  );
-  const [wishlistRows] = await pool.query(
+  ) : [[]];
+  const [wishlistRows] = includeCatalog ? await pool.query(
     `SELECT w.id, w.user_id, w.catalog_book_id, w.author, w.title, w.genres,
             COALESCE(NULLIF(w.annotation, ''), b.annotation, '') AS annotation,
             COALESCE(w.cover_path, b.cover_path) AS cover_path,
@@ -236,23 +251,23 @@ export async function loadBootstrap(userId) {
        FROM wishlist_items w
        LEFT JOIN books b ON b.id = w.catalog_book_id
       ORDER BY w.created_at DESC`,
-  );
-  const [followRows] = await pool.query(
+  ) : [[]];
+  const [followRows] = includeSocial ? await pool.query(
     `SELECT follower_user_id, target_user_id FROM follows
       WHERE follower_user_id = ? OR target_user_id = ?`, [userId, userId],
-  );
-  const [notificationRows] = await pool.query(
+  ) : [[]];
+  const [notificationRows] = includeSocial ? await pool.query(
     `SELECT id, user_id, actor_user_id, notification_type, title, body, material_kind, material_id, is_unread, created_at
        FROM notifications WHERE user_id = ? ORDER BY created_at DESC LIMIT 200`, [userId],
-  );
-  const [messageRows] = await pool.query(
+  ) : [[]];
+  const [messageRows] = includeSocial ? await pool.query(
     `SELECT id, sender_user_id, recipient_user_id, body, attachment_kind, attachment_id, is_system, read_at, created_at
        FROM messages
       WHERE sender_user_id = ? OR recipient_user_id = ?
       ORDER BY created_at`, [userId, userId],
-  );
-  const [likeRows] = await pool.query("SELECT user_id, material_kind, material_id FROM material_likes");
-  const [eventRows] = await pool.query(
+  ) : [[]];
+  const [likeRows] = includeSocial ? await pool.query("SELECT user_id, material_kind, material_id FROM material_likes") : [[]];
+  const [eventRows] = includeCatalog ? await pool.query(
     `SELECT e.id, e.creator_user_id, e.title, e.summary, e.description, e.event_date, e.event_time,
             e.city, e.city_id, e.address, e.map_url, e.details_url, e.book_id, e.is_pinned,
             e.status, e.moderation_note, e.created_at,
@@ -265,8 +280,8 @@ export async function loadBootstrap(userId) {
       WHERE ? = 1 OR e.status = 'published' OR e.creator_user_id = ?
       ORDER BY e.is_pinned DESC, e.event_date, e.event_time, e.created_at`,
     [userId, currentUser?.isAdmin ? 1 : 0, userId],
-  );
-  const [occasionRows] = await pool.query(
+  ) : [[]];
+  const [occasionRows] = includeCatalog ? await pool.query(
     `SELECT o.id, o.creator_user_id, o.occasion_type, o.primary_text, o.audience_text,
             o.target_gender, o.target_cities, o.target_profile_type, o.status,
             o.moderation_note, o.created_at, p.display_name AS creator_name
@@ -275,8 +290,8 @@ export async function loadBootstrap(userId) {
       WHERE ? = 1 OR o.status = 'published' OR o.creator_user_id = ?
       ORDER BY o.created_at DESC`,
     [currentUser?.isAdmin ? 1 : 0, userId],
-  );
-  const [reportRows] = currentUser?.isAdmin ? await pool.query(
+  ) : [[]];
+  const [reportRows] = includeModeration && currentUser?.isAdmin ? await pool.query(
     `SELECT r.id, r.reporter_user_id, r.target_kind, r.target_id, r.target_user_id, r.reason,
             r.status, r.created_at, reporter.display_name AS reporter_name, target.display_name AS target_user_name,
             COALESCE(
@@ -299,7 +314,7 @@ export async function loadBootstrap(userId) {
        LEFT JOIN profiles target ON target.user_id = r.target_user_id
       ORDER BY r.created_at DESC`,
   ) : [[]];
-  const [reportedConversationRows] = currentUser?.isAdmin ? await pool.query(
+  const [reportedConversationRows] = includeModeration && currentUser?.isAdmin ? await pool.query(
     `SELECT r.id AS report_id, m.id, m.sender_user_id, m.recipient_user_id, m.body,
             m.attachment_kind, m.attachment_id, m.is_system, m.read_at, m.created_at
        FROM reports r

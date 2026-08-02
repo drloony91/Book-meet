@@ -1,4 +1,4 @@
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 
 export type MainView =
   | "home"
@@ -19,6 +19,13 @@ export type ChatRouteState = {
   backgroundPath?: string;
   chatMode?: "compact" | "expanded";
 };
+
+export type OverlayHistoryState = {
+  bookMeetOverlay?: boolean;
+  backgroundPath?: string;
+};
+
+export const APP_NAVIGATION_EVENT = "bookmeet:navigation";
 
 export const mainViewPaths: Record<RoutableMainView, string> = {
   home: "/",
@@ -105,33 +112,74 @@ export function initialMainView(): MainView {
   return typeof window === "undefined" ? "home" : appRouteFromPathname(window.location.pathname).view;
 }
 
+export function notifyAppNavigation() {
+  window.dispatchEvent(new CustomEvent(APP_NAVIGATION_EVENT));
+}
+
+export function openOverlayRoute(routePath: string) {
+  const normalizedRoute = normalizedPathname(routePath);
+  const currentPath = normalizedPathname(window.location.pathname);
+  if (currentPath === normalizedRoute) return;
+  window.history.pushState({ bookMeetOverlay: true, backgroundPath: currentPath } satisfies OverlayHistoryState, "", normalizedRoute);
+  notifyAppNavigation();
+}
+
+export function closeOverlayRoute(routePath: string, fallbackPath: string) {
+  const currentPath = normalizedPathname(window.location.pathname);
+  const state = window.history.state as OverlayHistoryState | null;
+  if (currentPath === normalizedPathname(routePath) && state?.bookMeetOverlay && state.backgroundPath) {
+    window.history.back();
+    return;
+  }
+  window.history.replaceState({ bookMeetView: mainViewFromPathname(fallbackPath) }, "", fallbackPath);
+  window.dispatchEvent(new PopStateEvent("popstate", { state: window.history.state }));
+}
+
+export function useCurrentAppRoute() {
+  const [route, setRoute] = useState(() => typeof window === "undefined" ? appRouteFromPathname("/") : appRouteFromPathname(window.location.pathname));
+  useEffect(() => {
+    const update = () => setRoute(appRouteFromPathname(window.location.pathname));
+    window.addEventListener("popstate", update);
+    window.addEventListener(APP_NAVIGATION_EVENT, update);
+    return () => {
+      window.removeEventListener("popstate", update);
+      window.removeEventListener(APP_NAVIGATION_EVENT, update);
+    };
+  }, []);
+  return route;
+}
+
 export function useRoutedPopup(routePath: string, fallbackPath: string, onClose: () => void, title: string) {
   const onCloseRef = useRef(onClose);
+  const normalizedRoute = normalizedPathname(routePath);
+  const [active, setActive] = useState(() => typeof window !== "undefined" && normalizedPathname(window.location.pathname) === normalizedRoute);
+  const wasActiveRef = useRef(active);
   useEffect(() => { onCloseRef.current = onClose; }, [onClose]);
 
   useEffect(() => {
-    const normalizedRoute = normalizedPathname(routePath);
-    const currentPath = normalizedPathname(window.location.pathname);
-    if (currentPath !== normalizedRoute) {
-      window.history.pushState({ bookMeetOverlay: true, backgroundPath: currentPath }, "", normalizedRoute);
-    }
-    document.title = title;
-    const closeAfterHistoryNavigation = () => {
-      if (normalizedPathname(window.location.pathname) !== normalizedRoute) onCloseRef.current();
-      else document.title = title;
+    openOverlayRoute(normalizedRoute);
+    const syncActive = () => {
+      const matches = normalizedPathname(window.location.pathname) === normalizedRoute;
+      wasActiveRef.current = matches;
+      setActive(matches);
+      if (matches) document.title = title;
     };
+    const closeAfterHistoryNavigation = () => {
+      const matches = normalizedPathname(window.location.pathname) === normalizedRoute;
+      const shouldClose = wasActiveRef.current && !matches;
+      wasActiveRef.current = matches;
+      setActive(matches);
+      if (matches) document.title = title;
+      else if (shouldClose) onCloseRef.current();
+    };
+    syncActive();
+    window.addEventListener(APP_NAVIGATION_EVENT, syncActive);
     window.addEventListener("popstate", closeAfterHistoryNavigation);
-    return () => window.removeEventListener("popstate", closeAfterHistoryNavigation);
-  }, [routePath, title]);
+    return () => {
+      window.removeEventListener(APP_NAVIGATION_EVENT, syncActive);
+      window.removeEventListener("popstate", closeAfterHistoryNavigation);
+    };
+  }, [normalizedRoute, title]);
 
-  return () => {
-    const state = window.history.state as { bookMeetOverlay?: boolean; backgroundPath?: string } | null;
-    if (normalizedPathname(window.location.pathname) === normalizedPathname(routePath) && state?.bookMeetOverlay && state.backgroundPath) {
-      window.history.back();
-      return;
-    }
-    window.history.replaceState({ bookMeetView: mainViewFromPathname(fallbackPath) }, "", fallbackPath);
-    onCloseRef.current();
-    window.dispatchEvent(new PopStateEvent("popstate", { state: window.history.state }));
-  };
+  return { active, close: () => closeOverlayRoute(normalizedRoute, fallbackPath) };
 }

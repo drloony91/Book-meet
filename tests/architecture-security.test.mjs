@@ -1,0 +1,58 @@
+import test from "node:test";
+import assert from "node:assert/strict";
+import { readFile } from "node:fs/promises";
+import path from "node:path";
+import { plainTextFromHtml, validateRichHtml } from "../server/modules/content-security.js";
+import { imageType } from "../server/modules/image-storage.js";
+import { requestLimitPolicy } from "../server/modules/request-limits.js";
+
+const root = path.resolve(import.meta.dirname, "..");
+
+test("сервер удаляет опасный HTML, обработчики событий и запрещенные стили", () => {
+  const cleaned = validateRichHtml('<p onclick="steal()" style="text-align:center;color:red">Текст<script>alert(1)</script></p><img src=x onerror=steal()>');
+  assert.equal(cleaned, '<p style="text-align:center">Текст</p>');
+  assert.equal(plainTextFromHtml(cleaned), "Текст");
+});
+
+test("тип загруженного изображения определяется по содержимому, а не по расширению", () => {
+  assert.deepEqual(imageType(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a])), { mime: "image/png", extension: "png" });
+  assert.deepEqual(imageType(Buffer.from([0xff, 0xd8, 0xff, 0x00])), { mime: "image/jpeg", extension: "jpg" });
+  assert.equal(imageType(Buffer.from("<script>alert(1)</script>")), null);
+});
+
+test("изменяющие API-запросы имеют отдельные лимиты", () => {
+  assert.equal(requestLimitPolicy("GET", "/bootstrap"), null);
+  assert.deepEqual(requestLimitPolicy("POST", "/auth/register"), { name: "auth", limit: 30, windowMs: 900_000 });
+  assert.deepEqual(requestLimitPolicy("POST", "/social/messages"), { name: "messages", limit: 60, windowMs: 60_000 });
+});
+
+test("bootstrap разделен на независимые серверные и клиентские секции", async () => {
+  const router = await readFile(path.join(root, "server", "modules", "bootstrap-router.js"), "utf8");
+  const data = await readFile(path.join(root, "server", "data.js"), "utf8");
+  const client = await readFile(path.join(root, "app", "services", "bootstrap.ts"), "utf8");
+  for (const section of ["session", "catalog", "social", "moderation"]) {
+    assert.match(router, new RegExp(`${section}:`));
+    assert.match(client, new RegExp(`"${section}"`));
+  }
+  assert.match(data, /options\.sections/);
+  assert.match(data, /includeCatalog/);
+  assert.match(data, /includeSocial/);
+  assert.match(data, /includeModeration/);
+});
+
+test("маршрутизируемые поп-апы используют единый стек истории", async () => {
+  const routes = await readFile(path.join(root, "app", "navigation", "routes.ts"), "utf8");
+  assert.match(routes, /APP_NAVIGATION_EVENT/);
+  assert.match(routes, /openOverlayRoute/);
+  assert.match(routes, /closeOverlayRoute/);
+  assert.match(routes, /return \{ active, close:/);
+});
+
+test("внешние изображения и книжные страницы проверяют каждый редирект", async () => {
+  const images = await readFile(path.join(root, "server", "modules", "image-storage.js"), "utf8");
+  const api = await readFile(path.join(root, "server", "api.js"), "utf8");
+  assert.match(images, /redirect: "manual"/);
+  assert.match(images, /Перенаправление изображения ведет на запрещенный адрес/);
+  assert.match(api, /redirect: "manual"/);
+  assert.match(api, /Книжный источник перенаправил запрос на другой сайт/);
+});
