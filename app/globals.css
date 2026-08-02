@@ -2013,10 +2013,28 @@ select option {
 .event-attendees button > span:last-child { display: flex; min-width: 0; flex-direction: column; gap: 2px; }
 .event-attendees strong, .event-attendees small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .event-attendees small { color: #718096; font-size: 9px; }
+.event-attendees .event-attendees-all { display: inline-flex; justify-content: center; width: auto; margin-top: 12px; padding-inline: 16px; }
+.event-attendees-modal { position: relative; width: min(620px, calc(100vw - 40px)); max-height: min(760px, 82vh); overflow-y: auto; border-radius: 18px; padding: 30px; background: #fff; box-shadow: 0 24px 70px rgba(21,42,68,.24); }
+.event-attendees-modal h2 { margin: 0 42px 20px 0; font: 700 25px/1.2 Georgia, serif; }
+.event-attendees-list { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
+.event-attendees-list > button { display: flex; align-items: center; gap: 10px; min-width: 0; border: 1px solid #d7e2ed; border-radius: 12px; padding: 11px; color: inherit; background: #fff; cursor: pointer; text-align: left; }
+.event-attendees-list > button > span:last-child { display: flex; min-width: 0; flex-direction: column; gap: 3px; }
+.event-attendees-list strong, .event-attendees-list small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.event-attendees-list small { color: #718096; font-size: 10px; }
+.event-attendees-loading { margin: 24px 0; color: #718096; text-align: center; }
+.event-attendees-pagination { display: flex; align-items: center; justify-content: center; gap: 14px; margin-top: 20px; }
+.event-attendees-pagination button { border: 1px solid #b9cfe6; border-radius: 9px; padding: 8px 13px; color: #1769d2; background: #fff; cursor: pointer; }
+.event-attendees-pagination button:disabled { cursor: default; opacity: .45; }
+.event-attendees-pagination span { color: #607086; font-size: 12px; font-weight: 700; }
 .book-author-profile { display: inline-flex; align-items: center; gap: 9px; border: 0; padding: 0; color: var(--blue); background: transparent; cursor: pointer; font: 700 11px/1.2 Arial, sans-serif; }
 .event-reminder-notice, .confirm-social-modal { width: min(520px, calc(100vw - 40px)); border-radius: 18px; padding: 28px; background: white; box-shadow: 0 24px 70px rgba(21,42,68,.24); }
 .event-reminder-notice h2, .confirm-social-modal h2 { margin: 0 0 14px; font-size: 24px; }
 .event-reminder-notice p { margin: 0; color: #536174; line-height: 1.65; }
+.adult-restriction-modal { width: min(520px, calc(100vw - 40px)); border-radius: 20px; padding: 32px; background: #fff; box-shadow: 0 24px 70px rgba(21,42,68,.24); text-align: center; }
+.adult-restriction-mark { display: inline-grid; place-items: center; width: 64px; height: 64px; margin-bottom: 16px; border: 3px solid #bd2f2f; border-radius: 50%; color: #bd2f2f; font-size: 22px; font-weight: 900; }
+.adult-restriction-modal h2 { margin: 0; font: 700 27px/1.2 Georgia, serif; }
+.adult-restriction-modal p { margin: 14px 0 0; color: #536174; line-height: 1.6; }
+.adult-restriction-modal .form-actions { justify-content: center; margin-top: 24px; }
 .moderation-note { margin-top: 20px; border-left: 3px solid #e7a91c; background: #fff9ea; padding: 13px 16px; }
 .event-form { display: grid; gap: 15px; }
 .event-form label, .moderation-comment { display: grid; gap: 7px; color: #334155; font-size: 13px; font-weight: 700; }
@@ -2069,9 +2087,19 @@ select option {
 .occasion-form { display: grid; gap: 16px; }
 .occasion-form label { display: grid; gap: 7px; color: #334155; font-size: 13px; font-weight: 700; }
 .occasion-form input, .occasion-form textarea, .occasion-form select, .login-card select { width: 100%; border: 1px solid #cfd9e6; border-radius: 10px; padding: 11px 12px; color: #1c2c3d; background: #fff; font: inherit; font-weight: 400; }
+.occasion-type-label { display: block; margin-bottom: 7px; color: #334155; font-size: 13px; font-weight: 700; }
+.occasion-type-switch { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 3px; border: 1px solid #cfe0f5; border-radius: 13px; padding: 3px; background: #edf4ff; }
+.occasion-type-switch button { min-width: 0; border: 0; border-radius: 10px; padding: 11px 12px; color: #51708e; background: transparent; cursor: pointer; font: inherit; font-weight: 800; transition: color .2s ease, background .2s ease, box-shadow .2s ease; }
+.occasion-type-switch button:hover { color: #1769d2; background: rgba(255,255,255,.7); }
+.occasion-type-switch button.active { color: #fff; background: #1769d2; box-shadow: 0 4px 12px rgba(23,105,210,.24); }
 .occasion-audience-grid { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); gap: 14px; }
 .occasion-audience-box { display: grid; gap: 14px; margin: 0; border: 1px solid #b9cfe6; border-radius: 13px; padding: 17px; background: #f7fbff; }
 .occasion-audience-box legend { padding: 0 8px; color: #1769d2; font-size: 12px; font-weight: 800; }
+.occasion-schedule-box { display: grid; grid-template-columns: minmax(180px, .8fr) minmax(260px, 1.2fr); gap: 14px; margin: 0; border: 1px solid #b9cfe6; border-radius: 13px; padding: 17px; background: #f7fbff; }
+.occasion-schedule-box legend { padding: 0 8px; color: #1769d2; font-size: 12px; font-weight: 800; }
+.occasion-time-range { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
+.occasion-schedule-box .field-error { grid-column: 1 / -1; margin: 0; color: #b42318; font-size: 12px; }
+.occasion-schedule-label { display: block; margin-top: 12px; color: #1769d2; font-size: 13px; line-height: 1.45; }
 .occasion-grid { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); gap: 16px; }
 .occasion-card { display: flex; flex-direction: column; min-height: 230px; border: 1px solid #cfe0f5; border-radius: 16px; padding: 22px; background: #fff; box-shadow: 0 8px 26px rgba(27,61,102,.07); }
 .occasion-card > div:first-child { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px; }
@@ -2167,7 +2195,9 @@ select option {
   .login-mode-switch { margin-bottom: 17px; }
   .auth-form-page > p { margin-bottom: 15px; }
 }
-@media (max-width: 850px) { .events-grid, .admin-moderation-grid, .occasion-grid, .review-material-grid { grid-template-columns: 1fr; } .event-card { grid-template-columns: 76px 1fr; } .section-heading-actions, .directory-controls { align-items: stretch; flex-direction: column; } .occasion-audience-grid { grid-template-columns: 1fr; } }
+@media (max-width: 850px) { .events-grid, .admin-moderation-grid, .occasion-grid, .review-material-grid { grid-template-columns: 1fr; } .event-card { grid-template-columns: 76px 1fr; } .section-heading-actions, .directory-controls { align-items: stretch; flex-direction: column; } .occasion-audience-grid, .occasion-schedule-box { grid-template-columns: 1fr; } }
+@media (max-width: 560px) { .occasion-type-switch, .occasion-time-range { grid-template-columns: 1fr; } }
+@media (max-width: 560px) { .event-attendees-list { grid-template-columns: 1fr; } }
 @media (max-width: 1250px) {
   .topbar { grid-template-columns: minmax(210px,1fr) auto minmax(245px,1fr); }
   .topbar-menu { display: none; }

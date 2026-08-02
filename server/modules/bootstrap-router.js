@@ -3,7 +3,7 @@ import { loadBootstrap } from "../data.js";
 
 const sectionKeys = {
   session: ["activeUserId", "profileCompleted"],
-  catalog: ["activeUserId", "users", "events", "occasions"],
+  catalog: ["activeUserId", "adultAccess", "users", "events", "occasions"],
   social: ["activeUserId", "blocks", "blockedByUserIds", "friendRequests", "friendships", "follows", "notifications", "messages", "likes"],
   moderation: ["activeUserId", "reports"],
 };

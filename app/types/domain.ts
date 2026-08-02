@@ -32,10 +32,11 @@ export type BookEvent = {
   pinned?: boolean;
   reminderSet?: boolean;
   reminderUserIds?: number[];
+  reminderCount?: number;
   createdAt: string;
 };
 export type OccasionType = "meet" | "discuss" | "invite";
-export type Occasion = { id: number; creatorId: number; type: OccasionType; primaryText: string; audienceText: string; isAdult?: boolean; targetGender: "Мужской" | "Женский" | "Все"; targetCities: string[]; targetProfileType: "Писатель" | "Читатель" | "Блогер" | "Все"; status: EventStatus; moderationNote?: string; creatorName: string; createdAt: string };
+export type Occasion = { id: number; creatorId: number; type: OccasionType; primaryText: string; audienceText: string; isAdult?: boolean; targetGender: "Мужской" | "Женский" | "Все"; targetCities: string[]; targetProfileType: "Писатель" | "Читатель" | "Блогер" | "Все"; meetingDate?: string; meetingStartTime?: string; meetingEndTime?: string; status: EventStatus; moderationNote?: string; creatorName: string; createdAt: string };
 export type CityOption = { id: number; name: string; countryCode: string; country: string };
 
 export type Review = {
@@ -169,7 +170,9 @@ export type SafetyReport = {
 };
 export type DemoUser = { id: number; username: string; initials: string; color: string; avatarUrl?: string; joined: string; joinedAt?: string; online?: boolean; lastSeenAt?: string; isAdmin?: boolean; blockedByMe?: boolean; suspension?: UserSuspension; profile: UserProfileData; books: LibraryBook[]; reviews: UserReview[]; authorBooks?: AuthorBook[]; excerpts?: UserExcerpt[]; publisherNews?: PublisherNews[]; wishBooks?: WishBook[] };
 
-export type BootstrapData = { activeUserId: number; profileCompleted?: boolean; users: DemoUser[]; messages: Record<string, Message[]>; friendRequests: FriendRequest[]; friendships: Friendship[]; follows: Follow[]; notifications: SocialNotification[]; likes: Record<string, number[]>; events?: BookEvent[]; occasions?: Occasion[]; blocks?: UserBlock[]; blockedByUserIds?: number[]; reports?: SafetyReport[] };
+export type AdultMaterialKind = "book" | "review" | "excerpt" | "event" | "occasion";
+export type AdultAccess = { status: "adult" | "minor" | "missing"; restricted: Partial<Record<AdultMaterialKind, number[]>> };
+export type BootstrapData = { activeUserId: number; profileCompleted?: boolean; adultAccess?: AdultAccess; users: DemoUser[]; messages: Record<string, Message[]>; friendRequests: FriendRequest[]; friendships: Friendship[]; follows: Follow[]; notifications: SocialNotification[]; likes: Record<string, number[]>; events?: BookEvent[]; occasions?: Occasion[]; blocks?: UserBlock[]; blockedByUserIds?: number[]; reports?: SafetyReport[] };
 export type AuthResult = { error?: string; requiresTotp?: boolean };
 
 export type AdminMaterialKind = "book" | "review" | "excerpt" | "event" | "occasion";

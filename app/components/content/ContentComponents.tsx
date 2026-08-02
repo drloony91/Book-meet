@@ -148,6 +148,8 @@ function formatCommentDate(value: string) {
   return `${new Intl.DateTimeFormat("ru-RU", { day: "2-digit", month: "2-digit", year: "numeric" }).format(date)} в ${time}`;
 }
 
+type EventAttendee = { id: number; name: string; type: string; city: string; initials: string; color: string; avatarUrl?: string };
+
 export function EventModal({ item, users = [], currentUserId, onClose, onOpenBook, onOpenUser, onEdit, onDelete, onReport }: { item: BookEvent; users?: DemoUser[]; currentUserId?: number; onClose: () => void; onOpenBook?: () => void; onOpenUser?: (userId: number) => void; onEdit?: () => void; onDelete?: () => void; onReport?: () => void }) {
   const routedPopup = useRoutedPopup(`/events/${item.id}`, "/events", onClose, `${item.title} — Book Meet`);
   const routedClose = routedPopup.close;
@@ -155,6 +157,12 @@ export function EventModal({ item, users = [], currentUserId, onClose, onOpenBoo
   const [reminderUserIds, setReminderUserIds] = useState(item.reminderUserIds ?? []);
   const [reminderDialog, setReminderDialog] = useState<"created" | "cancel" | null>(null);
   const [reminderBusy, setReminderBusy] = useState(false);
+  const [attendeesOpen, setAttendeesOpen] = useState(false);
+  const [attendeesPage, setAttendeesPage] = useState(1);
+  const [attendeesPageCount, setAttendeesPageCount] = useState(1);
+  const [attendeeCount, setAttendeeCount] = useState(item.reminderCount ?? item.reminderUserIds?.length ?? 0);
+  const [pagedAttendees, setPagedAttendees] = useState<EventAttendee[]>([]);
+  const [attendeesLoading, setAttendeesLoading] = useState(false);
   async function setReminder() {
     if (reminderSet || reminderBusy) return;
     setReminderBusy(true);
@@ -163,6 +171,7 @@ export function EventModal({ item, users = [], currentUserId, onClose, onOpenBoo
       if (!response.ok) throw new Error((await response.json() as { error?: string }).error || "Не удалось установить напоминание");
       setReminderSet(true);
       if (currentUserId) setReminderUserIds((current) => Array.from(new Set([...current, currentUserId])));
+      setAttendeeCount((count) => count + 1);
       window.setTimeout(() => setReminderDialog("created"), 40);
     } catch (error) {
       window.alert(error instanceof Error ? error.message : "Не удалось установить напоминание");
@@ -178,6 +187,7 @@ export function EventModal({ item, users = [], currentUserId, onClose, onOpenBoo
       if (!response.ok) throw new Error((await response.json() as { error?: string }).error || "Не удалось отменить напоминание");
       setReminderSet(false);
       if (currentUserId) setReminderUserIds((current) => current.filter((id) => id !== currentUserId));
+      setAttendeeCount((count) => Math.max(0, count - 1));
       setReminderDialog(null);
     } catch (error) {
       window.alert(error instanceof Error ? error.message : "Не удалось отменить напоминание");
@@ -189,7 +199,22 @@ export function EventModal({ item, users = [], currentUserId, onClose, onOpenBoo
     setReminderDialog(null);
     window.location.assign("/profile/events");
   }
-  const reminderUsers = reminderUserIds.map((id) => users.find((user) => user.id === id && !user.isAdmin)).filter(Boolean) as DemoUser[];
+  const previewAttendees = reminderUserIds.map((id) => users.find((user) => user.id === id)).filter(Boolean).map((user) => ({ id: user!.id, name: user!.profile.name, type: user!.profile.type, city: user!.profile.city, initials: user!.initials, color: user!.color, avatarUrl: user!.avatarUrl }));
+  useEffect(() => {
+    if (!attendeesOpen) return;
+    const controller = new AbortController();
+    setAttendeesLoading(true);
+    fetch(`/api/events/${item.id}/attendees?page=${attendeesPage}`, { credentials: "same-origin", signal: controller.signal }).then(async (response) => {
+      const data = await response.json() as { attendees?: EventAttendee[]; page?: number; pageCount?: number; total?: number; error?: string };
+      if (!response.ok) throw new Error(data.error || "Не удалось загрузить участников");
+      setPagedAttendees(data.attendees ?? []);
+      setAttendeesPage(data.page ?? 1);
+      setAttendeesPageCount(data.pageCount ?? 1);
+      setAttendeeCount(data.total ?? 0);
+    }).catch((error) => { if (error instanceof Error && error.name !== "AbortError") window.alert(error.message); }).finally(() => setAttendeesLoading(false));
+    return () => controller.abort();
+  }, [attendeesOpen, attendeesPage, item.id]);
+  const attendeeCard = (user: EventAttendee) => <button type="button" key={user.id} onClick={() => { setAttendeesOpen(false); onOpenUser?.(user.id); }}><span className={`avatar avatar-sm avatar-${user.color} ${user.avatarUrl ? "has-photo" : ""}`} style={user.avatarUrl ? { backgroundImage: `url(${user.avatarUrl})` } : undefined}>{!user.avatarUrl && user.initials}</span><span><strong>{user.name}</strong><small>{user.type}{user.city ? ` · ${user.city}` : ""}</small></span></button>;
   if (!routedPopup.active) return null;
   return <div className="modal-backdrop" onMouseDown={routedClose}><section className="event-modal" onMouseDown={(event) => event.stopPropagation()}>
     <ModalIconActions onEdit={onEdit} onDelete={onDelete} onReport={onReport} onClose={routedClose} />
@@ -199,7 +224,8 @@ export function EventModal({ item, users = [], currentUserId, onClose, onOpenBoo
     <div className="event-modal-meta"><strong>{new Date(`${item.date}T00:00:00`).toLocaleDateString("ru-RU", { day: "numeric", month: "long", year: "numeric" })} · {item.time}</strong><span>{item.address}</span></div><p>{item.description}</p>
     {item.moderationNote && item.status !== "published" && <div className="moderation-note"><strong>Комментарий модератора</strong><p>{item.moderationNote}</p></div>}
     <div className="event-links">{item.detailsUrl && <a className="primary-button" href={item.detailsUrl} target="_blank" rel="noreferrer">Регистрация</a>}{item.mapUrl && <a className="outline-button" href={item.mapUrl} target="_blank" rel="noreferrer">Смотреть в 2ГИС</a>}{item.status === "published" && <button className="outline-button" type="button" disabled={reminderBusy} onClick={() => reminderSet ? setReminderDialog("cancel") : void setReminder()}>{reminderSet ? "Иду! Напоминание установлено" : "Иду! Установить напоминание"}</button>}</div>
-    {reminderUsers.length > 0 && <section className="event-attendees"><h3>Идут · {reminderUsers.length}</h3><div>{reminderUsers.map((user) => <button type="button" key={user.id} onClick={() => onOpenUser?.(user.id)}><span className={`avatar avatar-sm avatar-${user.color} ${user.avatarUrl ? "has-photo" : ""}`} style={user.avatarUrl ? { backgroundImage: `url(${user.avatarUrl})` } : undefined}>{!user.avatarUrl && user.initials}</span><span><strong>{user.profile.name}</strong><small>{user.profile.type}{user.profile.city ? ` · ${user.profile.city}` : ""}</small></span></button>)}</div></section>}
+    {attendeeCount > 0 && <section className="event-attendees"><h3>Идут · {attendeeCount}</h3><div>{previewAttendees.slice(0, 4).map(attendeeCard)}</div>{attendeeCount > 4 && <button className="outline-button event-attendees-all" type="button" onClick={() => { setAttendeesPage(1); setAttendeesOpen(true); }}>Показать всех</button>}</section>}
+    {attendeesOpen && <div className="nested-modal-backdrop" onMouseDown={() => setAttendeesOpen(false)}><section className="event-attendees-modal" role="dialog" aria-modal="true" aria-label="Участники мероприятия" onMouseDown={(event) => event.stopPropagation()}><button className="modal-close" type="button" aria-label="Закрыть список участников" onClick={() => setAttendeesOpen(false)}>×</button><h2>Идут на мероприятие · {attendeeCount}</h2>{attendeesLoading ? <p className="event-attendees-loading">Загружаем участников…</p> : <div className="event-attendees-list">{pagedAttendees.map(attendeeCard)}</div>}{attendeesPageCount > 1 && <div className="event-attendees-pagination"><button type="button" disabled={attendeesLoading || attendeesPage === 1} onClick={() => setAttendeesPage((page) => Math.max(1, page - 1))}>Назад</button><span>{attendeesPage} из {attendeesPageCount}</span><button type="button" disabled={attendeesLoading || attendeesPage === attendeesPageCount} onClick={() => setAttendeesPage((page) => Math.min(attendeesPageCount, page + 1))}>Далее</button></div>}</section></div>}
     {reminderDialog && <div className="nested-modal-backdrop" onMouseDown={() => setReminderDialog(null)}><section className="event-reminder-notice" role="alertdialog" aria-modal="true" onMouseDown={(event) => event.stopPropagation()}>{reminderDialog === "created" ? <><h2>Напоминание установлено</h2><p>Вы установили напоминание, за 24 часа до мероприятия вы получите уведомление с напоминанием. Мероприятие сохранено в раздел «Мои мероприятия» в вашем профиле. Не забудьте зарегистрироваться на мероприятие у организатора, если это требуется.</p><div className="form-actions"><button className="outline-button" type="button" onClick={() => setReminderDialog(null)}>Ок</button><button className="outline-button" type="button" onClick={openOwnProfile}>Перейти в профиль</button></div></> : <><h2>Отменить напоминание?</h2><div className="form-actions"><button className="outline-button" type="button" disabled={reminderBusy} onClick={() => void cancelReminder()}>Да</button><button className="outline-button" type="button" autoFocus onClick={() => setReminderDialog(null)}>Нет</button></div></>}</section></div>}
   </section></div>;
 }
@@ -230,26 +256,47 @@ export function MultiCityPicker({ values, onChange }: { values: string[]; onChan
   return <div className="multi-city-picker"><div className="selected-city-tags">{values.map((city) => <span key={city}>{city}<button type="button" onClick={() => onChange(values.filter((item) => item !== city))}>×</button></span>)}</div><CityAutocomplete label="Город (можно выбрать несколько)" value={draft} required={!values.length} onChange={(name, id) => { setDraft(name); if (id && !values.includes(name)) { onChange([...values, name]); setDraft(""); } }} /></div>;
 }
 
-export const emptyOccasion = { type: "" as "" | OccasionType, primaryText: "", audienceText: "", isAdult: false, targetGender: "Все" as Occasion["targetGender"], targetCities: [] as string[], targetProfileType: "Все" as Occasion["targetProfileType"] };
-export const occasionLabels = { meet: "Просто познакомиться", discuss: "Обсудить что-то", invite: "Встретиться" } as const;
+export const emptyOccasion = { type: "" as "" | OccasionType, primaryText: "", audienceText: "", isAdult: false, targetGender: "Все" as Occasion["targetGender"], targetCities: [] as string[], targetProfileType: "Все" as Occasion["targetProfileType"], meetingDate: "", meetingStartTime: "", meetingEndTime: "" };
+export const occasionLabels = { meet: "Познакомиться", discuss: "Обсудить", invite: "Встретиться" } as const;
+const occasionFieldLabels = {
+  meet: { primary: "Обо мне", audience: "С кем хочу познакомиться" },
+  discuss: { primary: "Что хочу обсудить", audience: "С кем хочу это обсудить" },
+  invite: { primary: "Предлагаю", audience: "Кого хочу пригласить" },
+} as const;
+
+function occasionDateLabel(item: Occasion) {
+  if (item.type !== "invite" || !item.meetingDate) return null;
+  const date = new Date(`${item.meetingDate}T00:00:00`);
+  const dateText = date.toLocaleDateString("ru-RU", { day: "numeric", month: "long", year: "numeric" });
+  if (!item.meetingStartTime || !item.meetingEndTime) return dateText;
+  const nextDay = item.meetingEndTime < item.meetingStartTime;
+  return `${dateText} · ${item.meetingStartTime}–${item.meetingEndTime}${nextDay ? " (завершение на следующий день)" : ""}`;
+}
 
 export function OccasionForm({ initial, onCancel, onSave, submitLabel = "Отправить" }: { initial?: Occasion; onCancel: () => void; onSave: (value: typeof emptyOccasion) => Promise<void>; submitLabel?: string }) {
-  const [value, setValue] = useState<typeof emptyOccasion>(() => initial ? { type: initial.type, primaryText: initial.primaryText, audienceText: initial.audienceText, isAdult: Boolean(initial.isAdult), targetGender: initial.targetGender, targetCities: initial.targetCities, targetProfileType: initial.targetProfileType } : emptyOccasion);
+  const [value, setValue] = useState<typeof emptyOccasion>(() => initial ? { type: initial.type, primaryText: initial.primaryText, audienceText: initial.audienceText, isAdult: Boolean(initial.isAdult), targetGender: initial.targetGender, targetCities: initial.targetCities, targetProfileType: initial.targetProfileType, meetingDate: initial.meetingDate ?? "", meetingStartTime: initial.meetingStartTime ?? "", meetingEndTime: initial.meetingEndTime ?? "" } : emptyOccasion);
   const [saving, setSaving] = useState(false);
   const changeType = (type: OccasionType | "") => setValue({ ...emptyOccasion, type });
-  const texts = value.type === "meet" ? { primary: "Расскажите о себе", audience: "С кем вы хотите познакомиться", audienceHint: "Опишите людей, с которыми вам хотелось бы познакомиться: например, их книжные интересы, возраст или формат общения." } : value.type === "discuss" ? { primary: "Что вы хотите обсудить?", audience: "С кем вы хотите это обсудить", audienceHint: "Расскажите, какого собеседника вы ищете и с кем вам было бы интересно обсудить эту тему." } : { primary: "Напишите своё предложение", audience: "Кого вы хотите пригласить?", audienceHint: "Опишите людей, которым может быть интересно ваше предложение и с кем вы хотели бы встретиться." };
-  return <form className="occasion-form" onSubmit={async (event) => { event.preventDefault(); if (!value.type) return; setSaving(true); try { await onSave(value); } finally { setSaving(false); } }}><div className="profile-title-row"><div><span className="section-subtitle">Поводы познакомиться</span><h2>{initial ? "Редактировать повод" : "Предложить повод для знакомства"}</h2></div></div><label>Тип предложения<CustomSelect ariaLabel="Тип предложения" value={value.type} onChange={changeType} options={[{ value: "", label: "Выберите тип предложения" }, { value: "meet", label: "1. Просто познакомиться" }, { value: "discuss", label: "2. Обсудить что-то" }, { value: "invite", label: "3. Встретиться" }]} /></label>{value.type && <><label>{texts.primary}<textarea required rows={5} value={value.primaryText} onChange={(event) => setValue({ ...value, primaryText: event.target.value })} placeholder={value.type === "invite" ? "Вы можете предложить сходить в книжный, музей или театр, выпить кофе, посмотреть кино, выйти на прогулку или посетить любое другое мероприятие." : undefined} /></label><fieldset className="occasion-audience-box"><legend>Кого вы ищете</legend><label>{texts.audience}<textarea required rows={4} value={value.audienceText} onChange={(event) => setValue({ ...value, audienceText: event.target.value })} placeholder={texts.audienceHint} /></label><div className="occasion-audience-grid"><label>Пол собеседника<CustomSelect ariaLabel="Пол собеседника" value={value.targetGender} onChange={(targetGender) => setValue({ ...value, targetGender })} options={["Все", "Мужской", "Женский"].map((item) => ({ value: item as Occasion["targetGender"], label: item }))} /></label><label>Тип профиля собеседника<CustomSelect ariaLabel="Тип профиля собеседника" value={value.targetProfileType} onChange={(targetProfileType) => setValue({ ...value, targetProfileType })} options={["Все", "Читатель", "Писатель", "Блогер"].map((item) => ({ value: item as Occasion["targetProfileType"], label: item }))} /></label></div></fieldset><MultiCityPicker values={value.targetCities} onChange={(targetCities) => setValue({ ...value, targetCities })} /><label className="adult-material-checkbox"><input type="checkbox" checked={value.isAdult} onChange={(event) => setValue({ ...value, isAdult: event.target.checked })} />Повод не предназначен для лиц младше 18 лет</label></>}<div className="form-actions"><button type="button" onClick={onCancel}>Отмена</button><button className="primary-button" disabled={saving || !value.type || !value.targetCities.length} type="submit">{saving ? "Сохраняем…" : submitLabel}</button></div></form>;
+  const texts = value.type ? occasionFieldLabels[value.type] : null;
+  const tomorrow = new Date(); tomorrow.setDate(tomorrow.getDate() + 1);
+  const minimumDate = `${tomorrow.getFullYear()}-${String(tomorrow.getMonth() + 1).padStart(2, "0")}-${String(tomorrow.getDate()).padStart(2, "0")}`;
+  const incompleteTime = Boolean(value.meetingStartTime) !== Boolean(value.meetingEndTime);
+  return <form className="occasion-form" onSubmit={async (event) => { event.preventDefault(); if (!value.type || incompleteTime) return; setSaving(true); try { await onSave(value); } finally { setSaving(false); } }}><div className="profile-title-row"><div><span className="section-subtitle">Поводы познакомиться</span><h2>{initial ? "Редактировать повод" : "Предложить повод для знакомства"}</h2></div></div><div><span className="occasion-type-label">Тип предложения</span><div className="occasion-type-switch" role="group" aria-label="Тип предложения">{(["meet", "discuss", "invite"] as OccasionType[]).map((type) => <button className={value.type === type ? "active" : ""} type="button" key={type} aria-pressed={value.type === type} onClick={() => changeType(type)}>{occasionLabels[type]}</button>)}</div></div>{value.type && texts && <><label>{texts.primary}<textarea required rows={5} value={value.primaryText} onChange={(event) => setValue({ ...value, primaryText: event.target.value })} placeholder={value.type === "invite" ? "Например: сходить в книжный, музей или театр, выпить кофе, посмотреть кино или выйти на прогулку." : undefined} /></label><fieldset className="occasion-audience-box"><legend>Кого вы ищете</legend><label>{texts.audience}<textarea required rows={4} value={value.audienceText} onChange={(event) => setValue({ ...value, audienceText: event.target.value })} placeholder="Опишите, с кем вам хотелось бы познакомиться, пообщаться или встретиться." /></label><div className="occasion-audience-grid"><label>Пол собеседника<CustomSelect ariaLabel="Пол собеседника" value={value.targetGender} onChange={(targetGender) => setValue({ ...value, targetGender })} options={["Все", "Мужской", "Женский"].map((item) => ({ value: item as Occasion["targetGender"], label: item }))} /></label><label>Тип профиля собеседника<CustomSelect ariaLabel="Тип профиля собеседника" value={value.targetProfileType} onChange={(targetProfileType) => setValue({ ...value, targetProfileType })} options={["Все", "Читатель", "Писатель", "Блогер"].map((item) => ({ value: item as Occasion["targetProfileType"], label: item }))} /></label></div></fieldset>{value.type === "invite" && <fieldset className="occasion-schedule-box"><legend>Когда?</legend><label>Дата<input required type="date" min={minimumDate} value={value.meetingDate} onChange={(event) => setValue({ ...value, meetingDate: event.target.value })} /></label><div className="occasion-time-range"><label>Время от<input type="time" value={value.meetingStartTime} onChange={(event) => setValue({ ...value, meetingStartTime: event.target.value })} /></label><label>Время до<input type="time" value={value.meetingEndTime} onChange={(event) => setValue({ ...value, meetingEndTime: event.target.value })} /></label></div>{incompleteTime && <p className="field-error">Укажите оба времени либо оставьте оба поля пустыми.</p>}</fieldset>}<MultiCityPicker values={value.targetCities} onChange={(targetCities) => setValue({ ...value, targetCities })} /><label className="adult-material-checkbox"><input type="checkbox" checked={value.isAdult} onChange={(event) => setValue({ ...value, isAdult: event.target.checked })} />Повод не предназначен для лиц младше 18 лет</label></>}<div className="form-actions"><button type="button" onClick={onCancel}>Отмена</button><button className="primary-button" disabled={saving || !value.type || !value.targetCities.length || incompleteTime} type="submit">{saving ? "Сохраняем…" : submitLabel}</button></div></form>;
 }
 
 export function OccasionCard({ item, own, onOpen, onEdit }: { item: Occasion; own: boolean; onOpen: () => void; onEdit?: () => void }) {
-  return <article className="occasion-card material-clickable-card" role="button" tabIndex={0} onClick={onOpen} onKeyDown={(event) => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); onOpen(); } }}><div><span className="section-subtitle">{occasionLabels[item.type]}{item.isAdult ? " · 18+" : ""}</span>{own && <EventStatusLabel status={item.status} />}</div><h3>{item.primaryText}</h3><p>{item.audienceText}</p><small>{item.targetCities.join(" · ")} · {item.targetProfileType} · {item.targetGender === "Все" ? "любой пол" : item.targetGender}</small>{own && item.status === "needs_changes" && onEdit && <button className="outline-button card-inline-action" type="button" onClick={(event) => { event.stopPropagation(); onEdit(); }}>Редактировать</button>}</article>;
+  const schedule = occasionDateLabel(item);
+  const labels = occasionFieldLabels[item.type];
+  return <article className="occasion-card material-clickable-card" role="button" tabIndex={0} onClick={onOpen} onKeyDown={(event) => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); onOpen(); } }}><div><span className="section-subtitle">{occasionLabels[item.type]}{item.isAdult ? " · 18+" : ""}</span>{own && <EventStatusLabel status={item.status} />}</div>{schedule && <strong className="occasion-schedule-label">{schedule}</strong>}<h3>{labels.primary}: {item.primaryText}</h3><p><strong>{labels.audience}:</strong> {item.audienceText}</p><small>{item.targetCities.join(" · ")} · {item.targetProfileType} · {item.targetGender === "Все" ? "любой пол" : item.targetGender}</small>{own && item.status === "needs_changes" && onEdit && <button className="outline-button card-inline-action" type="button" onClick={(event) => { event.stopPropagation(); onEdit(); }}>Редактировать</button>}</article>;
 }
 
 export function OccasionModal({ item, onClose, onOpenUser, onEdit, onDelete, onReport }: { item: Occasion; onClose: () => void; onOpenUser?: (id: number) => void; onEdit?: () => void; onDelete?: () => void; onReport?: () => void }) {
   const routedPopup = useRoutedPopup(`/meet/${item.id}`, "/meet", onClose, "Повод познакомиться — Book Meet");
   const routedClose = routedPopup.close;
   if (!routedPopup.active) return null;
-  return <div className="modal-backdrop" onMouseDown={routedClose}><section className="event-modal occasion-modal" onMouseDown={(event) => event.stopPropagation()}><ModalIconActions onEdit={onEdit} onDelete={onDelete} onReport={onReport} onClose={routedClose} /><EventStatusLabel status={item.status} /><span className="section-subtitle">{occasionLabels[item.type]}</span><h2>{item.primaryText}</h2><p>{item.audienceText}</p><div className="occasion-filter-summary"><span>Города: {item.targetCities.join(", ")}</span><span>Профиль: {item.targetProfileType}</span><span>Пол: {item.targetGender}</span></div><p>Автор: <button className="inline-user-link" type="button" onClick={() => onOpenUser?.(item.creatorId)}>{item.creatorName}</button></p>{item.moderationNote && item.status !== "published" && <div className="moderation-note"><strong>Комментарий модератора</strong><p>{item.moderationNote}</p></div>}</section></div>;
+  const schedule = occasionDateLabel(item);
+  const labels = occasionFieldLabels[item.type];
+  return <div className="modal-backdrop" onMouseDown={routedClose}><section className="event-modal occasion-modal" onMouseDown={(event) => event.stopPropagation()}><ModalIconActions onEdit={onEdit} onDelete={onDelete} onReport={onReport} onClose={routedClose} /><EventStatusLabel status={item.status} /><span className="section-subtitle">{occasionLabels[item.type]}</span>{schedule && <strong className="occasion-schedule-label">{schedule}</strong>}<h2>{labels.primary}: {item.primaryText}</h2><p><strong>{labels.audience}:</strong> {item.audienceText}</p><div className="occasion-filter-summary"><span>Города: {item.targetCities.join(", ")}</span><span>Профиль: {item.targetProfileType}</span><span>Пол: {item.targetGender}</span></div><p>Автор: <button className="inline-user-link" type="button" onClick={() => onOpenUser?.(item.creatorId)}>{item.creatorName}</button></p>{item.moderationNote && item.status !== "published" && <div className="moderation-note"><strong>Комментарий модератора</strong><p>{item.moderationNote}</p></div>}</section></div>;
 }
 
 export function MaterialPreviewCard({ item, index = 0, owner, book, likesCount, commentsCount, onOpen, onOpenUser, onOpenBook }: { item: ReadingItem; index?: number; owner?: DemoUser; book?: LibraryBook | AuthorBook; likesCount?: number; commentsCount?: number; onOpen: () => void; onOpenUser: (id: number) => void; onOpenBook?: () => void }) {

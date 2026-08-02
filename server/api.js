@@ -41,6 +41,21 @@ async function assertAdultMaterialAllowed(connection, userId, isAdult) {
   }
 }
 
+const ADULT_MATERIAL_TABLES = { book: "books", review: "reviews", excerpt: "excerpts", event: "events", occasion: "occasions", publisher_news: "publisher_news" };
+async function assertAdultMaterialReadable(connection, userId, kind, materialId) {
+  const table = ADULT_MATERIAL_TABLES[kind];
+  if (!table || !Number(materialId)) return;
+  const [[material]] = await connection.query(`SELECT is_adult FROM ${table} WHERE id = ? LIMIT 1`, [Number(materialId)]);
+  if (!material?.is_adult) return;
+  const [[account]] = await connection.query(
+    "SELECT u.role, p.birth_date FROM users u JOIN profiles p ON p.user_id = u.id WHERE u.id = ?",
+    [userId],
+  );
+  if (account?.role !== "admin" && Number(ageFromBirthDate(account?.birth_date) ?? -1) < 18) {
+    throw Object.assign(new Error("Материал не найден"), { statusCode: 404 });
+  }
+}
+
 function broadcastRealtime() {
   const payload = `event: update\ndata: ${Date.now()}\n\n`;
   for (const client of realtimeClients) {
@@ -632,11 +647,25 @@ function occasionPayload(body = {}) {
   const targetGender = String(body.targetGender ?? "Все");
   const targetProfileType = String(body.targetProfileType ?? "Все");
   const targetCities = Array.from(new Set((Array.isArray(body.targetCities) ? body.targetCities : []).map((city) => String(city).trim()).filter(Boolean))).slice(0, 30);
+  const meetingDate = type === "invite" ? String(body.meetingDate ?? "").trim() : "";
+  const meetingStartTime = type === "invite" ? String(body.meetingStartTime ?? "").trim() : "";
+  const meetingEndTime = type === "invite" ? String(body.meetingEndTime ?? "").trim() : "";
   if (!OCCASION_TYPES.has(type) || !primaryText || !audienceText || !TARGET_GENDERS.has(targetGender) || !TARGET_PROFILE_TYPES.has(targetProfileType) || !targetCities.length) {
     throw Object.assign(new Error("Заполните все поля повода для знакомства"), { statusCode: 400 });
   }
   if (targetCities.some((city) => !CYRILLIC_CITY_PATTERN.test(city))) throw Object.assign(new Error("Выберите города из списка на кириллице"), { statusCode: 400 });
-  return { type, primaryText, audienceText, isAdult: Boolean(body.isAdult), targetGender, targetCities, targetProfileType };
+  if (type === "invite") {
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(meetingDate) || meetingDate <= new Date().toISOString().slice(0, 10)) {
+      throw Object.assign(new Error("Выберите будущую дату встречи"), { statusCode: 400 });
+    }
+    if (Boolean(meetingStartTime) !== Boolean(meetingEndTime)) {
+      throw Object.assign(new Error("Укажите и начало, и окончание встречи либо оставьте время пустым"), { statusCode: 400 });
+    }
+    if (meetingStartTime && (!/^([01]\d|2[0-3]):[0-5]\d$/.test(meetingStartTime) || !/^([01]\d|2[0-3]):[0-5]\d$/.test(meetingEndTime))) {
+      throw Object.assign(new Error("Проверьте время встречи"), { statusCode: 400 });
+    }
+  }
+  return { type, primaryText, audienceText, isAdult: Boolean(body.isAdult), targetGender, targetCities, targetProfileType, meetingDate: meetingDate || undefined, meetingStartTime: meetingStartTime || undefined, meetingEndTime: meetingEndTime || undefined };
 }
 
 async function knownCity(connection, name, preferredId) {
@@ -1257,6 +1286,40 @@ router.post("/events", asyncRoute(async (request, response) => {
   response.status(201).json({ event });
 }));
 
+router.get("/events/:id/attendees", asyncRoute(async (request, response) => {
+  const userId = request.bookMeetUser.id;
+  const eventId = Number(request.params.id);
+  const page = Math.max(1, Math.floor(Number(request.query.page) || 1));
+  const pageSize = 8;
+  if (!eventId) return response.status(400).json({ error: "Некорректное событие" });
+  const pool = getPool();
+  const [[event]] = await pool.query("SELECT id, creator_user_id, status FROM events WHERE id = ? LIMIT 1", [eventId]);
+  if (!event || event.status !== "published" && Number(event.creator_user_id) !== userId && !(await isAdmin(pool, userId))) {
+    return response.status(404).json({ error: "Событие не найдено" });
+  }
+  await assertAdultMaterialReadable(pool, userId, "event", eventId);
+  const [[countRow]] = await pool.query("SELECT COUNT(*) AS total FROM event_reminders WHERE event_id = ?", [eventId]);
+  const total = Number(countRow?.total ?? 0);
+  const pageCount = Math.max(1, Math.ceil(total / pageSize));
+  const safePage = Math.min(page, pageCount);
+  const [rows] = await pool.query(
+    `SELECT u.id, u.initials, u.color, u.avatar_path, p.display_name, p.profile_type, p.city
+       FROM event_reminders er
+       JOIN users u ON u.id = er.user_id
+       JOIN profiles p ON p.user_id = u.id
+      WHERE er.event_id = ?
+      ORDER BY er.created_at, er.user_id
+      LIMIT ? OFFSET ?`,
+    [eventId, pageSize, (safePage - 1) * pageSize],
+  );
+  response.json({
+    attendees: rows.map((row) => ({ id: Number(row.id), name: row.display_name, type: row.profile_type, city: row.city ?? "", initials: row.initials, color: row.color, avatarUrl: row.avatar_path ?? undefined })),
+    page: safePage,
+    pageCount,
+    total,
+  });
+}));
+
 router.post("/events/:id/reminder", asyncRoute(async (request, response) => {
   const userId = request.bookMeetUser.id;
   const eventId = Number(request.params.id);
@@ -1382,9 +1445,9 @@ router.post("/occasions", asyncRoute(async (request, response) => {
     payload.targetCities = cities.map((city) => city.name);
     const [[creator]] = await connection.query("SELECT display_name FROM profiles WHERE user_id = ?", [userId]);
     const [created] = await connection.query(
-      `INSERT INTO occasions (creator_user_id, occasion_type, primary_text, audience_text, is_adult, target_gender, target_cities, target_profile_type)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-      [userId, payload.type, payload.primaryText, payload.audienceText, payload.isAdult ? 1 : 0, payload.targetGender, JSON.stringify(payload.targetCities), payload.targetProfileType],
+      `INSERT INTO occasions (creator_user_id, occasion_type, primary_text, audience_text, is_adult, target_gender, target_cities, target_profile_type, meeting_date, meeting_start_time, meeting_end_time)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      [userId, payload.type, payload.primaryText, payload.audienceText, payload.isAdult ? 1 : 0, payload.targetGender, JSON.stringify(payload.targetCities), payload.targetProfileType, payload.meetingDate ?? null, payload.meetingStartTime ?? null, payload.meetingEndTime ?? null],
     );
     await connection.query(
       `INSERT INTO notifications (user_id, actor_user_id, notification_type, title, body, material_kind, material_id)
@@ -1407,8 +1470,8 @@ router.patch("/occasions/:id", asyncRoute(async (request, response) => {
     const [[current]] = await connection.query("SELECT status, created_at FROM occasions WHERE id = ? AND creator_user_id = ? FOR UPDATE", [occasionId, userId]);
     if (!current) throw Object.assign(new Error("Повод не найден"), { statusCode: 404 });
     await connection.query(
-      `UPDATE occasions SET occasion_type = ?, primary_text = ?, audience_text = ?, is_adult = ?, target_gender = ?, target_cities = ?, target_profile_type = ?, status = 'pending', moderation_note = NULL WHERE id = ?`,
-      [payload.type, payload.primaryText, payload.audienceText, payload.isAdult ? 1 : 0, payload.targetGender, JSON.stringify(payload.targetCities), payload.targetProfileType, occasionId],
+      `UPDATE occasions SET occasion_type = ?, primary_text = ?, audience_text = ?, is_adult = ?, target_gender = ?, target_cities = ?, target_profile_type = ?, meeting_date = ?, meeting_start_time = ?, meeting_end_time = ?, status = 'pending', moderation_note = NULL WHERE id = ?`,
+      [payload.type, payload.primaryText, payload.audienceText, payload.isAdult ? 1 : 0, payload.targetGender, JSON.stringify(payload.targetCities), payload.targetProfileType, payload.meetingDate ?? null, payload.meetingStartTime ?? null, payload.meetingEndTime ?? null, occasionId],
     );
     const [[creator]] = await connection.query("SELECT display_name FROM profiles WHERE user_id = ?", [userId]);
     return { id: occasionId, creatorId: userId, ...payload, status: "pending", moderationNote: "", creatorName: creator?.display_name ?? "", createdAt: new Date(current.created_at).toISOString() };
@@ -1441,8 +1504,8 @@ router.patch("/admin/occasions/:id", asyncRoute(async (request, response) => {
       const cities = await knownCities(connection, payload.targetCities);
       payload.targetCities = cities.map((city) => city.name);
       await connection.query(
-        `UPDATE occasions SET occasion_type = ?, primary_text = ?, audience_text = ?, is_adult = ?, target_gender = ?, target_cities = ?, target_profile_type = ? WHERE id = ?`,
-        [payload.type, payload.primaryText, payload.audienceText, payload.isAdult ? 1 : 0, payload.targetGender, JSON.stringify(payload.targetCities), payload.targetProfileType, occasionId],
+        `UPDATE occasions SET occasion_type = ?, primary_text = ?, audience_text = ?, is_adult = ?, target_gender = ?, target_cities = ?, target_profile_type = ?, meeting_date = ?, meeting_start_time = ?, meeting_end_time = ? WHERE id = ?`,
+        [payload.type, payload.primaryText, payload.audienceText, payload.isAdult ? 1 : 0, payload.targetGender, JSON.stringify(payload.targetCities), payload.targetProfileType, payload.meetingDate ?? null, payload.meetingStartTime ?? null, payload.meetingEndTime ?? null, occasionId],
       );
     } else {
       const statuses = { accept: "published", revision: "needs_changes", reject: "rejected" };
@@ -2133,7 +2196,9 @@ router.delete("/admin/users/:id/suspension", asyncRoute(async (request, response
 router.get("/reactions", asyncRoute(async (request, response) => {
   const kind = String(request.query.kind ?? "");
   const id = Number(request.query.id);
-  const [rows] = await getPool().query(
+  const pool = getPool();
+  await assertAdultMaterialReadable(pool, request.bookMeetUser.id, kind, id);
+  const [rows] = await pool.query(
     `SELECT ml.user_id FROM material_likes ml
       WHERE ml.material_kind = ? AND ml.material_id = ?
         AND NOT EXISTS (
@@ -2151,6 +2216,7 @@ router.post("/reactions", asyncRoute(async (request, response) => {
   const kind = String(request.body?.materialKind ?? "");
   const materialId = Number(request.body?.materialId);
   await withTransaction(async (connection) => {
+    await assertAdultMaterialReadable(connection, userId, kind, materialId);
     const material = await materialInfo(connection, kind, materialId);
     if (!material) throw new Error("Материал не найден");
     await assertUsersCanInteract(connection, userId, Number(material.owner_id));
@@ -2177,7 +2243,11 @@ router.delete("/reactions", asyncRoute(async (request, response) => {
 }));
 
 router.get("/comments", asyncRoute(async (request, response) => {
-  const [rows] = await getPool().query(
+  const kind = String(request.query.kind ?? "");
+  const materialId = Number(request.query.id);
+  const pool = getPool();
+  await assertAdultMaterialReadable(pool, request.bookMeetUser.id, kind, materialId);
+  const [rows] = await pool.query(
     `SELECT mc.id, mc.user_id, mc.body, mc.created_at FROM material_comments mc
       WHERE mc.material_kind = ? AND mc.material_id = ?
         AND NOT EXISTS (
@@ -2186,7 +2256,7 @@ router.get("/comments", asyncRoute(async (request, response) => {
               OR (ub.blocker_user_id = mc.user_id AND ub.blocked_user_id = ?)
         )
       ORDER BY mc.created_at`,
-    [request.query.kind, Number(request.query.id), request.bookMeetUser.id, request.bookMeetUser.id],
+    [kind, materialId, request.bookMeetUser.id, request.bookMeetUser.id],
   );
   response.json({ comments: rows.map((row) => ({ id: Number(row.id), userId: Number(row.user_id), text: row.body, createdAt: new Date(row.created_at).toISOString() })) });
 }));
@@ -2219,6 +2289,7 @@ router.post("/comments", asyncRoute(async (request, response) => {
   const materialId = Number(request.body?.materialId);
   if (!body) return response.status(400).json({ error: "Комментарий пуст" });
   const comment = await withTransaction(async (connection) => {
+    await assertAdultMaterialReadable(connection, userId, kind, materialId);
     const material = await materialInfo(connection, kind, materialId);
     if (!material) throw new Error("Материал не найден");
     await assertUsersCanInteract(connection, userId, Number(material.owner_id));

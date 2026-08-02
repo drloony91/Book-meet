@@ -139,11 +139,13 @@ export function useBookMeetController() {
   const [reports, setReports] = useState<SafetyReport[]>([]);
   const [suspension, setSuspension] = useState<UserSuspension | null>(null);
   const [blockedProfileNotice, setBlockedProfileNotice] = useState(false);
+  const [adultAccess, setAdultAccess] = useState<NonNullable<BootstrapData["adultAccess"]>>({ status: "adult", restricted: {} });
+  const [adultRestrictionNotice, setAdultRestrictionNotice] = useState<"minor" | "missing" | null>(null);
   const profileSaveQueue = useRef<Promise<void>>(Promise.resolve());
   const currentUser = users.find((user) => user.id === activeUserId) ?? null;
   const visibleUsers = users.filter((user) => currentUser?.isAdmin || user.id === activeUserId || !user.blockedByMe);
-  const routeDataRef = useRef({ users, activeUserId, friendships, notifications, events, occasions });
-  routeDataRef.current = { users, activeUserId, friendships, notifications, events, occasions };
+  const routeDataRef = useRef({ users, activeUserId, friendships, notifications, events, occasions, adultAccess });
+  routeDataRef.current = { users, activeUserId, friendships, notifications, events, occasions, adultAccess };
 
   useEffect(() => {
     if (profileUserId && blockedByUserIds.includes(profileUserId)) setBlockedProfileNotice(true);
@@ -173,6 +175,7 @@ export function useBookMeetController() {
         setLikes(data.likes ?? {});
         setEvents(data.events ?? []);
         setOccasions(data.occasions ?? []);
+        setAdultAccess(data.adultAccess ?? { status: "adult", restricted: {} });
         setBlocks(data.blocks ?? []);
         setBlockedByUserIds(data.blockedByUserIds ?? []);
         setReports(data.reports ?? []);
@@ -243,6 +246,12 @@ export function useBookMeetController() {
       setView(backgroundRoute?.view ?? route.view);
       if (!route.overlay) {
         document.title = route.view === "profile" ? "Мой профиль — Book Meet" : mainViewTitles[route.view];
+        return;
+      }
+      const adultKind = route.overlay.kind === "book" || route.overlay.kind === "review" || route.overlay.kind === "excerpt" || route.overlay.kind === "event" || route.overlay.kind === "occasion" ? route.overlay.kind : null;
+      if (adultKind && routeData.adultAccess.status !== "adult" && routeData.adultAccess.restricted[adultKind]?.includes(route.overlay.id)) {
+        setAdultRestrictionNotice(routeData.adultAccess.status);
+        document.title = "Материал 18+ — Book Meet";
         return;
       }
       if (route.overlay.kind === "user") setProfileUserId(routeData.users.find((user) => user.id === route.overlay!.id && !user.isAdmin)?.id ?? null);
@@ -364,6 +373,7 @@ export function useBookMeetController() {
     setLikes(data.likes ?? {});
     setEvents(data.events ?? []);
     setOccasions(data.occasions ?? []);
+    setAdultAccess(data.adultAccess ?? { status: "adult", restricted: {} });
     setBlocks(data.blocks ?? []);
     setBlockedByUserIds(data.blockedByUserIds ?? []);
     setReports(data.reports ?? []);
@@ -408,7 +418,10 @@ export function useBookMeetController() {
         if (data.profileCompleted === false) {
           setNewlyRegistered(true);
           setView("profile");
-          window.history.replaceState({}, "", "/profile");
+          const initialRoute = appRouteFromPathname(window.location.pathname);
+          const restrictedKind = initialRoute.overlay?.kind === "book" || initialRoute.overlay?.kind === "review" || initialRoute.overlay?.kind === "excerpt" || initialRoute.overlay?.kind === "event" || initialRoute.overlay?.kind === "occasion" ? initialRoute.overlay.kind : null;
+          const restrictedAdultLink = restrictedKind && data.adultAccess?.status === "missing" && data.adultAccess.restricted[restrictedKind]?.includes(initialRoute.overlay!.id);
+          window.history.replaceState(restrictedAdultLink ? { backgroundPath: "/profile" } : {}, "", restrictedAdultLink ? window.location.pathname : "/profile");
         }
       }
     }).catch((error) => {
@@ -491,6 +504,18 @@ export function useBookMeetController() {
       window.history[options?.replace ? "replaceState" : "pushState"]({ bookMeetPage: true, backgroundPath }, "", "/profile");
       notifyAppNavigation();
     }
+  }
+
+  function leaveRestrictedMaterial(openProfile = false) {
+    const state = (window.history.state ?? {}) as OverlayHistoryState;
+    const route = appRouteFromPathname(window.location.pathname);
+    const backgroundPath = state.backgroundPath || (route.view in mainViewPaths ? mainViewPaths[route.view as RoutableMainView] : "/");
+    const backgroundRoute = appRouteFromPathname(backgroundPath);
+    setAdultRestrictionNotice(null);
+    setView(backgroundRoute.view);
+    window.history.replaceState({ bookMeetView: backgroundRoute.view }, "", backgroundPath);
+    notifyAppNavigation();
+    if (openProfile) openOwnProfile();
   }
 
   function closeOwnProfile() { goHome(); }
@@ -904,6 +929,7 @@ export function useBookMeetController() {
       {roleRestrictionNotice && <div className="modal-backdrop" onMouseDown={() => setRoleRestrictionNotice(null)}><section className="simple-warning-modal" role="dialog" aria-modal="true" onMouseDown={(event) => event.stopPropagation()}><h2>{roleRestrictionNotice === "review" ? "Рецензии могут писать только читатели и блогеры" : roleRestrictionNotice === "excerpt" ? "Публикации могут создавать только писатели и блогеры" : roleRestrictionNotice === "occasion" ? "Издательства не могут создавать поводы познакомиться" : "Профиль издательства ожидает официального подтверждения"}</h2><button className="primary-button" type="button" autoFocus onClick={() => setRoleRestrictionNotice(null)}>Закрыть</button></section></div>}
       {profileUser && profileUser.id !== currentUser.id && <UserProfileModal user={profileUser} viewer={currentUser} users={visibleUsers} events={events} likes={likes} friendCount={friendships.filter((item) => item.userA === profileUser.id || item.userB === profileUser.id).length} relationship={relationshipToProfile} incomingMessage={friendRequests.find((request) => request.status === "pending" && request.fromId === profileUser.id && request.toId === currentUser.id)?.message} isFollowing={isFriendPair(currentUser.id, profileUser.id) || follows.some((follow) => follow.followerId === currentUser.id && follow.targetId === profileUser.id)} canMessage={Boolean(currentUser.isAdmin || profileUser.isAdmin)} blockedByMe={Boolean(profileUser.blockedByMe)} onClose={() => setProfileUserId(null)} onAddFriend={(message) => sendFriendRequest(profileUser.id, message)} onCancelFriendRequest={() => cancelFriendRequest(profileUser.id)} onAccept={() => acceptFriend(profileUser.id)} onReject={(comment) => rejectFriend(profileUser.id, comment)} onRemoveFriend={() => removeFriend(profileUser.id)} onOpenChat={() => openChat(profileUser.id)} onFollow={() => followUser(profileUser.id)} onUnfollow={() => unfollowUser(profileUser.id)} onUnblock={() => unblockUser(profileUser.id)} onReport={currentUser.isAdmin ? undefined : () => openReportDialog({ kind: "user", id: profileUser.id })} onToggleLike={toggleLike} onComment={addComment} onOpenUser={openUserProfile} />}
       {blockedProfileNotice && <div className="nested-modal-backdrop" onMouseDown={() => setBlockedProfileNotice(false)}><section className="confirm-social-modal" role="alertdialog" aria-modal="true" onMouseDown={(event) => event.stopPropagation()}><h2>Кажется, с вами не хотят общаться</h2><button className="primary-button" type="button" autoFocus onClick={() => setBlockedProfileNotice(false)}>Ок</button></section></div>}
+      {adultRestrictionNotice && <div className="nested-modal-backdrop"><section className="adult-restriction-modal" role="alertdialog" aria-modal="true" aria-labelledby="adult-restriction-title"><span className="adult-restriction-mark" aria-hidden="true">18+</span><h2 id="adult-restriction-title">Материал предназначен для лиц старше 18 лет</h2>{adultRestrictionNotice === "missing" && <p>Пожалуйста, укажите дату рождения в профиле, чтобы система могла определить ваш возраст.</p>}<div className="form-actions">{adultRestrictionNotice === "missing" ? <><button className="primary-button" type="button" onClick={() => leaveRestrictedMaterial(true)}>Перейти в профиль</button><button className="outline-button" type="button" onClick={() => leaveRestrictedMaterial(false)}>Выйти</button></> : <button className="primary-button" type="button" autoFocus onClick={() => leaveRestrictedMaterial(false)}>Ок</button>}</div></section></div>}
       <SafetyCenter onChanged={() => void refreshBootstrap()} />
     </div>
   );

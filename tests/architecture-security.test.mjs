@@ -89,6 +89,29 @@ test("локальные правки этапа 1 закреплены конт
   assert.match(cityFixes, /Москва/);
 });
 
+test("этапы 5 и 6 закрепляют доступ 18+, поводы и публичное участие", async () => {
+  const migration = await readFile(path.join(root, "mysql", "migrations", "020_occasion_meeting_schedule.sql"), "utf8");
+  const api = await readFile(path.join(root, "server", "api.js"), "utf8");
+  const data = await readFile(path.join(root, "server", "data.js"), "utf8");
+  const controller = await readFile(path.join(root, "app", "hooks", "useBookMeetController.tsx"), "utf8");
+  const content = await readFile(path.join(root, "app", "components", "content", "ContentComponents.tsx"), "utf8");
+  assert.match(migration, /meeting_date DATE NULL/);
+  assert.match(migration, /meeting_start_time TIME NULL/);
+  assert.match(api, /Выберите будущую дату встречи/);
+  assert.match(api, /Укажите и начало, и окончание встречи либо оставьте время пустым/);
+  assert.match(data, /adultAccess: \{ status: adultStatus, restricted: restrictedAdultMaterials \}/);
+  assert.match(data, /WHERE is_adult = 1 AND status = 'published'/);
+  assert.match(controller, /Материал предназначен для лиц старше 18 лет/);
+  assert.match(controller, /Перейти в профиль/);
+  assert.match(content, /occasion-type-switch/);
+  assert.match(content, /завершение на следующий день/);
+  assert.match(content, /Показать всех/);
+  assert.match(content, /events\/\$\{item\.id\}\/attendees\?page=/);
+  assert.match(api, /router\.get\("\/events\/:id\/attendees"/);
+  assert.match(content, /libraryStatus === "reading"/);
+  assert.match(content, /Читает сейчас/);
+});
+
 test("внешние изображения и книжные страницы проверяют каждый редирект", async () => {
   const images = await readFile(path.join(root, "server", "modules", "image-storage.js"), "utf8");
   const api = await readFile(path.join(root, "server", "api.js"), "utf8");

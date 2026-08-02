@@ -114,7 +114,7 @@ const state = {
     description: "Познакомимся с авторами осенних новинок и обсудим, как рождаются современные книги.",
     date: "2026-12-12", time: "18:30", city: "Астана", cityId: 1,
     address: "проспект Республики, 1", mapUrl: "", detailsUrl: "",
-    status: "published", moderationNote: "", pinned: false, reminderUserIds: [], createdAt: new Date().toISOString(),
+    status: "published", moderationNote: "", pinned: false, reminderUserIds: [], reminderCount: 0, createdAt: new Date().toISOString(),
   }],
   occasions: [],
 };
@@ -144,6 +144,14 @@ function requireUser(request, response, next) {
 
 function bootstrap(userId) {
   const viewer = users.find((user) => user.id === userId);
+  const adultStatus = viewer?.isAdmin || Number(viewer?.profile.age ?? -1) >= 18 ? "adult" : viewer?.profile.birthDate ? "minor" : "missing";
+  const restricted = adultStatus === "adult" ? {} : {
+    book: users.flatMap((user) => [...(user.books ?? []), ...(user.authorBooks ?? [])]).filter((item) => item.isAdult).map((item) => item.id),
+    review: users.flatMap((user) => user.reviews ?? []).filter((item) => item.isAdult).map((item) => item.id),
+    excerpt: users.flatMap((user) => user.excerpts ?? []).filter((item) => item.isAdult).map((item) => item.id),
+    event: state.events.filter((item) => item.isAdult && item.status === "published").map((item) => item.id),
+    occasion: state.occasions.filter((item) => item.isAdult && item.status === "published").map((item) => item.id),
+  };
   const relatedBlocks = state.blocks.filter((block) => block.blockerId === userId || block.blockedId === userId);
   const blockedByUserIds = relatedBlocks.filter((block) => block.blockedId === userId).map((block) => block.blockerId);
   const visibleUsers = users.filter((user) => user.profile.type !== "Издатель"
@@ -158,9 +166,9 @@ function bootstrap(userId) {
       publisherBik: undefined, publisherBank: undefined, publisherLegalAddress: undefined,
       publisherPostalAddress: undefined, publisherModerationNote: undefined,
     };
-    return { ...user, blockedByMe: relatedBlocks.some((block) => block.blockerId === userId && block.blockedId === user.id), profile, wishBooks: (user.wishBooks ?? []).map((item) => privateVisible ? { ...item, productUrl: user.id === userId ? item.productUrl : undefined, privateVisible: true } : { id: item.id, ownerId: item.ownerId, catalogBookId: item.catalogBookId, author: item.author, title: item.title, genres: item.genres, annotation: item.annotation, coverUrl: item.coverUrl, coverTone: item.coverTone, marketplace: item.marketplace, reservedByUserId: item.reservedByUserId, privateVisible: false }) };
+    return { ...user, books: (user.books ?? []).filter((item) => adultStatus === "adult" || !item.isAdult), authorBooks: (user.authorBooks ?? []).filter((item) => adultStatus === "adult" || !item.isAdult), reviews: (user.reviews ?? []).filter((item) => adultStatus === "adult" || !item.isAdult), excerpts: (user.excerpts ?? []).filter((item) => adultStatus === "adult" || !item.isAdult), blockedByMe: relatedBlocks.some((block) => block.blockerId === userId && block.blockedId === user.id), profile, wishBooks: (user.wishBooks ?? []).map((item) => privateVisible ? { ...item, productUrl: user.id === userId ? item.productUrl : undefined, privateVisible: true } : { id: item.id, ownerId: item.ownerId, catalogBookId: item.catalogBookId, author: item.author, title: item.title, genres: item.genres, annotation: item.annotation, coverUrl: item.coverUrl, coverTone: item.coverTone, marketplace: item.marketplace, reservedByUserId: item.reservedByUserId, privateVisible: false }) };
   });
-  return structuredClone({ activeUserId: userId, profileCompleted: viewer?.profileCompleted !== false, users: visibleUsers, ...state, blocks: relatedBlocks, blockedByUserIds, reports: viewer?.isAdmin ? state.reports : [], events: state.events.filter((item) => viewer?.isAdmin || item.status === "published" || item.creatorId === userId), occasions: state.occasions.filter((item) => viewer?.isAdmin || item.creatorId === userId || item.status === "published" && (item.targetGender === "Все" || item.targetGender === viewer?.profile.gender) && (item.targetProfileType === "Все" || item.targetProfileType === viewer?.profile.type)) });
+  return structuredClone({ activeUserId: userId, profileCompleted: viewer?.profileCompleted !== false, adultAccess: { status: adultStatus, restricted }, users: visibleUsers, ...state, blocks: relatedBlocks, blockedByUserIds, reports: viewer?.isAdmin ? state.reports : [], events: state.events.filter((item) => (viewer?.isAdmin || adultStatus === "adult" || !item.isAdult) && (viewer?.isAdmin || item.status === "published" || item.creatorId === userId)), occasions: state.occasions.filter((item) => (viewer?.isAdmin || adultStatus === "adult" || !item.isAdult) && (viewer?.isAdmin || item.creatorId === userId || item.status === "published" && (item.targetGender === "Все" || item.targetGender === viewer?.profile.gender) && (item.targetProfileType === "Все" || item.targetProfileType === viewer?.profile.type))) });
 }
 
 function conversationKey(first, second) {
@@ -233,7 +241,7 @@ router.get("/bootstrap/:section", (request, response) => {
   if (user?.suspension && (user.suspension.permanent || new Date(user.suspension.until).getTime() > Date.now())) return response.status(423).json({ suspended: true, ...user.suspension });
   const keys = {
     session: ["activeUserId", "profileCompleted"],
-    catalog: ["activeUserId", "users", "events", "occasions"],
+    catalog: ["activeUserId", "adultAccess", "users", "events", "occasions"],
     social: ["activeUserId", "blocks", "blockedByUserIds", "friendRequests", "friendships", "follows", "notifications", "messages", "likes"],
     moderation: ["activeUserId", "reports"],
   }[request.params.section];
@@ -845,11 +853,23 @@ router.post("/events", (request, response) => {
   response.status(201).json({ event });
 });
 
+router.get("/events/:id/attendees", (request, response) => {
+  const event = state.events.find((item) => item.id === Number(request.params.id));
+  if (!event) return response.status(404).json({ error: "Событие не найдено" });
+  const pageSize = 8;
+  const attendeeUsers = (event.reminderUserIds ?? []).map((id) => users.find((user) => user.id === id)).filter(Boolean);
+  const pageCount = Math.max(1, Math.ceil(attendeeUsers.length / pageSize));
+  const page = Math.min(pageCount, Math.max(1, Math.floor(Number(request.query.page) || 1)));
+  const attendees = attendeeUsers.slice((page - 1) * pageSize, page * pageSize).map((user) => ({ id: user.id, name: user.profile.name, type: user.profile.type, city: user.profile.city, initials: user.initials, color: user.color, avatarUrl: user.avatarUrl }));
+  response.json({ attendees, page, pageCount, total: attendeeUsers.length });
+});
+
 router.post("/events/:id/reminder", (request, response) => {
   const event = state.events.find((item) => item.id === Number(request.params.id) && item.status === "published");
   if (!event) return response.status(404).json({ error: "Событие не найдено" });
   event.reminderSet = true;
   event.reminderUserIds = Array.from(new Set([...(event.reminderUserIds ?? []), request.demoUserId]));
+  event.reminderCount = event.reminderUserIds.length;
   response.status(201).json({ ok: true });
 });
 
@@ -858,6 +878,7 @@ router.delete("/events/:id/reminder", (request, response) => {
   if (!event?.reminderSet) return response.status(404).json({ error: "Напоминание не найдено" });
   event.reminderSet = false;
   event.reminderUserIds = (event.reminderUserIds ?? []).filter((id) => id !== request.demoUserId);
+  event.reminderCount = event.reminderUserIds.length;
   response.json({ ok: true });
 });
 
@@ -883,8 +904,10 @@ router.patch("/admin/events/:id", (request, response) => {
 router.post("/occasions", (request, response) => {
   const creator = users.find((user) => user.id === request.demoUserId);
   if (creator?.profile.type === "Издатель") return response.status(403).json({ error: "Издательства не могут создавать поводы познакомиться" });
-  const occasion = { id: nextId++, creatorId: request.demoUserId, type: request.body.type, primaryText: String(request.body.primaryText ?? ""), audienceText: String(request.body.audienceText ?? ""), isAdult: Boolean(request.body.isAdult), targetGender: request.body.targetGender, targetCities: structuredClone(request.body.targetCities ?? []), targetProfileType: request.body.targetProfileType, status: "pending", moderationNote: "", creatorName: creator?.profile.name ?? "", createdAt: new Date().toISOString() };
+  const occasion = { id: nextId++, creatorId: request.demoUserId, type: request.body.type, primaryText: String(request.body.primaryText ?? ""), audienceText: String(request.body.audienceText ?? ""), isAdult: Boolean(request.body.isAdult), targetGender: request.body.targetGender, targetCities: structuredClone(request.body.targetCities ?? []), targetProfileType: request.body.targetProfileType, meetingDate: request.body.type === "invite" ? String(request.body.meetingDate ?? "") : undefined, meetingStartTime: request.body.type === "invite" ? String(request.body.meetingStartTime ?? "") || undefined : undefined, meetingEndTime: request.body.type === "invite" ? String(request.body.meetingEndTime ?? "") || undefined : undefined, status: "pending", moderationNote: "", creatorName: creator?.profile.name ?? "", createdAt: new Date().toISOString() };
   if (!occasion.type || !occasion.primaryText || !occasion.audienceText || !occasion.targetCities.length) return response.status(400).json({ error: "Заполните все поля повода для знакомства" });
+  if (occasion.type === "invite" && (!/^\d{4}-\d{2}-\d{2}$/.test(occasion.meetingDate) || occasion.meetingDate <= new Date().toISOString().slice(0, 10))) return response.status(400).json({ error: "Выберите будущую дату встречи" });
+  if (occasion.type === "invite" && Boolean(occasion.meetingStartTime) !== Boolean(occasion.meetingEndTime)) return response.status(400).json({ error: "Укажите и начало, и окончание встречи либо оставьте время пустым" });
   state.occasions.push(occasion);
   notification(request.demoUserId, request.demoUserId, "event_submitted", "Повод на модерации", "Повод для знакомства отправлен на модерацию.", { materialKind: "occasion", materialId: occasion.id });
   response.status(201).json({ occasion });

@@ -270,6 +270,20 @@ export async function loadBootstrap(userId, options = {}) {
   const hiddenUserIds = new Set(blockRows.flatMap((row) => [Number(row.blocker_user_id), Number(row.blocked_user_id)]).filter((id) => id !== Number(userId)));
   const users = includeCatalog ? await loadUsers(pool, userId) : [];
   const currentUser = users.find((user) => user.id === Number(userId)) ?? account;
+  const viewerAge = ageFromBirthDate(accountState?.birth_date);
+  const adultStatus = currentUser?.isAdmin || Number(viewerAge ?? -1) >= 18 ? "adult" : viewerAge === null ? "missing" : "minor";
+  const [adultRestrictedRows] = includeCatalog && adultStatus !== "adult" ? await pool.query(
+    `SELECT 'book' AS material_kind, id FROM books WHERE is_adult = 1
+     UNION ALL SELECT 'review', id FROM reviews WHERE is_adult = 1
+     UNION ALL SELECT 'excerpt', id FROM excerpts WHERE is_adult = 1
+     UNION ALL SELECT 'event', id FROM events WHERE is_adult = 1 AND status = 'published'
+     UNION ALL SELECT 'occasion', id FROM occasions WHERE is_adult = 1 AND status = 'published'`,
+  ) : [[]];
+  const restrictedAdultMaterials = adultRestrictedRows.reduce((result, row) => {
+    result[row.material_kind] ??= [];
+    result[row.material_kind].push(Number(row.id));
+    return result;
+  }, {});
   const [requestRows] = includeSocial ? await pool.query(
     `SELECT id, from_user_id, to_user_id, status, message, rejection_comment
        FROM friend_requests
@@ -314,12 +328,15 @@ export async function loadBootstrap(userId, options = {}) {
             b.title AS book_title, b.author AS book_author, b.annotation AS book_annotation,
             b.cover_path AS book_cover_path, b.cover_tone AS book_cover_tone,
             er.user_id AS reminder_user_id,
-            reminder_users.user_ids AS reminder_user_ids
+            reminder_users.user_ids AS reminder_user_ids,
+            reminder_users.reminder_count
        FROM events e
        LEFT JOIN books b ON b.id = e.book_id
        LEFT JOIN event_reminders er ON er.event_id = e.id AND er.user_id = ?
        LEFT JOIN (
-         SELECT event_id, GROUP_CONCAT(user_id ORDER BY user_id) AS user_ids
+         SELECT event_id,
+                SUBSTRING_INDEX(GROUP_CONCAT(user_id ORDER BY created_at, user_id), ',', 4) AS user_ids,
+                COUNT(*) AS reminder_count
            FROM event_reminders
           GROUP BY event_id
        ) reminder_users ON reminder_users.event_id = e.id
@@ -329,7 +346,8 @@ export async function loadBootstrap(userId, options = {}) {
   ) : [[]];
   const [occasionRows] = includeCatalog ? await pool.query(
     `SELECT o.id, o.creator_user_id, o.occasion_type, o.primary_text, o.audience_text,
-            o.target_gender, o.target_cities, o.target_profile_type, o.status, o.is_adult,
+            o.target_gender, o.target_cities, o.target_profile_type, o.meeting_date,
+            o.meeting_start_time, o.meeting_end_time, o.status, o.is_adult,
             o.moderation_note, o.created_at, p.display_name AS creator_name
        FROM occasions o
        JOIN profiles p ON p.user_id = o.creator_user_id
@@ -439,8 +457,9 @@ export async function loadBootstrap(userId, options = {}) {
     }),
   }));
   const visibleOccasionRows = occasionRows.filter((row) => {
-    if (currentUser?.isAdmin || Number(row.creator_user_id) === Number(userId)) return true;
-    if (row.is_adult && Number(currentUser?.profile.age ?? -1) < 18) return false;
+    if (currentUser?.isAdmin) return true;
+    if (row.is_adult && adultStatus !== "adult") return false;
+    if (Number(row.creator_user_id) === Number(userId)) return true;
     if (row.status !== "published") return false;
     const genderMatch = row.target_gender === "Все" || row.target_gender === currentUser?.profile.gender;
     const typeMatch = row.target_profile_type === "Все" || row.target_profile_type === currentUser?.profile.type;
@@ -449,6 +468,7 @@ export async function loadBootstrap(userId, options = {}) {
   return {
     activeUserId: Number(userId),
     profileCompleted: Boolean(accountState?.profile_completed),
+    adultAccess: { status: adultStatus, restricted: restrictedAdultMaterials },
     users: usersWithWishlists,
     blocks: blockRows.map((row) => ({ blockerId: Number(row.blocker_user_id), blockedId: Number(row.blocked_user_id), createdAt: new Date(row.created_at).toISOString() })),
     blockedByUserIds: blockRows.filter((row) => Number(row.blocked_user_id) === Number(userId)).map((row) => Number(row.blocker_user_id)),
@@ -473,6 +493,7 @@ export async function loadBootstrap(userId, options = {}) {
       bookCoverTone: row.book_cover_tone ?? undefined, pinned: Boolean(row.is_pinned),
       reminderSet: Boolean(row.reminder_user_id),
       reminderUserIds: String(row.reminder_user_ids ?? "").split(",").map(Number).filter(Boolean),
+      reminderCount: Number(row.reminder_count ?? 0),
       createdAt: new Date(row.created_at).toISOString(),
     })),
     occasions: visibleOccasionRows.filter((row) => currentUser?.isAdmin || !hiddenUserIds.has(Number(row.creator_user_id))).map((row) => ({
@@ -480,7 +501,11 @@ export async function loadBootstrap(userId, options = {}) {
       primaryText: row.primary_text, audienceText: row.audience_text,
       isAdult: Boolean(row.is_adult),
       targetGender: row.target_gender, targetCities: parseJson(row.target_cities),
-      targetProfileType: row.target_profile_type, status: row.status,
+      targetProfileType: row.target_profile_type,
+      meetingDate: sqlDate(row.meeting_date) || undefined,
+      meetingStartTime: row.meeting_start_time ? String(row.meeting_start_time).slice(0, 5) : undefined,
+      meetingEndTime: row.meeting_end_time ? String(row.meeting_end_time).slice(0, 5) : undefined,
+      status: row.status,
       moderationNote: row.moderation_note ?? "", creatorName: row.creator_name,
       createdAt: new Date(row.created_at).toISOString(),
     })),
