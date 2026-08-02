@@ -235,9 +235,10 @@ test("presence, linked event books and pinned moderation are persisted", async (
 
 test("event books, strict cities and private event management are wired into the UI", async () => {
   const page = await readFrontendSource();
+  const controllerUtils = await readFile(path.join(root, "app", "hooks", "controller-utils.ts"), "utf8");
   const content = await readFile(path.join(root, "app", "components", "content", "ContentComponents.tsx"), "utf8");
   const header = await readFile(path.join(root, "app", "components", "layout", "AppLayout.tsx"), "utf8");
-  assert.match(page, /const MIN_LOADING_MS = 3_000/);
+  assert.match(controllerUtils, /const MIN_LOADING_MS = 3_000/);
   assert.match(content, />Событие связано с книгой</);
   assert.match(content, />Сначала создать книгу</);
   assert.match(content, /function PublicProfileDetails/);

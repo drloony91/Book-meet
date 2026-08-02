@@ -53,6 +53,7 @@ import {
 } from "../lib/domain";
 import { apiFetch } from "../services/api";
 import { BootstrapRequestError, loadApplicationData } from "../services/bootstrap";
+import { conversationKey, finishMinimumLoading } from "./controller-utils";
 import type {
   AdminCatalogItem,
   AdminMaterialKind,
@@ -90,13 +91,6 @@ import type {
   UserReview,
   WishBook,
 } from "../types/domain";
-
-function conversationKey(firstId: number, secondId: number) { return [firstId, secondId].sort((a, b) => a - b).join("-"); }
-const MIN_LOADING_MS = 3_000;
-async function finishMinimumLoading(startedAt: number) {
-  const remaining = MIN_LOADING_MS - (Date.now() - startedAt);
-  if (remaining > 0) await new Promise((resolve) => window.setTimeout(resolve, remaining));
-}
 
 export function useBookMeetController() {
   const [users, setUsers] = useState<DemoUser[]>([]);

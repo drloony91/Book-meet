@@ -2,6 +2,7 @@ import React, { FormEvent, useEffect, useLayoutEffect, useMemo, useRef, useState
 import { CustomSelect } from "../components/common/CustomSelect";
 import { ModalIconActions } from "../components/modals/ModalIconActions";
 import { AdminSafetySection } from "../components/safety/AdminSafety";
+import { AdminStatisticsPanel } from "../components/admin/AdminStatisticsPanel";
 import {
   AdminCatalogCard,
   AdminCatalogEditor,
@@ -51,54 +52,6 @@ function ageFromDateInput(value?: string) {
   let age = now.getFullYear() - year;
   if (now.getMonth() + 1 < month || now.getMonth() + 1 === month && now.getDate() < day) age -= 1;
   return Number.isFinite(age) && age >= 0 ? age : undefined;
-}
-
-function AdminStatisticsPanel({ statistics }: { statistics: AdminStatistics | null }) {
-  const userTypes = [
-    ["Читатели", statistics?.usersByType["Читатель"] ?? 0],
-    ["Писатели", statistics?.usersByType["Писатель"] ?? 0],
-    ["Блогеры", statistics?.usersByType["Блогер"] ?? 0],
-    ["Издатели", statistics?.usersByType["Издатель"] ?? 0],
-  ] as const;
-  const materials = [
-    ["Книги", statistics?.books ?? 0],
-    ["Рецензии", statistics?.reviews ?? 0],
-    ["Публикации", statistics?.publications ?? 0],
-    ["События", statistics?.events ?? 0],
-    ["Поводы", statistics?.occasions ?? 0],
-  ] as const;
-  const community = [
-    ["В «Хочу почитать!»", statistics?.wishlistBooks ?? 0],
-    ["Забронировано подарков", statistics?.reservedGifts ?? 0],
-    ["Пользователей с друзьями", statistics?.friendshipUsers ?? 0],
-  ] as const;
-
-  return <section className={`admin-statistics-panel${statistics ? "" : " is-loading"}`}>
-    <div className="admin-statistics-heading">
-      <div><span className="section-subtitle">Общая картина</span><h2>Статистика сообщества</h2></div>
-      <div className="admin-statistics-total"><strong>{statistics?.totalUsers ?? "—"}</strong><span>пользователей</span></div>
-    </div>
-    <div className="admin-statistics-user-types">
-      {userTypes.map(([label, count]) => <article key={label}><strong>{statistics ? count : "—"}</strong><span>{label}</span></article>)}
-    </div>
-    <div className="admin-statistics-block">
-      <h3>Города</h3>
-      <div className="admin-statistics-cities">
-        {statistics?.cities.length
-          ? statistics.cities.map(({ city, count }) => <span key={city}>{city}<b>{count}</b></span>)
-          : <p>{statistics ? "Города пока не указаны" : "Собираем данные…"}</p>}
-      </div>
-    </div>
-    <div className="admin-statistics-block">
-      <h3>Материалы</h3>
-      <div className="admin-statistics-metrics">
-        {materials.map(([label, count]) => <article key={label}><strong>{statistics ? count : "—"}</strong><span>{label}</span></article>)}
-      </div>
-    </div>
-    <div className="admin-statistics-extras">
-      {community.map(([label, count]) => <article key={label}><strong>{statistics ? count : "—"}</strong><span>{label}</span></article>)}
-    </div>
-  </section>;
 }
 
 export function AdminTab({ events, occasions, users, reports, onModerate, onModerateOccasion, onModeratePublisher, onOpenChat, onOpenUser, onRefresh, onDeleteMaterial }: { events: BookEvent[]; occasions: Occasion[]; users: DemoUser[]; reports: SafetyReport[]; onModerate: (id: number, action: "accept" | "revision" | "reject" | "edit", note?: string, event?: typeof emptyEvent, pinned?: boolean) => Promise<void>; onModerateOccasion: (id: number, action: "accept" | "revision" | "reject" | "edit", note?: string, occasion?: typeof emptyOccasion) => Promise<void>; onModeratePublisher: (id: number, action: "accept" | "revision" | "reject", note?: string) => Promise<void>; onOpenChat: (userId: number) => void; onOpenUser: (userId: number) => void; onRefresh: () => void; onDeleteMaterial: (kind: AdminMaterialKind, id: number) => Promise<void> }) {

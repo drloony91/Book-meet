@@ -17,9 +17,6 @@
     "db:migrate": "node scripts/migrate.js",
     "db:seed": "node scripts/seed.js",
     "db:seed-publisher": "node scripts/seed-publisher.js",
-    "deploy:publisher": "node scripts/deploy-publisher-release.js",
-    "deploy:social-events": "node scripts/deploy-social-events-release.js",
-    "deploy:safety": "node deploy-safety-release.js",
     "db:setup": "node scripts/migrate.js && node scripts/seed.js"
   },
   "dependencies": {

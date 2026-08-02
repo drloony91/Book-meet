@@ -4,6 +4,7 @@ import type { Friend } from "../chat/types";
 import { CustomSelect } from "../common/CustomSelect";
 import { ModalIconActions } from "../modals/ModalIconActions";
 import { openReportDialog } from "../safety/SafetyCenter";
+import { SpoilerText, SpoilerTextarea } from "./text/SpoilerText";
 import { useRoutedPopup } from "../../navigation/routes";
 import {
   catalogFromUsers,
@@ -40,32 +41,6 @@ import type {
   UserReview,
   WishBook,
 } from "../../types/domain";
-
-function SpoilerChunk({ children }: { children: string }) {
-  const [revealed, setRevealed] = useState(false);
-  return <span className={`spoiler ${revealed ? "is-revealed" : ""}`} role="button" tabIndex={0} title="Открыть спойлер" onClick={() => setRevealed(true)} onKeyDown={(event) => { if (event.key === "Enter" || event.key === " ") setRevealed(true); }}>{children}</span>;
-}
-
-function SpoilerText({ text }: { text: string }) {
-  return <>{text.split(/(\|\|[\s\S]*?\|\|)/g).map((part, index) => part.startsWith("||") && part.endsWith("||") ? <SpoilerChunk key={index}>{part.slice(2, -2)}</SpoilerChunk> : <React.Fragment key={index}>{part}</React.Fragment>)}</>;
-}
-
-function SpoilerTextarea({ value, onChange, rows = 4, required = false, placeholder }: { value: string; onChange: (value: string) => void; rows?: number; required?: boolean; placeholder?: string }) {
-  const ref = useRef<HTMLTextAreaElement>(null);
-  const [hint, setHint] = useState(false);
-  function toggleSpoiler() {
-    const input = ref.current;
-    if (!input || input.selectionStart === input.selectionEnd) { setHint(true); window.setTimeout(() => setHint(false), 1800); return; }
-    const start = input.selectionStart;
-    const end = input.selectionEnd;
-    const selected = value.slice(start, end);
-    const alreadyWrapped = value.slice(Math.max(0, start - 2), start) === "||" && value.slice(end, end + 2) === "||";
-    const next = alreadyWrapped ? value.slice(0, start - 2) + selected + value.slice(end + 2) : value.slice(0, start) + `||${selected}||` + value.slice(end);
-    onChange(next);
-    requestAnimationFrame(() => { input.focus(); input.setSelectionRange(alreadyWrapped ? start - 2 : start + 2, alreadyWrapped ? end - 2 : end + 2); });
-  }
-  return <div className="spoiler-textarea"><div className="comment-format-toolbar"><button type="button" onClick={toggleSpoiler} title="Скрыть под спойлер">▦ Скрыть под спойлер</button>{hint && <span>Выделите текст для скрытия под спойлер</span>}</div><textarea ref={ref} required={required} rows={rows} value={value} onChange={(event) => onChange(event.target.value)} placeholder={placeholder} /></div>;
-}
 
 export const monthlyBooks = [
   { title: "Время секонд хэнд", author: "Светлана Алексиевич", cover: "cover-red", mark: "В" },
