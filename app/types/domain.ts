@@ -30,6 +30,7 @@ export type BookEvent = {
   bookCoverTone?: string;
   pinned?: boolean;
   reminderSet?: boolean;
+  reminderUserIds?: number[];
   createdAt: string;
 };
 export type OccasionType = "meet" | "discuss" | "invite";
@@ -64,7 +65,7 @@ export type Excerpt = {
   linkedBookId?: number;
 };
 
-export type ReadingItem = { id: number; kind: "review" | "excerpt"; title: string; author: string; text: string; ownerId?: number; createdAt?: string; preview?: string; bookAuthor?: string; bodyHtml?: string; linkedBookId?: number };
+export type ReadingItem = { id: number; kind: "review" | "excerpt"; title: string; author: string; text: string; ownerId?: number; createdAt?: string; preview?: string; bookAuthor?: string; rating?: number; bodyHtml?: string; linkedBookId?: number };
 export type MaterialComment = { id: number; userId: number; text: string; createdAt: string };
 
 export type ProfileTab = "main" | "author-books" | "excerpts" | "publisher-news" | "library" | "wishlist" | "reviews" | "events" | "friends" | "admin" | "settings";
@@ -112,6 +113,7 @@ export type UserProfileData = {
   name: string;
   city: string;
   cityId?: number;
+  country?: string;
   type: "Читатель" | "Писатель" | "Блогер" | "Издатель";
   gender: "Мужской" | "Женский" | "Не указан";
   bio: string;

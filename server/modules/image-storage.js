@@ -4,7 +4,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 const projectRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..");
-const previewHosts = ["s.f.kz", "simg.marwin.kz", "api.bookmate.ru", "books.yandex.kz"];
+const previewHosts = ["s.f.kz", "simg.marwin.kz", "api.bookmate.ru", "books.yandex.kz", "avatars.mds.yandex.net"];
 
 function cleanUrl(value) {
   try {

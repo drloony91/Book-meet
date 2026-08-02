@@ -7,16 +7,18 @@ import type { BookEvent, DemoUser } from "../types/domain";
 export function UsersDirectoryPage({ currentUser, users, onOpenUser }: { currentUser: DemoUser; users: DemoUser[]; onOpenUser: (userId: number) => void }) {
   const [sort, setSort] = useState<"registration" | "matches">("matches");
   const [city, setCity] = useState("");
+  const [profileType, setProfileType] = useState<"all" | "Читатель" | "Писатель" | "Блогер">("all");
   const publicUsers = useMemo(() => users.filter((user) => !user.isAdmin), [users]);
   const sortedUsers = useMemo(
     () => publicUsers
       .filter((user) => user.id !== currentUser.id)
+      .filter((user) => profileType === "all" || user.profile.type === profileType)
       .filter((user) => !city || user.profile.city.trim().toLocaleLowerCase("ru") === city.trim().toLocaleLowerCase("ru"))
       .map((user) => ({ user, matches: userBookMatches(currentUser, user) }))
       .sort((first, second) => sort === "matches"
         ? second.matches.total - first.matches.total || second.user.id - first.user.id
         : (Date.parse(second.user.joinedAt ?? "") || second.user.id) - (Date.parse(first.user.joinedAt ?? "") || first.user.id)),
-    [city, currentUser, publicUsers, sort],
+    [city, currentUser, profileType, publicUsers, sort],
   );
   const cityUsers = publicUsers.filter((user) => user.id !== currentUser.id && user.profile.city.trim().toLocaleLowerCase("ru") === currentUser.profile.city.trim().toLocaleLowerCase("ru")).length;
 
@@ -24,13 +26,14 @@ export function UsersDirectoryPage({ currentUser, users, onOpenUser }: { current
     <div className="directory-heading">
       <div><span className="section-subtitle">Сообщество Book Meet</span><h1>Пользователи</h1><div className="users-directory-metrics"><p>Всего пользователей — {publicUsers.length}</p><p>Пользователей в вашем городе — {cityUsers}</p></div></div>
       <div className="directory-controls directory-filter-controls">
+        <label className="directory-control-field"><span>Кого вы ищете?</span><CustomSelect ariaLabel="Кого вы ищете?" value={profileType} onChange={setProfileType} options={[{ value: "all", label: "Всех" }, { value: "Читатель", label: "Читателей" }, { value: "Писатель", label: "Писателей" }, { value: "Блогер", label: "Блогеров" }]} /></label>
         <div className="directory-control-field"><span>Город</span><CityFilter value={city} cities={publicUsers.filter((user) => user.id !== currentUser.id).map((user) => user.profile.city)} onChange={setCity} /></div>
         <label className="directory-control-field"><span>Сортировка</span><CustomSelect ariaLabel="Сортировка" value={sort} onChange={setSort} options={[{ value: "matches", label: "По книжным совпадениям" }, { value: "registration", label: "По дате регистрации" }]} /></label>
       </div>
     </div>
-    <div className="users-directory-grid">{sortedUsers.map(({ user, matches }) => <article className="directory-user-card" key={user.id}>
-      <button className={`avatar avatar-lg avatar-${user.color} ${user.avatarUrl ? "has-photo" : ""}`} style={user.avatarUrl ? { backgroundImage: `url(${user.avatarUrl})` } : undefined} type="button" onClick={() => onOpenUser(user.id)}>{!user.avatarUrl && user.initials}{user.online && <span className="online-dot" />}</button>
-      <div><span>{user.profile.type}{user.profile.city ? ` · ${user.profile.city}` : ""} · <b className={user.online ? "online-copy" : "offline-copy"}>{user.online ? "в сети" : "не в сети"}</b></span><h2><button type="button" onClick={() => onOpenUser(user.id)}>{user.profile.name}</button></h2><p>{user.profile.bio || "Пользователь пока ничего о себе не рассказал."}</p></div>
+    <div className="users-directory-grid">{sortedUsers.map(({ user, matches }) => <article className="directory-user-card material-clickable-card" role="button" tabIndex={0} key={user.id} onClick={() => onOpenUser(user.id)} onKeyDown={(event) => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); onOpenUser(user.id); } }}>
+      <span className={`avatar avatar-lg avatar-${user.color} ${user.avatarUrl ? "has-photo" : ""}`} style={user.avatarUrl ? { backgroundImage: `url(${user.avatarUrl})` } : undefined}>{!user.avatarUrl && user.initials}{user.online && <span className="online-dot" />}</span>
+      <div><span>{user.profile.type}{user.profile.city ? ` · ${user.profile.city}` : ""} · <b className={user.online ? "online-copy" : "offline-copy"}>{user.online ? "в сети" : "не в сети"}</b></span><h2>{user.profile.name}</h2><p>{user.profile.bio || "Пользователь пока ничего о себе не рассказал."}</p></div>
       <div className="user-match-summary"><strong>{matches.total}</strong><span>книжных совпадений</span><small>{matches.books} книг · {matches.favoriteGenres} любимых жанров · {matches.dislikedGenres} нелюбимых жанров</small></div>
       <small>Зарегистрирован(а) {user.joined}</small>
     </article>)}</div>
@@ -42,7 +45,7 @@ export function PublishingDirectoryPage({ users, events, onOpenUser }: { users: 
     .filter((user) => !user.isAdmin && user.profile.type === "Издатель" && user.profile.publisherStatus === "approved")
     .sort((first, second) => (Date.parse(second.joinedAt ?? "") || second.id) - (Date.parse(first.joinedAt ?? "") || first.id)), [users]);
   return <main className="content-scroll directory-page publishing-directory-page">
-    <div className="directory-heading"><div><span className="section-subtitle">Книги напрямую от издательств</span><h1>Новинки издательств</h1><p>Подтверждённые издательства Book Meet и их последние книги.</p></div></div>
+    <div className="directory-heading"><div><h1>Новинки издательств</h1><p>Познакомьтесь с издательствами! Книги, события и новости издательства — в одном месте.</p></div></div>
     {publishers.length ? <div className="publishing-list">{publishers.map((publisher) => {
       const latestNews = [...(publisher.publisherNews ?? [])].sort((first, second) => Date.parse(second.createdAtValue ?? second.createdAt) - Date.parse(first.createdAtValue ?? first.createdAt))[0];
       const latestEvent = events.filter((item) => item.creatorId === publisher.id && item.status === "published").sort((first, second) => Date.parse(second.createdAt) - Date.parse(first.createdAt))[0];

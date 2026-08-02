@@ -12,7 +12,7 @@ export type MainView =
   | "profile";
 
 export type RoutableMainView = Exclude<MainView, "profile">;
-export type OverlayRouteKind = "user" | "book" | "event" | "review" | "excerpt" | "occasion" | "chat";
+export type OverlayRouteKind = "user" | "book" | "event" | "review" | "excerpt" | "occasion" | "chat" | "notification" | "report";
 export type ParsedAppRoute = { view: MainView; overlay?: { kind: OverlayRouteKind; id: number } };
 export type ChatRouteState = {
   bookMeetChat?: boolean;
@@ -100,12 +100,19 @@ export function appRouteFromPathname(pathname: string): ParsedAppRoute {
     { pattern: /^\/blog\/(\d+)$/, kind: "excerpt", view: "publications" },
     { pattern: /^\/meet\/(\d+)$/, kind: "occasion", view: "occasions" },
     { pattern: /^\/chat\/(\d+)$/, kind: "chat", view: "chat" },
+    { pattern: /^\/notifications\/(\d+)$/, kind: "notification", view: "home" },
+    { pattern: /^\/reports\/[a-z_-]+\/(\d+)$/, kind: "report", view: "home" },
   ];
   for (const route of dynamicRoutes) {
     const match = normalized.match(route.pattern);
     if (match) return { view: route.view, overlay: { kind: route.kind, id: Number(match[1]) } };
   }
   return { view: mainViewFromPathname(normalized) };
+}
+
+export function reportTargetFromPathname(pathname: string) {
+  const match = normalizedPathname(pathname).match(/^\/reports\/(user|book|review|excerpt|event|occasion|publisher_news|chat|comment)\/(\d+)$/);
+  return match ? { kind: match[1] as "user" | "book" | "review" | "excerpt" | "event" | "occasion" | "publisher_news" | "chat" | "comment", id: Number(match[2]) } : null;
 }
 
 export function initialMainView(): MainView {

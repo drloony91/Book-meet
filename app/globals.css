@@ -205,6 +205,7 @@ button { color: inherit; }
 .excerpt-footer button:hover { background: rgba(255,255,255,.12); }
 .excerpt-footer .inline-user-link, .excerpt-footer .inline-book-link { display: inline; border: 0; border-radius: 0; padding: 0; color: inherit; background: transparent; font: inherit; text-decoration: underline; text-underline-offset: 2px; }
 .author-dot { display: grid; place-items: center; width: 36px; height: 36px; border-radius: 50%; color: #4c302c; background: #f1c9ac; font-weight: 800; }
+.author-dot.has-photo { background-position: center; background-size: cover; }
 .author-dot-2 { color: #273b44; background: #c0d8df; }
 
 .monthly-section { padding: 33px; border-radius: 22px; background: #f1ede7; }
@@ -245,7 +246,7 @@ button { color: inherit; }
 .directory-card-footer .read-button { margin-top: 0; }
 .directory-page .excerpt-footer small { display: block; margin-top: 5px; color: rgba(255,255,255,.68); font-size: 9px; }
 .users-directory-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; }
-.directory-user-card { display: grid; grid-template-columns: auto 1fr; gap: 15px 17px; padding: 22px; border: 1px solid var(--line); border-radius: 16px; background: white; box-shadow: 0 8px 25px rgba(48,39,32,.05); }
+.directory-user-card { display: grid; grid-template-columns: auto 1fr; gap: 15px 17px; padding: 22px; border: 1px solid var(--line); border-radius: 16px; background: white; box-shadow: 0 8px 25px rgba(48,39,32,.05); cursor: pointer; }
 .directory-user-card > .avatar { border: 0; cursor: pointer; }
 .directory-user-card > div > span { color: var(--blue); font-size: 9px; font-weight: 800; text-transform: uppercase; letter-spacing: .5px; }
 .directory-user-card h2 { margin: 6px 0 8px; font: 700 23px/1 Georgia, serif; }
@@ -740,6 +741,10 @@ select option {
   border-radius: 13px;
   transform-origin: top center;
   animation: dropdown-control-in .24s cubic-bezier(.22, .8, .3, 1) both;
+}
+
+@media (max-width: 560px) {
+  .event-attendees > div { grid-template-columns: 1fr; }
 }
 
 .modal-report-button { color: #c43d3d; border-color: #efbcbc; }
@@ -1936,6 +1941,14 @@ select option {
 .event-links, .admin-event-actions { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 22px; }
 .event-links a { display: inline-flex; align-items: center; justify-content: center; text-decoration: none; }
 .event-links .is-set { color: #4f7a63; border-color: #b8d4c2; background: #f1faf4; opacity: 1; }
+.event-attendees { margin-top: 24px; padding-top: 18px; border-top: 1px solid #dbe4ee; }
+.event-attendees h3 { margin: 0 0 12px; color: #334b63; font-size: 13px; }
+.event-attendees > div { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 9px; }
+.event-attendees button { display: flex; align-items: center; gap: 9px; min-width: 0; border: 1px solid #d7e2ed; border-radius: 11px; padding: 9px; background: #fff; cursor: pointer; text-align: left; }
+.event-attendees button > span:last-child { display: flex; min-width: 0; flex-direction: column; gap: 2px; }
+.event-attendees strong, .event-attendees small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.event-attendees small { color: #718096; font-size: 9px; }
+.book-author-profile { display: inline-flex; align-items: center; gap: 9px; border: 0; padding: 0; color: var(--blue); background: transparent; cursor: pointer; font: 700 11px/1.2 Arial, sans-serif; }
 .event-reminder-notice, .confirm-social-modal { width: min(520px, calc(100vw - 40px)); border-radius: 18px; padding: 28px; background: white; box-shadow: 0 24px 70px rgba(21,42,68,.24); }
 .event-reminder-notice h2, .confirm-social-modal h2 { margin: 0 0 14px; font-size: 24px; }
 .event-reminder-notice p { margin: 0; color: #536174; line-height: 1.65; }

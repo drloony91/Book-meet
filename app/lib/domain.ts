@@ -53,7 +53,7 @@ export function catalogFromUsers(users: DemoUser[]) {
 export function reviewReadingItemById(users: DemoUser[], id: number): ReadingItem | null {
   for (const user of users) {
     const review = user.reviews.find((item) => item.id === id);
-    if (review) return { id: review.id, kind: "review", title: review.bookTitle, author: user.profile.name, text: review.fullText, ownerId: user.id, createdAt: review.createdAt, preview: review.preview, bookAuthor: review.bookAuthor };
+    if (review) return { id: review.id, kind: "review", title: review.bookTitle, author: user.profile.name, text: review.fullText, ownerId: user.id, createdAt: review.createdAt, preview: review.preview, bookAuthor: review.bookAuthor, rating: review.rating };
   }
   return null;
 }

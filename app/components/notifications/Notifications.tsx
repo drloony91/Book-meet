@@ -1,4 +1,5 @@
 import type { DemoUser, SocialNotification } from "../../types/domain";
+import { useRoutedPopup } from "../../navigation/routes";
 
 export function NotificationsMenu({ notifications, users, onOpen, onClose, onMarkAllRead }: { notifications: SocialNotification[]; users: DemoUser[]; onOpen: (notification: SocialNotification) => void; onClose: () => void; onMarkAllRead: () => void }) {
   return (
@@ -15,13 +16,14 @@ export function NotificationsMenu({ notifications, users, onOpen, onClose, onMar
 }
 
 export function NotificationDetail({ notification, actor, isFollowing, onClose, onFollow }: { notification: SocialNotification; actor?: DemoUser; isFollowing: boolean; onClose: () => void; onFollow: () => void }) {
+  const routedPopup = useRoutedPopup(`/notifications/${notification.id}`, "/", onClose, `${notification.title} — Book Meet`);
+  if (!routedPopup.active) return null;
   return (
-    <div className="modal-backdrop" role="presentation" onMouseDown={onClose}>
+    <div className="modal-backdrop" role="presentation" onMouseDown={routedPopup.close}>
       <section className="notification-detail" role="dialog" aria-modal="true" onMouseDown={(event) => event.stopPropagation()}>
-        <button className="modal-close" type="button" onClick={onClose}>×</button><span className="section-subtitle">{notification.title}</span><h2>{actor?.profile.name ?? "Book Meet"}</h2><p>{notification.text}</p>
-        {notification.type === "friend_rejected" && !isFollowing && <button className="primary-button" type="button" onClick={onFollow}>Подписаться на пользователя</button>}
+        <button className="modal-close" type="button" onClick={routedPopup.close}>×</button><span className="section-subtitle">{notification.title}</span><h2>{actor?.profile.name ?? "Book Meet"}</h2><p>{notification.text}</p>
+        {notification.type === "friend_rejected" && !isFollowing && <button className="primary-button" type="button" onClick={() => { onFollow(); routedPopup.close(); }}>Подписаться на пользователя</button>}
       </section>
     </div>
   );
 }
-

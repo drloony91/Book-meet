@@ -1,5 +1,6 @@
 import { FormEvent, useEffect, useState } from "react";
 import { createPortal } from "react-dom";
+import { reportTargetFromPathname, useRoutedPopup } from "../../navigation/routes";
 
 export type ReportTarget = {
   kind: "user" | "book" | "review" | "excerpt" | "event" | "occasion" | "publisher_news" | "chat" | "comment";
@@ -11,24 +12,30 @@ export function openReportDialog(target: ReportTarget) {
 }
 
 export function SafetyCenter({ onChanged }: { onChanged: () => void }) {
-  const [target, setTarget] = useState<ReportTarget | null>(null);
+  const [target, setTarget] = useState<ReportTarget | null>(() => typeof window === "undefined" ? null : reportTargetFromPathname(window.location.pathname));
+
+  useEffect(() => {
+    const restore = () => setTarget(reportTargetFromPathname(window.location.pathname));
+    const open = (event: Event) => setTarget((event as CustomEvent<ReportTarget>).detail);
+    window.addEventListener("popstate", restore);
+    window.addEventListener("bookmeet:report", open);
+    return () => {
+      window.removeEventListener("popstate", restore);
+      window.removeEventListener("bookmeet:report", open);
+    };
+  }, []);
+
+  if (!target) return null;
+  return <SafetyReportDialog target={target} onClose={() => setTarget(null)} onChanged={onChanged} />;
+}
+
+function SafetyReportDialog({ target, onClose, onChanged }: { target: ReportTarget; onClose: () => void; onChanged: () => void }) {
   const [reason, setReason] = useState("");
   const [blockUser, setBlockUser] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
+  const routedPopup = useRoutedPopup(`/reports/${target.kind}/${target.id}`, "/", onClose, "Жалоба — Book Meet");
 
-  useEffect(() => {
-    const open = (event: Event) => {
-      setTarget((event as CustomEvent<ReportTarget>).detail);
-      setReason("");
-      setBlockUser(false);
-      setError("");
-    };
-    window.addEventListener("bookmeet:report", open);
-    return () => window.removeEventListener("bookmeet:report", open);
-  }, []);
-
-  if (!target) return null;
   const userReport = target.kind === "user";
 
   async function submit(event: FormEvent) {
@@ -45,7 +52,7 @@ export function SafetyCenter({ onChanged }: { onChanged: () => void }) {
       });
       const data = await response.json().catch(() => ({})) as { error?: string };
       if (!response.ok) throw new Error(data.error || "Не удалось отправить жалобу");
-      setTarget(null);
+      routedPopup.close();
       onChanged();
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "Не удалось отправить жалобу");
@@ -54,8 +61,9 @@ export function SafetyCenter({ onChanged }: { onChanged: () => void }) {
     }
   }
 
+  if (!routedPopup.active) return null;
   const title = userReport ? "Пожаловаться на пользователя" : target.kind === "chat" ? "Пожаловаться на диалог" : target.kind === "comment" ? "Пожаловаться на комментарий" : "Пожаловаться на материал";
-  return createPortal(<div className="nested-modal-backdrop safety-backdrop" onMouseDown={() => setTarget(null)}>
+  return createPortal(<div className="nested-modal-backdrop safety-backdrop" onMouseDown={routedPopup.close}>
     <section className="safety-report-modal" role="dialog" aria-modal="true" onMouseDown={(event) => event.stopPropagation()}>
       <h2>{title}</h2>
       {userReport && <>
@@ -72,7 +80,7 @@ export function SafetyCenter({ onChanged }: { onChanged: () => void }) {
         {error && <p className="form-error">{error}</p>}
         <div className="form-actions">
           <button className="primary-button" type="submit" disabled={busy || !reason.trim()}>{busy ? "Отправляем…" : "Пожаловаться"}</button>
-          <button className="outline-button" type="button" onClick={() => setTarget(null)}>Отмена</button>
+          <button className="outline-button" type="button" onClick={routedPopup.close}>Отмена</button>
         </div>
       </form>
     </section>

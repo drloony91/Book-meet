@@ -46,6 +46,23 @@ test("маршрутизируемые поп-апы используют еди
   assert.match(routes, /openOverlayRoute/);
   assert.match(routes, /closeOverlayRoute/);
   assert.match(routes, /return \{ active, close:/);
+  assert.match(routes, /notifications/);
+  assert.match(routes, /reportTargetFromPathname/);
+});
+
+test("локальные правки этапа 1 закреплены контрактами интерфейса и данных", async () => {
+  const content = await readFile(path.join(root, "app", "components", "content", "ContentComponents.tsx"), "utf8");
+  const users = await readFile(path.join(root, "app", "screens", "UsersDirectoryScreen.tsx"), "utf8");
+  const data = await readFile(path.join(root, "server", "data.js"), "utf8");
+  const cityFixes = await readFile(path.join(root, "mysql", "migrations", "018_city_catalog_corrections.sql"), "utf8");
+  assert.match(content, /Рецензия\$\{item\.rating/);
+  assert.match(content, /Иду! Установить напоминание/);
+  assert.match(content, /event-attendees/);
+  assert.match(users, /Кого вы ищете\?/);
+  assert.match(users, /material-clickable-card/);
+  assert.match(data, /reminder_user_ids/);
+  assert.match(cityFixes, /Тюмень/);
+  assert.match(cityFixes, /Москва/);
 });
 
 test("внешние изображения и книжные страницы проверяют каждый редирект", async () => {

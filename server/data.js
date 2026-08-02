@@ -29,13 +29,14 @@ export async function loadUsers(connection = getPool(), viewerId = null) {
   const [userRows] = await connection.query(
     `SELECT u.id, u.username, u.initials, u.color, u.avatar_path, u.role, u.created_at, u.last_seen_at,
             u.suspension_reason, u.suspended_until, u.suspended_permanently,
-            p.display_name, p.city, p.city_id, p.profile_type, p.gender, p.bio, p.author_influences, p.writing_themes, p.weekend, p.joy, p.talk,
+            p.display_name, p.city, p.city_id, c.country_name, p.profile_type, p.gender, p.bio, p.author_influences, p.writing_themes, p.weekend, p.joy, p.talk,
             p.stranger_message, p.favorite_genres, p.disliked_genres,
             p.publisher_status, p.publisher_website, p.publisher_sales_links, p.publisher_legal_name,
             p.publisher_bin, p.publisher_account, p.publisher_bik, p.publisher_bank,
             p.publisher_legal_address, p.publisher_postal_address, p.publisher_moderation_note
        FROM users u
        JOIN profiles p ON p.user_id = u.id
+       LEFT JOIN cities c ON c.id = p.city_id
       ORDER BY u.id`,
   );
   const [bookRows] = await connection.query(
@@ -144,6 +145,7 @@ export async function loadUsers(connection = getPool(), viewerId = null) {
         name: row.display_name,
         city: row.city,
         cityId: row.city_id ? Number(row.city_id) : undefined,
+        country: row.country_name ?? undefined,
         type: row.profile_type,
         gender: row.gender ?? "Не указан",
         bio: row.bio ?? "",
@@ -273,10 +275,16 @@ export async function loadBootstrap(userId, options = {}) {
             e.status, e.moderation_note, e.created_at,
             b.title AS book_title, b.author AS book_author, b.annotation AS book_annotation,
             b.cover_path AS book_cover_path, b.cover_tone AS book_cover_tone,
-            er.user_id AS reminder_user_id
+            er.user_id AS reminder_user_id,
+            reminder_users.user_ids AS reminder_user_ids
        FROM events e
        LEFT JOIN books b ON b.id = e.book_id
        LEFT JOIN event_reminders er ON er.event_id = e.id AND er.user_id = ?
+       LEFT JOIN (
+         SELECT event_id, GROUP_CONCAT(user_id ORDER BY user_id) AS user_ids
+           FROM event_reminders
+          GROUP BY event_id
+       ) reminder_users ON reminder_users.event_id = e.id
       WHERE ? = 1 OR e.status = 'published' OR e.creator_user_id = ?
       ORDER BY e.is_pinned DESC, e.event_date, e.event_time, e.created_at`,
     [userId, currentUser?.isAdmin ? 1 : 0, userId],
@@ -424,6 +432,7 @@ export async function loadBootstrap(userId, options = {}) {
       bookAnnotation: row.book_annotation ?? undefined, bookCoverUrl: row.book_cover_path ?? undefined,
       bookCoverTone: row.book_cover_tone ?? undefined, pinned: Boolean(row.is_pinned),
       reminderSet: Boolean(row.reminder_user_id),
+      reminderUserIds: String(row.reminder_user_ids ?? "").split(",").map(Number).filter(Boolean),
       createdAt: new Date(row.created_at).toISOString(),
     })),
     occasions: visibleOccasionRows.filter((row) => currentUser?.isAdmin || !hiddenUserIds.has(Number(row.creator_user_id))).map((row) => ({

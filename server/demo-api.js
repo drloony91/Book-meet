@@ -25,6 +25,7 @@ const users = [
       name: "Тест 1",
       city: "Астана",
       cityId: 1,
+      country: "Казахстан",
       type: "Читатель",
       gender: "Мужской",
       bio: "",
@@ -109,7 +110,7 @@ const state = {
     description: "Познакомимся с авторами осенних новинок и обсудим, как рождаются современные книги.",
     date: "2026-12-12", time: "18:30", city: "Астана", cityId: 1,
     address: "проспект Республики, 1", mapUrl: "", detailsUrl: "",
-    status: "published", moderationNote: "", pinned: false, createdAt: new Date().toISOString(),
+    status: "published", moderationNote: "", pinned: false, reminderUserIds: [], createdAt: new Date().toISOString(),
   }],
   occasions: [],
 };
@@ -835,6 +836,7 @@ router.post("/events/:id/reminder", (request, response) => {
   const event = state.events.find((item) => item.id === Number(request.params.id) && item.status === "published");
   if (!event) return response.status(404).json({ error: "Событие не найдено" });
   event.reminderSet = true;
+  event.reminderUserIds = Array.from(new Set([...(event.reminderUserIds ?? []), request.demoUserId]));
   response.status(201).json({ ok: true });
 });
 
@@ -842,6 +844,7 @@ router.delete("/events/:id/reminder", (request, response) => {
   const event = state.events.find((item) => item.id === Number(request.params.id));
   if (!event?.reminderSet) return response.status(404).json({ error: "Напоминание не найдено" });
   event.reminderSet = false;
+  event.reminderUserIds = (event.reminderUserIds ?? []).filter((id) => id !== request.demoUserId);
   response.json({ ok: true });
 });
 
