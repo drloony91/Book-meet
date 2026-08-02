@@ -141,6 +141,7 @@ export function useBookMeetController() {
   const [blockedProfileNotice, setBlockedProfileNotice] = useState(false);
   const [adultAccess, setAdultAccess] = useState<NonNullable<BootstrapData["adultAccess"]>>({ status: "adult", restricted: {} });
   const [adultRestrictionNotice, setAdultRestrictionNotice] = useState<"minor" | "missing" | null>(null);
+  const [deletedRecovery, setDeletedRecovery] = useState<{ daysRemaining: number } | null>(null);
   const profileSaveQueue = useRef<Promise<void>>(Promise.resolve());
   const currentUser = users.find((user) => user.id === activeUserId) ?? null;
   const visibleUsers = users.filter((user) => currentUser?.isAdmin || user.id === activeUserId || !user.blockedByMe);
@@ -429,6 +430,10 @@ export function useBookMeetController() {
       if (error instanceof BootstrapRequestError && error.status === 401) return;
       if (error instanceof BootstrapRequestError && error.status === 423) {
         setSuspension({ permanent: Boolean(error.data.permanent), until: typeof error.data.until === "string" ? error.data.until : undefined, reason: typeof error.data.reason === "string" ? error.data.reason : "" });
+        return;
+      }
+      if (error instanceof BootstrapRequestError && error.status === 410 && error.data.deletedProfile) {
+        setDeletedRecovery({ daysRemaining: Number(error.data.daysRemaining ?? 0) });
         return;
       }
       setStartupError(error instanceof Error ? error.message : "Сервер Book Meet пока недоступен");
@@ -780,6 +785,7 @@ export function useBookMeetController() {
       const response = await apiFetch("/api/auth/login", { method: "POST", credentials: "same-origin", headers: { "content-type": "application/json" }, body: JSON.stringify({ email, password, totp }) });
       const data = await response.json() as BootstrapData & AuthResult;
       if (data.requiresTotp) { await finishMinimumLoading(loadingStartedAt); setAuthTransition(false); return { requiresTotp: true }; }
+      if (data.deletedProfile) { setDeletedRecovery({ daysRemaining: Number(data.daysRemaining ?? 0) }); await finishMinimumLoading(loadingStartedAt); setAuthTransition(false); return { deletedProfile: true, daysRemaining: data.daysRemaining }; }
       if (response.status === 423) {
         const locked = data as unknown as { permanent?: boolean; until?: string; reason?: string };
         setSuspension({ permanent: Boolean(locked.permanent), until: locked.until, reason: locked.reason ?? "" });
@@ -822,8 +828,27 @@ export function useBookMeetController() {
     navigateMainView("home", { replace: true }); setNotificationsOpen(false); setProfileAction(null); setNewlyRegistered(false); setAuthTransition(false);
   }
 
+  async function resolveDeletedProfile(action: "restore" | "new") {
+    setAuthTransition(true);
+    try {
+      const response = await apiFetch(`/api/auth/deleted-profile/${action}`, { method: "POST", credentials: "same-origin" });
+      const data = await response.json() as BootstrapData & { error?: string };
+      if (!response.ok) throw new Error(data.error || "Не удалось обработать удалённый профиль");
+      applyBootstrap(data);
+      setDeletedRecovery(null);
+      setNewlyRegistered(action === "new");
+      setView(action === "new" ? "profile" : "home");
+      window.history.replaceState({}, "", action === "new" ? "/profile" : "/");
+    } catch (error) {
+      setStartupError(error instanceof Error ? error.message : "Не удалось обработать удалённый профиль");
+    } finally {
+      setAuthTransition(false);
+    }
+  }
+
   if (authTransition) return <AuthBookTransition />;
   if (authLoading) return <AuthBookTransition />;
+  if (deletedRecovery) return <main className="deleted-profile-recovery"><section role="dialog" aria-modal="true"><h1>Профиль удалён</h1><p>Данные профиля будут храниться ещё {deletedRecovery.daysRemaining} дн. Вы можете восстановить прежний профиль или создать новый.</p><p>При создании нового профиля прежний будет удалён окончательно. Это действие нельзя отменить.</p>{startupError && <span className="login-error">{startupError}</span>}<div className="form-actions"><button className="primary-button" type="button" onClick={() => void resolveDeletedProfile("restore")}>Восстановить профиль</button><button className="danger-button" type="button" onClick={() => void resolveDeletedProfile("new")}>Создать новый</button></div></section></main>;
   if (suspension) return <main className="suspension-screen"><section><h1>Доступ к сайту ограничен</h1><p>{suspension.permanent ? "Ваш профиль заблокирован бессрочно." : `Ваш профиль заблокирован до ${new Date(suspension.until ?? "").toLocaleString("ru-RU")}.`}</p><p><strong>Причина:</strong> {suspension.reason || "Нарушение правил сайта."}</p></section></main>;
   if (!currentUser) return <LoginScreen onLogin={login} onRegister={register} initialError={startupError} />;
   const relationshipToProfile = profileUser ? isFriendPair(currentUser.id, profileUser.id) ? "friends" : friendRequests.some((request) => request.status === "pending" && request.fromId === profileUser.id && request.toId === currentUser.id) ? "incoming" : friendRequests.some((request) => request.status === "pending" && request.fromId === currentUser.id && request.toId === profileUser.id) ? "outgoing" : "none" : "none";
@@ -913,7 +938,7 @@ export function useBookMeetController() {
 
       {selectedFriend && !chatExpanded && (!currentRoute.overlay || currentRoute.overlay.kind === "chat") && <div className="chat-popup-layer"><div className="chat-popup">{chat}</div></div>}
 
-      {selectedBook && <UnifiedBookModal book={selectedBook} users={visibleUsers} onClose={() => setSelectedBook(null)} onReport={currentUser.isAdmin || selectedBook.creatorUserId === currentUser.id || users.some((user) => user.id === currentUser.id && (user.authorBooks ?? []).some((book) => book.id === selectedBook.id)) ? undefined : () => openReportDialog({ kind: "book", id: selectedBook.id })} onOpenUser={openUserProfile} onOpenReview={(review, user) => setSelectedMaterial({ id: review.id, kind: "review", title: review.bookTitle, author: user.profile.name, text: review.fullText, ownerId: user.id, createdAt: review.createdAt, preview: review.preview, bookAuthor: review.bookAuthor, rating: review.rating })} />}
+      {selectedBook && <UnifiedBookModal book={selectedBook} users={visibleUsers} onClose={() => setSelectedBook(null)} onReport={currentUser.isAdmin || selectedBook.creatorUserId === currentUser.id || users.some((user) => user.id === currentUser.id && (user.authorBooks ?? []).some((book) => book.id === selectedBook.id)) ? undefined : () => openReportDialog({ kind: "book", id: selectedBook.id })} onOpenUser={openUserProfile} onOpenReview={(review, user) => { setSelectedBook(null); setSelectedMaterial({ id: review.id, kind: "review", title: review.bookTitle, author: user.profile.name, text: review.fullText, ownerId: user.id, createdAt: review.createdAt, preview: review.preview, bookAuthor: review.bookAuthor, rating: review.rating }); }} />}
       {selectedMaterial && <ReadingModal item={selectedMaterial} currentUser={currentUser} users={visibleUsers} likedUserIds={likes[`${selectedMaterial.kind}-${selectedMaterial.id}`] ?? []} onToggleLike={() => toggleLike(selectedMaterial)} onComment={(text) => addComment(selectedMaterial, text)} onOpenUser={openUserProfile} onClose={() => setSelectedMaterial(null)} onReport={selectedMaterial.ownerId !== currentUser.id && !currentUser.isAdmin ? () => openReportDialog({ kind: selectedMaterial.kind, id: selectedMaterial.id }) : undefined} onEdit={currentUser.isAdmin || selectedMaterial.ownerId === currentUser.id ? () => void editReadingMaterial(selectedMaterial, currentUser) : undefined} onDelete={currentUser.isAdmin || selectedMaterial.ownerId === currentUser.id ? () => void deleteReadingMaterial(selectedMaterial, currentUser) : undefined} />}
       {adminEditingMaterial && <AdminCatalogEditor item={adminEditingMaterial} users={users} onClose={() => setAdminEditingMaterial(null)} onSave={async (payload) => { const response = await fetch(`/api/admin/materials/${adminEditingMaterial.kind}/${adminEditingMaterial.id}`, { method: "PATCH", credentials: "same-origin", headers: { "content-type": "application/json" }, body: JSON.stringify(payload) }); const data = await response.json().catch(() => ({})) as { error?: string }; if (!response.ok) { window.alert(data.error ?? "Не удалось сохранить изменения"); return; } setAdminEditingMaterial(null); await refreshBootstrap(); }} />}
       {detailNotification && <NotificationDetail notification={detailNotification} actor={users.find((user) => user.id === detailNotification.actorId)} isFollowing={follows.some((follow) => follow.followerId === currentUser.id && follow.targetId === detailNotification.actorId)} onClose={() => setDetailNotification(null)} onFollow={() => followUser(detailNotification.actorId)} />}

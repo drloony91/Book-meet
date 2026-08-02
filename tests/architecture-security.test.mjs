@@ -120,3 +120,41 @@ test("внешние изображения и книжные страницы �
   assert.match(api, /redirect: "manual"/);
   assert.match(api, /Книжный источник перенаправил запрос на другой сайт/);
 });
+
+test("этапы 7 и 8 закрепляют удаление профиля, восстановление и очистку личных данных", async () => {
+  const migration = await readFile(path.join(root, "mysql", "migrations", "021_deleted_profiles.sql"), "utf8");
+  const api = await readFile(path.join(root, "server", "api.js"), "utf8");
+  const bootstrap = await readFile(path.join(root, "server", "modules", "bootstrap-router.js"), "utf8");
+  const controller = await readFile(path.join(root, "app", "hooks", "useBookMeetController.tsx"), "utf8");
+  const profile = await readFile(path.join(root, "app", "screens", "ProfileScreens.tsx"), "utf8");
+  assert.match(migration, /deletion_expires_at DATETIME/);
+  assert.match(migration, /purged_at DATETIME/);
+  assert.match(api, /DELETE FROM messages WHERE sender_user_id = \? OR recipient_user_id = \?/);
+  assert.match(api, /purgeExpiredDeletedProfiles/);
+  assert.match(api, /router\.post\("\/auth\/deleted-profile\/restore"/);
+  assert.match(api, /router\.post\("\/auth\/deleted-profile\/new"/);
+  assert.match(api, /router\.delete\("\/admin\/users\/:id\/permanent"/);
+  assert.match(bootstrap, /deletedProfile/);
+  assert.match(controller, /Создать новый/);
+  assert.match(profile, /Действительно удалить профиль\?/);
+});
+
+test("исправления карточки книги, страны, городов и интерфейса защищены контрактами", async () => {
+  const cities = await readFile(path.join(root, "mysql", "migrations", "022_kazakhstan_city_aliases.sql"), "utf8");
+  const controller = await readFile(path.join(root, "app", "hooks", "useBookMeetController.tsx"), "utf8");
+  const content = await readFile(path.join(root, "app", "components", "content", "ContentComponents.tsx"), "utf8");
+  const home = await readFile(path.join(root, "app", "screens", "ContentScreens.tsx"), "utf8");
+  const styles = await readFile(path.join(root, "app", "globals.css"), "utf8");
+  assert.match(cities, /Актобе/);
+  assert.match(cities, /Ақтөбе/);
+  assert.match(cities, /Жезказган/);
+  assert.match(cities, /Жезқазған/);
+  assert.match(cities, /language_code/);
+  assert.match(controller, /setSelectedBook\(null\); setSelectedMaterial/);
+  assert.match(content, /className="book-reader-row"[^>]+onClick/);
+  assert.match(home, /item\.country\?\.toLocaleLowerCase/);
+  assert.match(styles, /admin-report-buttons button:last-child/);
+  assert.match(styles, /occasion-form \.adult-material-checkbox input/);
+  assert.match(styles, /comment-format-toolbar button/);
+  assert.match(styles, /element\.animate|will-change: transform/);
+});

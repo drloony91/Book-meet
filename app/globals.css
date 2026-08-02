@@ -783,6 +783,25 @@ select option {
 
 .comment-format-toolbar span,
 .toolbar-hint { color: #8c3a3a; font-size: 12px; }
+.comment-format-toolbar button {
+  width: auto;
+  min-height: 30px;
+  padding: 5px 10px;
+  border: 1px solid #cbd8e6;
+  border-radius: 7px;
+  color: #31465d;
+  background: #fff;
+  cursor: pointer;
+  font: inherit;
+  font-size: 11px;
+  font-weight: 700;
+  transition: border-color .16s, color .16s, background .16s, box-shadow .16s;
+}
+.comment-format-toolbar button:hover,
+.comment-format-toolbar button:focus-visible { border-color: var(--blue); color: var(--blue); background: #f4f8ff; box-shadow: 0 3px 10px #1769d218; outline: 0; }
+.comments-block > form .spoiler-textarea { width: 100%; min-width: 0; }
+.comments-block > form .comment-format-toolbar { width: 100%; justify-content: flex-start; }
+.comments-block > form > .primary-button { justify-self: end; }
 
 .adult-material-checkbox,
 .profile-checkbox {
@@ -796,6 +815,7 @@ select option {
 .profile-checkbox input { width: 18px; height: 18px; margin: 0; }
 
 .profile-nav-row { display: flex; align-items: center; min-width: 0; }
+.profile-nav-row.is-reordering { will-change: transform; }
 .profile-nav-row > button { flex: 1; }
 .profile-tab-drag-handle { flex: 0 0 18px; color: inherit; cursor: grab; font-size: 14px; letter-spacing: -2px; user-select: none; }
 .profile-tab-drag-handle:active { cursor: grabbing; }
@@ -803,6 +823,16 @@ select option {
 .profile-menu-order-settings h3 { margin: 0 0 10px; }
 .profile-identity-row { align-items: end; }
 .profile-identity-row > * { min-width: 0; flex: 1; }
+.profile-birth-field { display: grid; gap: 3px; }
+.profile-birth-field > label:first-child { display: grid; gap: 7px; }
+.profile-birth-visibility { margin: 0; font-size: 10px; font-weight: 650; }
+.profile-delete-settings { margin-top: 18px; padding: 22px; border: 1px solid #edcccc; border-radius: 16px; background: #fffafa; }
+.profile-delete-settings h2 { margin: 0 0 8px; font: 700 22px/1.2 Georgia, serif; }
+.profile-delete-settings p { color: var(--muted); margin: 0 0 16px; }
+.deleted-profile-recovery { min-height: 100vh; display: grid; place-items: center; padding: 30px; background: #f8fbff; }
+.deleted-profile-recovery > section { width: min(620px, 100%); padding: 38px; border: 1px solid #d8e3ee; border-radius: 20px; background: #fff; box-shadow: 0 20px 60px #153b6418; }
+.deleted-profile-recovery h1 { margin-top: 0; font: 700 34px/1.15 Georgia, serif; }
+.deleted-profile-notice { position: relative; text-align: center; }
 
 @media (max-width: 760px) {
   .profile-identity-row { grid-template-columns: 1fr; }
@@ -923,9 +953,13 @@ select option {
 .blocked-user-card span:last-child { min-width:0; display:grid; gap:3px; }
 .blocked-user-card small { color:#738094; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 .admin-report-buttons { grid-template-columns:repeat(2,minmax(0,1fr)); }
-.admin-user-status-buttons { grid-template-columns:repeat(2,minmax(0,1fr)); gap:15px; margin-top:34px; display:grid; }
+.admin-report-buttons button:last-child { grid-column:auto; }
+.admin-user-status-buttons { grid-template-columns:repeat(3,minmax(0,1fr)); gap:15px; margin-top:34px; display:grid; }
 .admin-user-status-buttons .admin-moderation-button { margin:0; }
 .admin-user-status-buttons .danger { background:#b94242; border-color:#b94242; }
+.admin-user-status-buttons .deleted { color:#fff; background:#7b8794; border-color:#7b8794; }
+.admin-deleted-user-actions { display:flex; gap:7px; }
+.admin-deleted-user-actions button { min-width:38px; padding:8px; }
 .admin-safety-page { width:min(1050px,100%); margin:0 auto; }
 .admin-report-list { display:grid; gap:11px; }
 .admin-report-list>button { text-align:left; cursor:pointer; background:#fff; border:1px solid #d9e4ef; border-radius:13px; grid-template-columns:120px minmax(0,1fr) auto; align-items:center; gap:14px; padding:16px; display:grid; }
@@ -1643,7 +1677,7 @@ select option {
 .nested-profile-view { position: absolute; inset: 0; z-index: 4; min-height: 100%; padding: 46px; background: white; text-align: left; }
 .nested-profile-view > .back-button { margin-bottom: 28px; }.nested-profile-view h2 { margin: 9px 0 4px; font: 700 34px/1.1 Georgia, serif; }
 .nested-book-detail { display: grid; grid-template-columns: 230px 1fr; gap: 34px; }.nested-book-detail .library-book-cover { height: 330px; }.nested-book-detail p, .nested-book-detail blockquote { color: #5c554f; font: 15px/1.6 Georgia, serif; }
-.book-detail-tabs { display: flex; gap: 6px; margin: 22px 0 16px; border-bottom: 1px solid var(--line); }.book-detail-tabs button { border: 0; border-bottom: 2px solid transparent; padding: 9px 10px; color: #746c65; background: transparent; cursor: pointer; font-size: 10px; }.book-detail-tabs button.active { border-color: var(--blue); color: var(--blue); font-weight: 800; }.book-reader-row { display: grid; grid-template-columns: auto 1fr; gap: 12px; padding: 13px; border-radius: 10px; background: #f8f6f3; }.book-reader-row > button { border: 0; cursor: pointer; }.book-reader-row p { margin: 5px 0 0; font-size: 12px; }.book-review-results > button { width: 100%; border: 1px solid var(--line); border-radius: 9px; padding: 13px; background: #fdfcfb; cursor: pointer; text-align: left; }
+.book-detail-tabs { display: flex; gap: 6px; margin: 22px 0 16px; border-bottom: 1px solid var(--line); }.book-detail-tabs button { border: 0; border-bottom: 2px solid transparent; padding: 9px 10px; color: #746c65; background: transparent; cursor: pointer; font-size: 10px; }.book-detail-tabs button.active { border-color: var(--blue); color: var(--blue); font-weight: 800; }.book-reader-row { width: 100%; display: grid; grid-template-columns: auto 1fr; gap: 12px; padding: 13px; border: 1px solid transparent; border-radius: 10px; color: inherit; background: #f8f6f3; text-align: left; cursor: pointer; }.book-reader-row:hover,.book-reader-row:focus-visible { border-color: #a8c8eb; box-shadow: 0 6px 18px #1769d212; outline: 0; }.book-reader-row > span:last-child { min-width: 0; display: block; }.book-reader-row p,.book-reader-note { display: block; margin: 5px 0 0; font-size: 12px; }.book-review-results > button { width: 100%; border: 1px solid var(--line); border-radius: 9px; padding: 13px; background: #fdfcfb; cursor: pointer; text-align: left; }
 .writer-book-links { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px; }.writer-book-links button { border: 1px solid #b8cee2; border-radius: 7px; padding: 7px 9px; color: var(--blue); background: white; cursor: pointer; font-size: 9px; }.external-warning { width: min(560px, 100%); padding: 38px; border-radius: 18px; background: white; box-shadow: var(--shadow); }.external-warning h2 { margin: 8px 0 15px; font: 700 28px/1.15 Georgia, serif; }.external-warning p { overflow-wrap: anywhere; padding: 12px; border-radius: 8px; color: #5d554f; background: #f7f5f2; font-size: 11px; }
 
 .notifications-menu { position: absolute; top: 54px; right: 2px; z-index: 80; width: min(390px, calc(100vw - 24px)); max-height: min(620px, calc(100vh - 90px)); overflow: hidden; border: 1px solid var(--line); border-radius: 17px; background: white; box-shadow: 0 20px 55px rgba(44, 33, 25, .18); }
@@ -2087,6 +2121,8 @@ select option {
 .occasion-form { display: grid; gap: 16px; }
 .occasion-form label { display: grid; gap: 7px; color: #334155; font-size: 13px; font-weight: 700; }
 .occasion-form input, .occasion-form textarea, .occasion-form select, .login-card select { width: 100%; border: 1px solid #cfd9e6; border-radius: 10px; padding: 11px 12px; color: #1c2c3d; background: #fff; font: inherit; font-weight: 400; }
+.occasion-form .adult-material-checkbox { width: 100%; display: flex !important; flex-direction: row !important; align-items: flex-start; justify-content: flex-start; gap: 8px; text-align: left; }
+.occasion-form .adult-material-checkbox input { width: 18px !important; min-width: 18px; height: 18px; margin: 0; padding: 0; flex: 0 0 18px; }
 .occasion-type-label { display: block; margin-bottom: 7px; color: #334155; font-size: 13px; font-weight: 700; }
 .occasion-type-switch { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 3px; border: 1px solid #cfe0f5; border-radius: 13px; padding: 3px; background: #edf4ff; }
 .occasion-type-switch button { min-width: 0; border: 0; border-radius: 10px; padding: 11px 12px; color: #51708e; background: transparent; cursor: pointer; font: inherit; font-weight: 800; transition: color .2s ease, background .2s ease, box-shadow .2s ease; }

@@ -8,7 +8,7 @@ export function UsersDirectoryPage({ currentUser, users, onOpenUser }: { current
   const [sort, setSort] = useState<"registration" | "matches">("matches");
   const [city, setCity] = useState("");
   const [profileType, setProfileType] = useState<"all" | "Читатель" | "Писатель" | "Блогер">("all");
-  const publicUsers = useMemo(() => users.filter((user) => !user.isAdmin), [users]);
+  const publicUsers = useMemo(() => users.filter((user) => !user.isAdmin && !user.deletedAt && !user.purged), [users]);
   const sortedUsers = useMemo(
     () => publicUsers
       .filter((user) => user.id !== currentUser.id)

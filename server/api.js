@@ -1,6 +1,6 @@
 import { Router } from "express";
 import QRCode from "qrcode";
-import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
+import { mkdir, readFile, rename, unlink, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { createPublicKey, randomBytes, verify as verifySignature } from "node:crypto";
 import https from "node:https";
@@ -29,6 +29,54 @@ const realtimeClients = new Set();
 const presenceTouches = new Map();
 const CYRILLIC_CITY_PATTERN = /^[А-ЯЁа-яёІіҢңҒғҮүҰұҚқӨөҺһӘәЎўЇїЄєҐґЏџЉљЊњЋћЌќ\s.'’()-]+$/u;
 const PROFILE_TABS = new Set(["main", "author-books", "excerpts", "publisher-news", "library", "wishlist", "reviews", "events", "friends"]);
+
+function deletionDaysRemaining(value) {
+  if (!value) return 0;
+  return Math.max(0, Math.ceil((new Date(value).getTime() - Date.now()) / 86_400_000));
+}
+
+async function removeAvatarFile(publicPath) {
+  if (!String(publicPath ?? "").startsWith("/uploads/")) return;
+  const uploadDirectory = path.resolve(projectRoot, process.env.UPLOAD_DIR || "uploads");
+  const target = path.resolve(uploadDirectory, String(publicPath).slice("/uploads/".length));
+  if (target !== uploadDirectory && target.startsWith(`${uploadDirectory}${path.sep}`)) {
+    await unlink(target).catch((error) => { if (error?.code !== "ENOENT") console.warn("Unable to remove deleted profile avatar", error); });
+  }
+}
+
+async function purgeDeletedProfile(connection, userId) {
+  const [[account]] = await connection.query("SELECT deleted_at, purged_at FROM users WHERE id = ? FOR UPDATE", [userId]);
+  if (!account?.deleted_at || account.purged_at) return false;
+  const tombstone = `deleted-${userId}-${randomBytes(6).toString("hex")}`;
+  await connection.query("DELETE FROM messages WHERE sender_user_id = ? OR recipient_user_id = ?", [userId, userId]);
+  await connection.query("DELETE FROM sessions WHERE user_id = ?", [userId]);
+  await connection.query("DELETE FROM friend_requests WHERE from_user_id = ? OR to_user_id = ?", [userId, userId]);
+  await connection.query("DELETE FROM friendships WHERE user_low_id = ? OR user_high_id = ?", [userId, userId]);
+  await connection.query("DELETE FROM follows WHERE follower_user_id = ? OR target_user_id = ?", [userId, userId]);
+  await connection.query("DELETE FROM user_blocks WHERE blocker_user_id = ? OR blocked_user_id = ?", [userId, userId]);
+  await connection.query("DELETE FROM event_reminders WHERE user_id = ?", [userId]);
+  await connection.query("DELETE FROM wishlist_items WHERE user_id = ?", [userId]);
+  await connection.query("DELETE FROM user_books WHERE user_id = ? AND is_author = 0", [userId]);
+  await connection.query("DELETE FROM material_likes WHERE user_id = ?", [userId]);
+  await connection.query("DELETE FROM notifications WHERE user_id = ? OR actor_user_id = ?", [userId, userId]);
+  await connection.query("DELETE FROM reports WHERE reporter_user_id = ? OR target_user_id = ?", [userId, userId]);
+  await connection.query(
+    `UPDATE profiles SET display_name = 'Удалённый пользователь', city = '', city_id = NULL, gender = 'Не указан', birth_date = NULL,
+            show_birth_date_to_friends = 0, profile_tab_order = NULL, bio = '', author_influences = '', writing_themes = '', weekend = '', joy = '', talk = '',
+            stranger_message = '', favorite_genres = '[]', disliked_genres = '[]', publisher_website = NULL, publisher_sales_links = NULL,
+            publisher_legal_name = NULL, publisher_bin = NULL, publisher_account = NULL, publisher_bik = NULL, publisher_bank = NULL,
+            publisher_legal_address = NULL, publisher_postal_address = NULL, publisher_moderation_note = NULL WHERE user_id = ?`,
+    [userId],
+  );
+  await connection.query(
+    `UPDATE users SET username = ?, username_key = ?, email = NULL, email_key = NULL, password_hash = ?, google_subject = NULL,
+            telegram_subject = NULL, totp_secret = NULL, totp_pending_secret = NULL, totp_pending_expires_at = NULL,
+            totp_recovery_codes = NULL, totp_enabled = 0, initials = '—', avatar_path = NULL,
+            profile_completed = 0, deletion_expires_at = NULL, purged_at = UTC_TIMESTAMP(), last_seen_at = NULL WHERE id = ?`,
+    [tombstone, tombstone, await hashPassword(randomBytes(32).toString("base64url")), userId],
+  );
+  return true;
+}
 
 async function assertAdultMaterialAllowed(connection, userId, isAdult) {
   if (!isAdult) return;
@@ -99,6 +147,21 @@ async function deliverDueEventReminders() {
 const reminderTimer = setInterval(deliverDueEventReminders, 5 * 60 * 1000);
 reminderTimer.unref?.();
 setTimeout(deliverDueEventReminders, 15_000).unref?.();
+
+async function purgeExpiredDeletedProfiles() {
+  try {
+    const [rows] = await getPool().query(
+      "SELECT id FROM users WHERE deleted_at IS NOT NULL AND purged_at IS NULL AND deletion_expires_at <= UTC_TIMESTAMP() LIMIT 100",
+    );
+    for (const row of rows) await withTransaction((connection) => purgeDeletedProfile(connection, Number(row.id)));
+  } catch (error) {
+    console.warn("Не удалось удалить профили с истёкшим сроком хранения:", error.message);
+  }
+}
+
+const deletedProfileCleanupTimer = setInterval(purgeExpiredDeletedProfiles, 6 * 60 * 60 * 1000);
+deletedProfileCleanupTimer.unref?.();
+setTimeout(purgeExpiredDeletedProfiles, 30_000).unref?.();
 
 function asyncRoute(handler) {
   return (request, response, next) => Promise.resolve(handler(request, response, next)).catch(next);
@@ -365,7 +428,8 @@ async function authenticatedUser(request) {
   if (!token) return null;
   const tokenHash = hashSessionToken(token);
   const [[user]] = await getPool().query(
-    `SELECT u.id, u.username, u.suspension_reason, u.suspended_until, u.suspended_permanently
+    `SELECT u.id, u.username, u.suspension_reason, u.suspended_until, u.suspended_permanently,
+            u.deleted_at, u.deletion_expires_at, u.purged_at
        FROM sessions s JOIN users u ON u.id = s.user_id
       WHERE s.token_hash = ? AND s.expires_at > UTC_TIMESTAMP() LIMIT 1`, [tokenHash],
   );
@@ -383,6 +447,9 @@ async function authenticatedUser(request) {
   }
   return {
     id: userId, username: user.username, tokenHash,
+    deletedProfile: Boolean(user.deleted_at && !user.purged_at),
+    deletionExpiresAt: user.deletion_expires_at ? new Date(user.deletion_expires_at).toISOString() : null,
+    purged: Boolean(user.purged_at),
     suspension: user.suspended_permanently || user.suspended_until ? {
       permanent: Boolean(user.suspended_permanently),
       until: user.suspended_until ? new Date(user.suspended_until).toISOString() : null,
@@ -394,6 +461,7 @@ async function authenticatedUser(request) {
 async function requireUser(request, response, next) {
   const user = await authenticatedUser(request);
   if (!user) return response.status(401).json({ error: "Требуется вход" });
+  if (user.deletedProfile || user.purged) return response.status(410).json({ deletedProfile: true, purged: user.purged, daysRemaining: deletionDaysRemaining(user.deletionExpiresAt) });
   if (user.suspension) return response.status(423).json({ suspended: true, ...user.suspension });
   request.bookMeetUser = user;
   next();
@@ -671,13 +739,16 @@ function occasionPayload(body = {}) {
 async function knownCity(connection, name, preferredId) {
   const cleanName = String(name ?? "").trim();
   if (!cleanName || !CYRILLIC_CITY_PATTERN.test(cleanName)) throw Object.assign(new Error("Выберите город из списка на кириллице"), { statusCode: 400 });
-  const params = preferredId ? [Number(preferredId), normalizeIdentity(cleanName)] : [normalizeIdentity(cleanName)];
   const sql = preferredId
-    ? "SELECT id, name FROM cities WHERE id = ? AND name_key = ? LIMIT 1"
-    : "SELECT id, name FROM cities WHERE name_key = ? LIMIT 1";
-  const [[city]] = await connection.query(sql, params);
-  if (!city || !CYRILLIC_CITY_PATTERN.test(city.name)) throw Object.assign(new Error("Выберите город из предложенного списка"), { statusCode: 400 });
-  return { id: Number(city.id), name: city.name };
+    ? `SELECT c.id, ? AS selected_name FROM cities c
+        WHERE c.id = ? AND (c.name_key = ? OR EXISTS (SELECT 1 FROM city_aliases ca WHERE ca.city_id = c.id AND ca.name_key = ?)) LIMIT 1`
+    : `SELECT c.id, ? AS selected_name FROM cities c
+        WHERE c.name_key = ? OR EXISTS (SELECT 1 FROM city_aliases ca WHERE ca.city_id = c.id AND ca.name_key = ?) LIMIT 1`;
+  const nameKey = normalizeIdentity(cleanName);
+  const queryParams = preferredId ? [cleanName, Number(preferredId), nameKey, nameKey] : [cleanName, nameKey, nameKey];
+  const [[city]] = await connection.query(sql, queryParams);
+  if (!city || !CYRILLIC_CITY_PATTERN.test(city.selected_name)) throw Object.assign(new Error("Выберите город из предложенного списка"), { statusCode: 400 });
+  return { id: Number(city.id), name: city.selected_name };
 }
 
 async function knownCities(connection, names) {
@@ -703,6 +774,13 @@ async function blockExists(connection, firstUserId, secondUserId) {
 }
 
 async function assertUsersCanInteract(connection, firstUserId, secondUserId) {
+  const [[inactive]] = await connection.query(
+    "SELECT id FROM users WHERE id IN (?, ?) AND (deleted_at IS NOT NULL OR purged_at IS NOT NULL) LIMIT 1",
+    [firstUserId, secondUserId],
+  );
+  if (inactive) {
+    throw Object.assign(new Error("Взаимодействие с удалённым профилем недоступно"), { statusCode: 410 });
+  }
   if (await blockExists(connection, firstUserId, secondUserId)) {
     throw Object.assign(new Error("Взаимодействие с этим пользователем недоступно"), { statusCode: 403 });
   }
@@ -856,7 +934,7 @@ router.post("/auth/login", asyncRoute(async (request, response) => {
   const totp = String(request.body?.totp ?? "");
   if (!isValidEmail(email) || !password) return response.status(400).json({ error: "Введите e-mail и пароль" });
   const [[account]] = await getPool().query(
-    "SELECT id, password_hash, totp_secret, totp_enabled, suspension_reason, suspended_until, suspended_permanently FROM users WHERE email_key = ? LIMIT 1",
+    "SELECT id, password_hash, totp_secret, totp_enabled, suspension_reason, suspended_until, suspended_permanently, deleted_at, deletion_expires_at, purged_at FROM users WHERE email_key = ? LIMIT 1",
     [email],
   );
   if (!account || !(await verifyPassword(password, account.password_hash))) {
@@ -879,6 +957,15 @@ router.post("/auth/login", asyncRoute(async (request, response) => {
     });
   }
   loginAttempts.delete(attempt.key);
+  if (account.deleted_at && !account.purged_at) {
+    if (!account.deletion_expires_at || new Date(account.deletion_expires_at).getTime() <= Date.now()) {
+      await withTransaction((connection) => purgeDeletedProfile(connection, account.id));
+      return response.status(410).json({ error: "Срок хранения удалённого профиля истёк. Создайте новый профиль." });
+    }
+    const token = await createSession(getPool(), account.id);
+    response.setHeader("Set-Cookie", sessionCookie(token, request));
+    return response.status(202).json({ deletedProfile: true, daysRemaining: deletionDaysRemaining(account.deletion_expires_at) });
+  }
   const token = await createSession(getPool(), account.id);
   response.setHeader("Set-Cookie", sessionCookie(token, request));
   response.json(await loadBootstrap(account.id));
@@ -985,8 +1072,13 @@ router.get("/cities", asyncRoute(async (request, response) => {
   const query = normalizeIdentity(request.query.q ?? "").slice(0, 120);
   if (query.length < 1 || !CYRILLIC_CITY_PATTERN.test(query)) return response.json({ cities: [] });
   const [rows] = await getPool().query(
-    `SELECT id, name, country_code, country_name
-       FROM cities
+    `SELECT DISTINCT id, name, country_code, country_name, population, name_key
+       FROM (
+         SELECT c.id, c.name, c.country_code, c.country_name, c.population, c.name_key FROM cities c
+         UNION ALL
+         SELECT c.id, ca.name, c.country_code, c.country_name, c.population, ca.name_key
+           FROM city_aliases ca JOIN cities c ON c.id = ca.city_id
+       ) city_names
       WHERE name_key LIKE ?
       ORDER BY CASE WHEN name_key = ? THEN 0 WHEN name_key LIKE ? THEN 1 ELSE 2 END, population DESC, name
       LIMIT 80`,
@@ -1030,6 +1122,56 @@ router.post("/auth/logout", asyncRoute(async (request, response) => {
   response.json({ ok: true });
 }));
 
+router.post("/auth/deleted-profile/restore", asyncRoute(async (request, response) => {
+  const user = await authenticatedUser(request);
+  if (!user?.deletedProfile || user.purged) return response.status(409).json({ error: "Профиль уже нельзя восстановить" });
+  if (!user.deletionExpiresAt || new Date(user.deletionExpiresAt).getTime() <= Date.now()) {
+    await withTransaction((connection) => purgeDeletedProfile(connection, user.id));
+    return response.status(410).json({ error: "Срок хранения профиля истёк" });
+  }
+  await getPool().query("UPDATE users SET deleted_at = NULL, deletion_expires_at = NULL, last_seen_at = UTC_TIMESTAMP() WHERE id = ?", [user.id]);
+  response.json(await loadBootstrap(user.id));
+}));
+
+router.post("/auth/deleted-profile/new", asyncRoute(async (request, response) => {
+  const user = await authenticatedUser(request);
+  if (!user?.deletedProfile || user.purged) return response.status(409).json({ error: "Удалённый профиль не найден" });
+  const result = await withTransaction(async (connection) => {
+    const [[oldAccount]] = await connection.query(
+      "SELECT email, email_key, password_hash, google_subject, telegram_subject, deletion_expires_at FROM users WHERE id = ? FOR UPDATE",
+      [user.id],
+    );
+    if (!oldAccount?.email_key || !oldAccount.deletion_expires_at || new Date(oldAccount.deletion_expires_at).getTime() <= Date.now()) {
+      await purgeDeletedProfile(connection, user.id);
+      throw Object.assign(new Error("Срок хранения профиля истёк"), { statusCode: 410 });
+    }
+    const email = oldAccount.email;
+    const emailKey = oldAccount.email_key;
+    const passwordHash = oldAccount.password_hash;
+    const googleSubject = oldAccount.google_subject;
+    const telegramSubject = oldAccount.telegram_subject;
+    await purgeDeletedProfile(connection, user.id);
+    const username = await uniqueInternalUsername(connection, emailKey.split("@")[0] || "reader");
+    const displayName = safeProfileName(emailKey.split("@")[0], username);
+    const initials = displayName.split(/\s+/).slice(0, 2).map((part) => part[0]).join("").toLocaleUpperCase("ru-RU").slice(0, 4) || "BM";
+    const colors = ["navy", "blue", "green", "red", "gold"];
+    const [created] = await connection.query(
+      `INSERT INTO users (username, username_key, email, email_key, password_hash, google_subject, telegram_subject, initials, color, role, profile_completed)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'user', 0)`,
+      [username, normalizeIdentity(username), email, emailKey, passwordHash, googleSubject, telegramSubject, initials, colors[Date.now() % colors.length]],
+    );
+    const newUserId = Number(created.insertId);
+    await connection.query(
+      `INSERT INTO profiles (user_id, display_name, city, city_id, profile_type, gender, bio, author_influences, writing_themes, weekend, joy, talk, stranger_message, favorite_genres, disliked_genres)
+       VALUES (?, ?, '', NULL, 'Читатель', 'Не указан', '', '', '', '', '', '', '', '[]', '[]')`,
+      [newUserId, displayName],
+    );
+    return { userId: newUserId, token: await createSession(connection, newUserId) };
+  });
+  response.setHeader("Set-Cookie", sessionCookie(result.token, request));
+  response.status(201).json(await loadBootstrap(result.userId));
+}));
+
 router.use(createBootstrapRouter({ authenticatedUser }));
 
 router.get("/admin/statistics", asyncRoute(async (request, response) => {
@@ -1043,7 +1185,7 @@ router.get("/admin/statistics", asyncRoute(async (request, response) => {
     `SELECT p.profile_type AS profile_type, COUNT(*) AS total
        FROM users u
        JOIN profiles p ON p.user_id = u.id
-      WHERE u.role <> 'admin'
+      WHERE u.role <> 'admin' AND u.deleted_at IS NULL AND u.purged_at IS NULL
       GROUP BY p.profile_type
       ORDER BY p.profile_type`,
   );
@@ -1051,7 +1193,7 @@ router.get("/admin/statistics", asyncRoute(async (request, response) => {
     `SELECT TRIM(p.city) AS city, COUNT(*) AS total
        FROM users u
        JOIN profiles p ON p.user_id = u.id
-      WHERE u.role <> 'admin' AND TRIM(COALESCE(p.city, '')) <> ''
+      WHERE u.role <> 'admin' AND u.deleted_at IS NULL AND u.purged_at IS NULL AND TRIM(COALESCE(p.city, '')) <> ''
       GROUP BY TRIM(p.city)
       ORDER BY total DESC, city`,
   );
@@ -1121,6 +1263,25 @@ router.use((request, response, next) => {
   }
   next();
 });
+
+router.delete("/users/me/profile", asyncRoute(async (request, response) => {
+  const userId = request.bookMeetUser.id;
+  const [[account]] = await getPool().query("SELECT role, avatar_path, deleted_at FROM users WHERE id = ?", [userId]);
+  if (!account || account.role === "admin") return response.status(403).json({ error: "Профиль администратора нельзя удалить этим способом" });
+  if (!account.deleted_at) {
+    await withTransaction(async (connection) => {
+      await connection.query("DELETE FROM messages WHERE sender_user_id = ? OR recipient_user_id = ?", [userId, userId]);
+      await connection.query("DELETE FROM sessions WHERE user_id = ?", [userId]);
+      await connection.query(
+        "UPDATE users SET avatar_path = NULL, deleted_at = UTC_TIMESTAMP(), deletion_expires_at = DATE_ADD(UTC_TIMESTAMP(), INTERVAL 1 YEAR), last_seen_at = NULL WHERE id = ?",
+        [userId],
+      );
+    });
+    await removeAvatarFile(account.avatar_path);
+  }
+  response.setHeader("Set-Cookie", clearSessionCookie(request));
+  response.json({ ok: true, retentionDays: 365 });
+}));
 
 router.use(asyncRoute(async (request, response, next) => {
   if (["GET", "HEAD", "OPTIONS"].includes(request.method)
@@ -1298,7 +1459,7 @@ router.get("/events/:id/attendees", asyncRoute(async (request, response) => {
     return response.status(404).json({ error: "Событие не найдено" });
   }
   await assertAdultMaterialReadable(pool, userId, "event", eventId);
-  const [[countRow]] = await pool.query("SELECT COUNT(*) AS total FROM event_reminders WHERE event_id = ?", [eventId]);
+  const [[countRow]] = await pool.query("SELECT COUNT(*) AS total FROM event_reminders er JOIN users u ON u.id = er.user_id WHERE er.event_id = ? AND u.deleted_at IS NULL AND u.purged_at IS NULL", [eventId]);
   const total = Number(countRow?.total ?? 0);
   const pageCount = Math.max(1, Math.ceil(total / pageSize));
   const safePage = Math.min(page, pageCount);
@@ -1307,7 +1468,7 @@ router.get("/events/:id/attendees", asyncRoute(async (request, response) => {
        FROM event_reminders er
        JOIN users u ON u.id = er.user_id
        JOIN profiles p ON p.user_id = u.id
-      WHERE er.event_id = ?
+      WHERE er.event_id = ? AND u.deleted_at IS NULL AND u.purged_at IS NULL
       ORDER BY er.created_at, er.user_id
       LIMIT ? OFFSET ?`,
     [eventId, pageSize, (safePage - 1) * pageSize],
@@ -2191,6 +2352,30 @@ router.delete("/admin/users/:id/suspension", asyncRoute(async (request, response
     await connection.query("UPDATE users SET suspension_reason = NULL, suspended_until = NULL, suspended_permanently = 0 WHERE id = ?", [Number(request.params.id)]);
   });
   response.json({ ok: true });
+}));
+
+router.post("/admin/users/:id/restore", asyncRoute(async (request, response) => {
+  const adminId = request.bookMeetUser.id;
+  const targetId = Number(request.params.id);
+  await withTransaction(async (connection) => {
+    if (!(await isAdmin(connection, adminId))) throw Object.assign(new Error("Доступно только администратору"), { statusCode: 403 });
+    const [[target]] = await connection.query("SELECT role, deleted_at, purged_at FROM users WHERE id = ? FOR UPDATE", [targetId]);
+    if (!target || target.role === "admin" || !target.deleted_at || target.purged_at) throw Object.assign(new Error("Удалённый профиль не найден или уже удалён окончательно"), { statusCode: 404 });
+    await connection.query("UPDATE users SET deleted_at = NULL, deletion_expires_at = NULL WHERE id = ?", [targetId]);
+  });
+  response.json({ ok: true });
+}));
+
+router.delete("/admin/users/:id/permanent", asyncRoute(async (request, response) => {
+  const adminId = request.bookMeetUser.id;
+  const targetId = Number(request.params.id);
+  await withTransaction(async (connection) => {
+    if (!(await isAdmin(connection, adminId))) throw Object.assign(new Error("Доступно только администратору"), { statusCode: 403 });
+    const [[target]] = await connection.query("SELECT role, deleted_at, purged_at FROM users WHERE id = ? FOR UPDATE", [targetId]);
+    if (!target || target.role === "admin" || !target.deleted_at || target.purged_at) throw Object.assign(new Error("Удалённый профиль не найден или уже удалён окончательно"), { statusCode: 404 });
+    await purgeDeletedProfile(connection, targetId);
+  });
+  response.json({ ok: true, irreversible: true });
 }));
 
 router.get("/reactions", asyncRoute(async (request, response) => {

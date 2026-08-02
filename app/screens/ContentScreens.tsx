@@ -40,7 +40,10 @@ export function HomeContent({ reviews, excerpts, events, occasions, currentUserT
   const showMonthlyBooks = false;
   const currentCity = currentUser.profile.city;
   const normalizeCity = (value: string) => value.trim().toLocaleLowerCase("ru");
-  const scopedEvents = (eventScope === "country" ? events : events.filter((item) => normalizeCity(item.city) === normalizeCity(currentCity))).slice().sort((first, second) => Number(Boolean(second.pinned)) - Number(Boolean(first.pinned)) || eventTimestamp(first) - eventTimestamp(second));
+  const scopedEvents = events.filter((item) => eventScope === "country"
+    ? item.country?.toLocaleLowerCase("ru") === currentUser.profile.country?.toLocaleLowerCase("ru")
+    : normalizeCity(item.city) === normalizeCity(currentCity))
+    .slice().sort((first, second) => Number(Boolean(second.pinned)) - Number(Boolean(first.pinned)) || eventTimestamp(first) - eventTimestamp(second));
   const scopedOccasions = (occasionScope === "country" ? occasions : occasions.filter((item) => item.targetCities.some((city) => normalizeCity(city) === normalizeCity(currentCity)))).slice().sort((first, second) => (Date.parse(second.createdAt) || second.id) - (Date.parse(first.createdAt) || first.id));
   const createPublication = () => currentUserType === "writer" || currentUserType === "blogger" ? onCreateExcerpt() : setWriterOnlyWarning(true);
 

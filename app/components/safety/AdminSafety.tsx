@@ -16,7 +16,7 @@ function reportObjectLabel(report: SafetyReport) {
 }
 
 export function AdminSafetySection({ mode, reports, users, onBack, onOpenUser, onOpenChat, onRefresh }: {
-  mode: "reports-new" | "reports-reviewed" | "users-active" | "users-blocked";
+  mode: "reports-new" | "reports-reviewed" | "users-active" | "users-blocked" | "users-deleted";
   reports: SafetyReport[];
   users: DemoUser[];
   onBack: () => void;
@@ -33,7 +33,7 @@ export function AdminSafetySection({ mode, reports, users, onBack, onOpenUser, o
   const [suspensionReason, setSuspensionReason] = useState("");
   const [view, setView] = useState<"grid" | "list">("grid");
   const shownReports = reports.filter((item) => item.status === (mode === "reports-new" ? "new" : "reviewed"));
-  const shownUsers = useMemo(() => users.filter((user) => !user.isAdmin && (mode === "users-blocked" ? Boolean(user.suspension) : !user.suspension)), [users, mode]);
+  const shownUsers = useMemo(() => users.filter((user) => !user.isAdmin && (mode === "users-deleted" ? Boolean(user.deletedAt && !user.purged) : !user.deletedAt && !user.purged && (mode === "users-blocked" ? Boolean(user.suspension) : !user.suspension))), [users, mode]);
 
   async function action(url: string, options: RequestInit = {}) {
     const response = await fetch(url, { credentials: "same-origin", ...options, headers: { "content-type": "application/json", ...(options.headers ?? {}) } });
@@ -45,10 +45,10 @@ export function AdminSafetySection({ mode, reports, users, onBack, onOpenUser, o
     onRefresh();
   }
 
-  if (mode === "users-active" || mode === "users-blocked") return <div className="admin-safety-page">
+  if (mode === "users-active" || mode === "users-blocked" || mode === "users-deleted") return <div className="admin-safety-page">
     <button className="back-button" type="button" onClick={onBack}>← В админку</button>
-    <div className="admin-catalog-heading"><div><span className="section-subtitle">Пользователи</span><h1>{mode === "users-blocked" ? "Заблокированные пользователи" : "Активные пользователи"}</h1><p>{shownUsers.length} профилей</p></div><div className="admin-user-view-toggle"><button className={view === "grid" ? "active" : ""} type="button" onClick={() => setView("grid")}>Плитка</button><button className={view === "list" ? "active" : ""} type="button" onClick={() => setView("list")}>Список</button></div></div>
-    <div className={`admin-user-directory ${view}`}>{shownUsers.map((user) => <article key={user.id} onClick={() => onOpenUser(user.id)}><span className={`avatar avatar-sm avatar-${user.color}`}>{user.initials}</span><div><strong>{user.profile.name}</strong><p>{user.profile.type} · {user.profile.city}</p>{user.suspension && <small>{user.suspension.permanent ? "Бессрочно" : `До ${new Date(user.suspension.until ?? "").toLocaleDateString("ru-RU")}`} · {user.suspension.reason}</small>}</div>{user.suspension && <button className="outline-button" type="button" onClick={(event) => { event.stopPropagation(); void action(`/api/admin/users/${user.id}/suspension`, { method: "DELETE" }); }}>Разблокировать</button>}</article>)}</div>
+    <div className="admin-catalog-heading"><div><span className="section-subtitle">Пользователи</span><h1>{mode === "users-deleted" ? "Удалённые пользователи" : mode === "users-blocked" ? "Заблокированные пользователи" : "Активные пользователи"}</h1><p>{shownUsers.length} профилей</p></div><div className="admin-user-view-toggle"><button className={view === "grid" ? "active" : ""} type="button" onClick={() => setView("grid")}>Плитка</button><button className={view === "list" ? "active" : ""} type="button" onClick={() => setView("list")}>Список</button></div></div>
+    <div className={`admin-user-directory ${view}`}>{shownUsers.map((user) => <article key={user.id} onClick={() => onOpenUser(user.id)}><span className={`avatar avatar-sm avatar-${user.color}`}>{user.initials}</span><div><strong>{user.profile.name}</strong><p>{user.profile.type} · {user.profile.city}</p>{user.suspension && <small>{user.suspension.permanent ? "Бессрочно" : `До ${new Date(user.suspension.until ?? "").toLocaleDateString("ru-RU")}`} · {user.suspension.reason}</small>}{mode === "users-deleted" && <small>{user.purged ? "Удалён окончательно" : `Хранится до ${new Date(user.deletionExpiresAt ?? "").toLocaleDateString("ru-RU")}`}</small>}</div>{user.suspension && <button className="outline-button" type="button" onClick={(event) => { event.stopPropagation(); void action(`/api/admin/users/${user.id}/suspension`, { method: "DELETE" }); }}>Разблокировать</button>}{mode === "users-deleted" && !user.purged && <div className="admin-deleted-user-actions"><button className="outline-button" type="button" title="Восстановить профиль" aria-label="Восстановить профиль" onClick={(event) => { event.stopPropagation(); void action(`/api/admin/users/${user.id}/restore`, { method: "POST" }); }}>↶</button><button className="quiet-danger-button" type="button" title="Удалить окончательно" aria-label="Удалить окончательно" onClick={(event) => { event.stopPropagation(); if (window.confirm("Удалить профиль окончательно? Это действие нельзя отменить.")) void action(`/api/admin/users/${user.id}/permanent`, { method: "DELETE" }); }}>🗑</button></div>}</article>)}</div>
   </div>;
 
   return <div className="admin-safety-page">

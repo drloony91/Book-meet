@@ -29,6 +29,11 @@ export function createBootstrapRouter({ authenticatedUser, loadData = loadBootst
       response.status(423).json({ suspended: true, ...user.suspension });
       return null;
     }
+    if (user.deletedProfile || user.purged) {
+      const daysRemaining = user.deletionExpiresAt ? Math.max(0, Math.ceil((new Date(user.deletionExpiresAt).getTime() - Date.now()) / 86_400_000)) : 0;
+      response.status(410).json({ deletedProfile: true, purged: user.purged, daysRemaining });
+      return null;
+    }
     return user;
   }
 

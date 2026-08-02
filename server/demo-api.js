@@ -112,7 +112,7 @@ const state = {
     id: 41, creatorId: 2, title: "Встреча с авторами издательства «Тест»",
     summary: "Разговор о новых казахстанских книгах и автограф-сессия.",
     description: "Познакомимся с авторами осенних новинок и обсудим, как рождаются современные книги.",
-    date: "2026-12-12", time: "18:30", city: "Астана", cityId: 1,
+    date: "2026-12-12", time: "18:30", city: "Астана", cityId: 1, country: "Казахстан",
     address: "проспект Республики, 1", mapUrl: "", detailsUrl: "",
     status: "published", moderationNote: "", pinned: false, reminderUserIds: [], reminderCount: 0, createdAt: new Date().toISOString(),
   }],
@@ -136,6 +136,7 @@ function requireUser(request, response, next) {
   const userId = currentUserId(request);
   if (!userId) return response.status(401).json({ error: "Требуется вход" });
   const user = users.find((item) => item.id === userId);
+  if (user?.deletedAt || user?.purged) return response.status(410).json({ deletedProfile: true, purged: Boolean(user.purged), daysRemaining: user.deletionExpiresAt ? Math.max(0, Math.ceil((new Date(user.deletionExpiresAt).getTime() - Date.now()) / 86_400_000)) : 0 });
   if (user?.suspension && (user.suspension.permanent || new Date(user.suspension.until).getTime() > Date.now())) return response.status(423).json({ suspended: true, ...user.suspension });
   if (user?.suspension) delete user.suspension;
   request.demoUserId = userId;
@@ -201,13 +202,19 @@ router.post("/auth/login", (request, response) => {
   const token = randomBytes(24).toString("hex");
   sessions.set(token, account.id);
   response.setHeader("Set-Cookie", `book_meet_demo=${token}; Path=/; HttpOnly; SameSite=Lax`);
+  if (account.deletedAt || account.purged) return response.status(202).json({ deletedProfile: true, purged: Boolean(account.purged), daysRemaining: account.deletionExpiresAt ? Math.max(0, Math.ceil((new Date(account.deletionExpiresAt).getTime() - Date.now()) / 86_400_000)) : 0 });
   response.json(bootstrap(account.id));
 });
 
-const demoCities = ["Астана", "Алматы", "Шымкент", "Караганда", "Актобе", "Атырау", "Павлодар", "Костанай", "Тараз", "Бишкек", "Ташкент", "Минск", "Москва", "Ереван", "Баку"];
+const demoCities = [
+  ["Астана", "Казахстан"], ["Алматы", "Казахстан"], ["Шымкент", "Казахстан"], ["Караганда", "Казахстан"], ["Қарағанды", "Казахстан"],
+  ["Актобе", "Казахстан"], ["Ақтөбе", "Казахстан"], ["Жезказган", "Казахстан"], ["Жезқазған", "Казахстан"], ["Атырау", "Казахстан"],
+  ["Павлодар", "Казахстан"], ["Костанай", "Казахстан"], ["Қостанай", "Казахстан"], ["Тараз", "Казахстан"], ["Түркістан", "Казахстан"],
+  ["Бишкек", "Кыргызстан"], ["Ташкент", "Узбекистан"], ["Минск", "Беларусь"], ["Москва", "Россия"], ["Тюмень", "Россия"], ["Ереван", "Армения"], ["Баку", "Азербайджан"],
+];
 router.get("/cities", (request, response) => {
   const query = String(request.query.q ?? "").trim().toLocaleLowerCase("ru");
-  response.json({ cities: demoCities.filter((city) => city.toLocaleLowerCase("ru").includes(query)).map((name, index) => ({ id: index + 1, name, countryCode: "", country: name === "Астана" || name === "Алматы" ? "Казахстан" : "СНГ" })) });
+  response.json({ cities: demoCities.filter(([city]) => city.toLocaleLowerCase("ru").includes(query)).map(([name, country], index) => ({ id: index + 1, name, countryCode: "", country })) });
 });
 
 router.post("/auth/register", (request, response) => {
@@ -230,6 +237,7 @@ router.get("/bootstrap", (request, response) => {
   const userId = currentUserId(request);
   if (!userId) return response.status(401).json({ error: "Требуется вход" });
   const user = users.find((item) => item.id === userId);
+  if (user?.deletedAt || user?.purged) return response.status(410).json({ deletedProfile: true, purged: Boolean(user.purged), daysRemaining: user.deletionExpiresAt ? Math.max(0, Math.ceil((new Date(user.deletionExpiresAt).getTime() - Date.now()) / 86_400_000)) : 0 });
   if (user?.suspension && (user.suspension.permanent || new Date(user.suspension.until).getTime() > Date.now())) return response.status(423).json({ suspended: true, ...user.suspension });
   response.json(bootstrap(userId));
 });
@@ -238,6 +246,7 @@ router.get("/bootstrap/:section", (request, response) => {
   const userId = currentUserId(request);
   if (!userId) return response.status(401).json({ error: "Требуется вход" });
   const user = users.find((item) => item.id === userId);
+  if (user?.deletedAt || user?.purged) return response.status(410).json({ deletedProfile: true, purged: Boolean(user.purged), daysRemaining: user.deletionExpiresAt ? Math.max(0, Math.ceil((new Date(user.deletionExpiresAt).getTime() - Date.now()) / 86_400_000)) : 0 });
   if (user?.suspension && (user.suspension.permanent || new Date(user.suspension.until).getTime() > Date.now())) return response.status(423).json({ suspended: true, ...user.suspension });
   const keys = {
     session: ["activeUserId", "profileCompleted"],
@@ -248,6 +257,35 @@ router.get("/bootstrap/:section", (request, response) => {
   if (!keys) return response.status(404).json({ error: "Неизвестный набор данных" });
   const data = bootstrap(userId);
   response.json(Object.fromEntries(keys.map((key) => [key, data[key]])));
+});
+
+router.post("/auth/deleted-profile/restore", (request, response) => {
+  const userId = currentUserId(request);
+  const user = users.find((item) => item.id === userId);
+  if (!user?.deletedAt || user.purged) return response.status(409).json({ error: "Профиль нельзя восстановить" });
+  delete user.deletedAt;
+  delete user.deletionExpiresAt;
+  response.json(bootstrap(user.id));
+});
+
+router.post("/auth/deleted-profile/new", (request, response) => {
+  const oldUserId = currentUserId(request);
+  const oldUser = users.find((item) => item.id === oldUserId);
+  if (!oldUser?.deletedAt || oldUser.purged) return response.status(409).json({ error: "Новый профиль нельзя создать" });
+  const email = oldUser.email;
+  const password = passwords.get(oldUser.id);
+  oldUser.purged = true;
+  oldUser.email = `deleted-${oldUser.id}@invalid.local`;
+  oldUser.profile = { ...oldUser.profile, name: "Удалённый пользователь", city: "", cityId: undefined, bio: "", birthDate: undefined, age: undefined };
+  const displayName = String(email).split("@")[0];
+  const user = { id: nextId++, email, profileCompleted: false, username: displayName, initials: displayName.slice(0, 2).toLocaleUpperCase("ru"), color: "blue", joined: "сегодня", joinedAt: new Date().toISOString(), profile: { name: displayName, city: "", type: "Читатель", gender: "Не указан", bio: "", authorInfluences: "", writingThemes: "", weekend: "", joy: "", talk: "", strangerMessage: "", favoriteGenres: [], dislikedGenres: [] }, books: [], authorBooks: [], reviews: [], excerpts: [], wishBooks: [] };
+  users.push(user);
+  passwords.set(user.id, password);
+  const token = randomBytes(24).toString("hex");
+  sessions.delete(cookieValue(request, "book_meet_demo"));
+  sessions.set(token, user.id);
+  response.setHeader("Set-Cookie", `book_meet_demo=${token}; Path=/; HttpOnly; SameSite=Lax`);
+  response.status(201).json(bootstrap(user.id));
 });
 
 router.use(requireUser);
@@ -262,6 +300,39 @@ router.use((request, response, next) => {
     return response.status(403).json({ error: "Профиль издательства ожидает официального подтверждения" });
   }
   next();
+});
+
+router.delete("/users/me/profile", (request, response) => {
+  const user = users.find((item) => item.id === request.demoUserId);
+  if (!user || user.isAdmin) return response.status(403).json({ error: "Профиль администратора нельзя удалить" });
+  user.deletedAt = new Date().toISOString();
+  user.deletionExpiresAt = new Date(Date.now() + 365 * 86_400_000).toISOString();
+  delete user.avatarUrl;
+  for (const key of Object.keys(state.messages)) if (key.split("-").map(Number).includes(user.id)) delete state.messages[key];
+  for (const [token, userId] of sessions) if (userId === user.id) sessions.delete(token);
+  response.setHeader("Set-Cookie", "book_meet_demo=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0");
+  response.json({ ok: true, deletionExpiresAt: user.deletionExpiresAt });
+});
+
+router.post("/admin/users/:id/restore", (request, response) => {
+  const admin = users.find((item) => item.id === request.demoUserId);
+  const user = users.find((item) => item.id === Number(request.params.id));
+  if (!admin?.isAdmin) return response.status(403).json({ error: "Доступно только администратору" });
+  if (!user?.deletedAt || user.purged) return response.status(409).json({ error: "Профиль нельзя восстановить" });
+  delete user.deletedAt;
+  delete user.deletionExpiresAt;
+  response.json({ ok: true });
+});
+
+router.delete("/admin/users/:id/permanent", (request, response) => {
+  const admin = users.find((item) => item.id === request.demoUserId);
+  const user = users.find((item) => item.id === Number(request.params.id));
+  if (!admin?.isAdmin) return response.status(403).json({ error: "Доступно только администратору" });
+  if (!user?.deletedAt || user.purged) return response.status(409).json({ error: "Профиль нельзя удалить окончательно" });
+  user.purged = true;
+  user.email = `deleted-${user.id}@invalid.local`;
+  user.profile = { ...user.profile, name: "Удалённый пользователь", city: "", cityId: undefined, bio: "", birthDate: undefined, age: undefined };
+  response.json({ ok: true });
 });
 
 router.post("/reports", (request, response) => {
@@ -717,7 +788,7 @@ router.get("/material-stats", (_request, response) => {
 router.get("/admin/statistics", (request, response) => {
   const viewer = users.find((user) => user.id === request.demoUserId);
   if (!viewer?.isAdmin) return response.status(403).json({ error: "Доступно только администратору" });
-  const communityUsers = users.filter((user) => !user.isAdmin);
+  const communityUsers = users.filter((user) => !user.isAdmin && !user.deletedAt && !user.purged);
   const usersByType = { "Читатель": 0, "Писатель": 0, "Блогер": 0, "Издатель": 0 };
   const cityCounts = new Map();
   for (const user of communityUsers) {

@@ -18,6 +18,7 @@ export type BookEvent = {
   time: string;
   city: string;
   cityId?: number;
+  country?: string;
   address: string;
   mapUrl: string;
   detailsUrl: string;
@@ -168,15 +169,15 @@ export type SafetyReport = {
   materialId?: number;
   conversationMessages?: Message[];
 };
-export type DemoUser = { id: number; username: string; initials: string; color: string; avatarUrl?: string; joined: string; joinedAt?: string; online?: boolean; lastSeenAt?: string; isAdmin?: boolean; blockedByMe?: boolean; suspension?: UserSuspension; profile: UserProfileData; books: LibraryBook[]; reviews: UserReview[]; authorBooks?: AuthorBook[]; excerpts?: UserExcerpt[]; publisherNews?: PublisherNews[]; wishBooks?: WishBook[] };
+export type DemoUser = { id: number; username: string; initials: string; color: string; avatarUrl?: string; joined: string; joinedAt?: string; online?: boolean; lastSeenAt?: string; isAdmin?: boolean; blockedByMe?: boolean; suspension?: UserSuspension; deletedAt?: string; deletionExpiresAt?: string; purged?: boolean; profile: UserProfileData; books: LibraryBook[]; reviews: UserReview[]; authorBooks?: AuthorBook[]; excerpts?: UserExcerpt[]; publisherNews?: PublisherNews[]; wishBooks?: WishBook[] };
 
 export type AdultMaterialKind = "book" | "review" | "excerpt" | "event" | "occasion";
 export type AdultAccess = { status: "adult" | "minor" | "missing"; restricted: Partial<Record<AdultMaterialKind, number[]>> };
 export type BootstrapData = { activeUserId: number; profileCompleted?: boolean; adultAccess?: AdultAccess; users: DemoUser[]; messages: Record<string, Message[]>; friendRequests: FriendRequest[]; friendships: Friendship[]; follows: Follow[]; notifications: SocialNotification[]; likes: Record<string, number[]>; events?: BookEvent[]; occasions?: Occasion[]; blocks?: UserBlock[]; blockedByUserIds?: number[]; reports?: SafetyReport[] };
-export type AuthResult = { error?: string; requiresTotp?: boolean };
+export type AuthResult = { error?: string; requiresTotp?: boolean; deletedProfile?: boolean; daysRemaining?: number };
 
 export type AdminMaterialKind = "book" | "review" | "excerpt" | "event" | "occasion";
-export type AdminSection = "dashboard" | "moderation" | "reports-new" | "reports-reviewed" | "users-active" | "users-blocked" | AdminMaterialKind;
+export type AdminSection = "dashboard" | "moderation" | "reports-new" | "reports-reviewed" | "users-active" | "users-blocked" | "users-deleted" | AdminMaterialKind;
 export type AdminCatalogItem = {
   id: number;
   kind: AdminMaterialKind;

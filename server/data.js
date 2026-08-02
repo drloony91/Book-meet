@@ -46,6 +46,7 @@ export async function loadUsers(connection = getPool(), viewerId = null) {
   ) : [[]];
   const [userRows] = await connection.query(
     `SELECT u.id, u.username, u.initials, u.color, u.avatar_path, u.role, u.created_at, u.last_seen_at,
+            u.deleted_at, u.deletion_expires_at, u.purged_at,
             u.suspension_reason, u.suspended_until, u.suspended_permanently,
             p.display_name, p.city, p.city_id, c.country_name, p.profile_type, p.gender, p.birth_date, p.show_birth_date_to_friends, p.profile_tab_order,
             p.bio, p.author_influences, p.writing_themes, p.weekend, p.joy, p.talk,
@@ -160,7 +161,7 @@ export async function loadUsers(connection = getPool(), viewerId = null) {
       username: row.username,
       initials: row.initials,
       color: row.color,
-      avatarUrl: row.avatar_path ?? undefined,
+      avatarUrl: row.deleted_at || row.purged_at ? undefined : row.avatar_path ?? undefined,
       isAdmin: row.role === "admin",
       blockedByMe: blockRows.some((block) => Number(block.blocker_user_id) === Number(viewerId) && Number(block.blocked_user_id) === Number(row.id)),
       suspension: viewerIsAdmin && (row.suspended_permanently || row.suspended_until) ? {
@@ -170,8 +171,11 @@ export async function loadUsers(connection = getPool(), viewerId = null) {
       } : undefined,
       joined: formatDate(row.created_at),
       joinedAt: new Date(row.created_at).toISOString(),
-      online: Boolean(row.last_seen_at && Date.now() - new Date(row.last_seen_at).getTime() < 90_000),
+      online: Boolean(!row.deleted_at && !row.purged_at && row.last_seen_at && Date.now() - new Date(row.last_seen_at).getTime() < 90_000),
       lastSeenAt: row.last_seen_at ? new Date(row.last_seen_at).toISOString() : undefined,
+      deletedAt: row.deleted_at ? new Date(row.deleted_at).toISOString() : undefined,
+      deletionExpiresAt: row.deletion_expires_at ? new Date(row.deletion_expires_at).toISOString() : undefined,
+      purged: Boolean(row.purged_at),
       profile: {
         name: row.display_name,
         city: row.city,
@@ -323,7 +327,7 @@ export async function loadBootstrap(userId, options = {}) {
   const [likeRows] = includeSocial ? await pool.query("SELECT user_id, material_kind, material_id FROM material_likes") : [[]];
   const [eventRows] = includeCatalog ? await pool.query(
     `SELECT e.id, e.creator_user_id, e.title, e.summary, e.description, e.event_date, e.event_time,
-            e.city, e.city_id, e.address, e.map_url, e.details_url, e.book_id, e.is_pinned, e.is_adult,
+            e.city, e.city_id, ec.country_name AS city_country, e.address, e.map_url, e.details_url, e.book_id, e.is_pinned, e.is_adult,
             e.status, e.moderation_note, e.created_at,
             b.title AS book_title, b.author AS book_author, b.annotation AS book_annotation,
             b.cover_path AS book_cover_path, b.cover_tone AS book_cover_tone,
@@ -331,6 +335,7 @@ export async function loadBootstrap(userId, options = {}) {
             reminder_users.user_ids AS reminder_user_ids,
             reminder_users.reminder_count
        FROM events e
+       LEFT JOIN cities ec ON ec.id = e.city_id
        LEFT JOIN books b ON b.id = e.book_id
        LEFT JOIN event_reminders er ON er.event_id = e.id AND er.user_id = ?
        LEFT JOIN (
@@ -483,7 +488,7 @@ export async function loadBootstrap(userId, options = {}) {
       id: Number(row.id), creatorId: Number(row.creator_user_id), title: row.title,
       summary: row.summary, description: row.description, date: sqlDate(row.event_date),
       isAdult: Boolean(row.is_adult),
-      time: String(row.event_time).slice(0, 5), city: row.city,
+      time: String(row.event_time).slice(0, 5), city: row.city, country: row.city_country ?? undefined,
       cityId: row.city_id ? Number(row.city_id) : undefined, address: row.address,
       mapUrl: row.map_url ?? "", detailsUrl: row.details_url ?? "", status: row.status,
       moderationNote: row.moderation_note ?? "",

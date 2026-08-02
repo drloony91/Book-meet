@@ -1,4 +1,4 @@
-import React, { FormEvent, useEffect, useMemo, useRef, useState } from "react";
+import React, { FormEvent, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { CustomSelect } from "../components/common/CustomSelect";
 import { ModalIconActions } from "../components/modals/ModalIconActions";
 import { AdminSafetySection } from "../components/safety/AdminSafety";
@@ -154,8 +154,17 @@ export function AdminTab({ events, occasions, users, reports, onModerate, onMode
     if (item.kind === "occasion") { setEditingOccasion(item.source); return; }
     setEditingCatalogItem(item);
   };
-  if (section === "dashboard") return <div className="admin-tab admin-dashboard"><div className="profile-title-row"><div><span className="section-subtitle">Управление Book Meet</span><h1>Админка</h1><p>Материалы, жалобы и пользователи собраны по отдельным разделам.</p></div></div><AdminStatisticsPanel statistics={statistics} /><button className="admin-moderation-button" type="button" onClick={() => setSection("moderation")}><span>Материалы на модерации</span><b>{total}</b></button><div className="admin-dashboard-divider"><span>Все материалы</span></div><div className="admin-section-buttons">{(["book", "review", "excerpt", "event", "occasion"] as AdminMaterialKind[]).map((kind) => <button type="button" key={kind} onClick={() => { setSection(kind); setSearch(""); }}><span>{labels[kind]}</span><b>{catalogItems[kind].length}</b></button>)}</div><div className="admin-dashboard-divider"><span>Все жалобы</span></div><div className="admin-section-buttons admin-report-buttons"><button type="button" onClick={() => setSection("reports-new")}><span>Новые жалобы</span><b>{reports.filter((item) => item.status === "new").length}</b></button><button type="button" onClick={() => setSection("reports-reviewed")}><span>Просмотренные</span><b>{reports.filter((item) => item.status === "reviewed").length}</b></button></div><div className="admin-user-status-buttons"><button className="admin-moderation-button" type="button" onClick={() => setSection("users-active")}><span>Активные пользователи</span><b>{users.filter((item) => !item.isAdmin && !item.suspension).length}</b></button><button className="admin-moderation-button danger" type="button" onClick={() => setSection("users-blocked")}><span>Заблокированные пользователи</span><b>{users.filter((item) => !item.isAdmin && item.suspension).length}</b></button></div></div>;
-  if (["reports-new", "reports-reviewed", "users-active", "users-blocked"].includes(section)) return <AdminSafetySection mode={section as "reports-new" | "reports-reviewed" | "users-active" | "users-blocked"} reports={reports} users={users} onBack={() => setSection("dashboard")} onOpenUser={onOpenUser} onOpenChat={onOpenChat} onRefresh={onRefresh} />;
+  if (section === "dashboard") return <div className="admin-tab admin-dashboard">
+    <div className="profile-title-row"><div><span className="section-subtitle">Управление Book Meet</span><h1>Админка</h1><p>Материалы, жалобы и пользователи собраны по отдельным разделам.</p></div></div>
+    <AdminStatisticsPanel statistics={statistics} />
+    <button className="admin-moderation-button" type="button" onClick={() => setSection("moderation")}><span>Материалы на модерации</span><b>{total}</b></button>
+    <div className="admin-dashboard-divider"><span>Все материалы</span></div>
+    <div className="admin-section-buttons">{(["book", "review", "excerpt", "event", "occasion"] as AdminMaterialKind[]).map((kind) => <button type="button" key={kind} onClick={() => { setSection(kind); setSearch(""); }}><span>{labels[kind]}</span><b>{catalogItems[kind].length}</b></button>)}</div>
+    <div className="admin-dashboard-divider"><span>Все жалобы</span></div>
+    <div className="admin-section-buttons admin-report-buttons"><button type="button" onClick={() => setSection("reports-new")}><span>Новые жалобы</span><b>{reports.filter((item) => item.status === "new").length}</b></button><button type="button" onClick={() => setSection("reports-reviewed")}><span>Просмотренные</span><b>{reports.filter((item) => item.status === "reviewed").length}</b></button></div>
+    <div className="admin-user-status-buttons"><button className="admin-moderation-button" type="button" onClick={() => setSection("users-active")}><span>Активные пользователи</span><b>{users.filter((item) => !item.isAdmin && !item.suspension && !item.deletedAt && !item.purged).length}</b></button><button className="admin-moderation-button danger" type="button" onClick={() => setSection("users-blocked")}><span>Заблокированные пользователи</span><b>{users.filter((item) => !item.isAdmin && item.suspension && !item.deletedAt && !item.purged).length}</b></button><button className="admin-moderation-button deleted" type="button" onClick={() => setSection("users-deleted")}><span>Удалённые пользователи</span><b>{users.filter((item) => !item.isAdmin && item.deletedAt && !item.purged).length}</b></button></div>
+  </div>;
+  if (["reports-new", "reports-reviewed", "users-active", "users-blocked", "users-deleted"].includes(section)) return <AdminSafetySection mode={section as "reports-new" | "reports-reviewed" | "users-active" | "users-blocked" | "users-deleted"} reports={reports} users={users} onBack={() => setSection("dashboard")} onOpenUser={onOpenUser} onOpenChat={onOpenChat} onRefresh={onRefresh} />;
   if (section !== "moderation") {
     const catalogSection = section as AdminMaterialKind;
     const items = catalogItems[catalogSection].filter((item) => `${item.title} ${item.subtitle}`.toLocaleLowerCase("ru").includes(search.trim().toLocaleLowerCase("ru"))).sort((a, b) => b.id - a.id);
@@ -350,7 +359,10 @@ export function MyProfile({ onBack, user, users, friends, friendRequests, follow
   const [requiredNotice, setRequiredNotice] = useState(false);
   const [unsavedNotice, setUnsavedNotice] = useState(false);
   const [publisherTypeNotice, setPublisherTypeNotice] = useState(false);
+  const [deleteProfileConfirm, setDeleteProfileConfirm] = useState(false);
   const avatarInputRef = useRef<HTMLInputElement>(null);
+  const tabRowRefs = useRef(new Map<ProfileTab, HTMLDivElement>());
+  const previousTabPositions = useRef(new Map<ProfileTab, number>());
   const savedProfileRef = useRef(user.profile);
   const savedAvatarUrlRef = useRef(user.avatarUrl);
   const pendingExitRef = useRef<null | (() => void)>(null);
@@ -488,6 +500,41 @@ export function MyProfile({ onBack, user, users, friends, friendRequests, follow
   const normalizedTabOrder = [...tabOrderDraft.filter((tab) => defaultTabOrder.includes(tab)), ...defaultTabOrder.filter((tab) => !tabOrderDraft.includes(tab))];
   const orderedProfileTabs = normalizedTabOrder.map((tab) => profileTabs.find((item) => item.key === tab)).filter(Boolean) as Array<{ key: ProfileTab; label: string }>;
 
+  useLayoutEffect(() => {
+    for (const [tab, element] of tabRowRefs.current) {
+      const previousTop = previousTabPositions.current.get(tab);
+      const currentTop = element.getBoundingClientRect().top;
+      if (previousTop !== undefined && previousTop !== currentTop) {
+        element.animate(
+          [{ transform: `translateY(${previousTop - currentTop}px)` }, { transform: "translateY(0)" }],
+          { duration: 180, easing: "ease-out" },
+        );
+      }
+      previousTabPositions.current.set(tab, currentTop);
+    }
+  }, [tabOrderDraft]);
+
+  function moveDraggedTab(target: ProfileTab) {
+    if (!draggedTab || draggedTab === target) return;
+    for (const [tab, element] of tabRowRefs.current) previousTabPositions.current.set(tab, element.getBoundingClientRect().top);
+    const fromIndex = normalizedTabOrder.indexOf(draggedTab);
+    const targetIndex = normalizedTabOrder.indexOf(target);
+    const next = normalizedTabOrder.filter((tab) => tab !== draggedTab);
+    const remainingTargetIndex = next.indexOf(target);
+    next.splice(fromIndex < targetIndex ? remainingTargetIndex + 1 : remainingTargetIndex, 0, draggedTab);
+    setTabOrderDraft(next);
+  }
+
+  async function deleteProfile() {
+    const response = await fetch("/api/users/me/profile", { method: "DELETE", credentials: "same-origin" });
+    const data = await response.json().catch(() => ({})) as { error?: string };
+    if (!response.ok) {
+      window.alert(data.error ?? "Не удалось удалить профиль");
+      return;
+    }
+    window.location.assign("/");
+  }
+
   async function applyTabOrder() {
     const nextProfile = { ...profile, tabOrder: normalizedTabOrder };
     await onUserChange({ ...user, profile: nextProfile, books, reviews, authorBooks, excerpts: userExcerpts, publisherNews, wishBooks });
@@ -511,8 +558,8 @@ export function MyProfile({ onBack, user, users, friends, friendRequests, follow
           <input ref={avatarInputRef} className="visually-hidden" type="file" accept="image/jpeg,image/png,image/webp" onChange={(event) => void changeAvatar(event.target.files?.[0])} />
           <button type="button" className="change-photo" onClick={() => avatarInputRef.current?.click()}>Сменить фото</button>
           <nav aria-label="Разделы профиля">
-            {orderedProfileTabs.map((item) => <div className={`profile-nav-row ${reorderingTabs ? "is-reordering" : ""}`} key={item.key} onDragOver={(event) => { if (reorderingTabs) event.preventDefault(); }} onDrop={() => { if (!draggedTab || draggedTab === item.key) return; const next = normalizedTabOrder.filter((tab) => tab !== draggedTab); next.splice(next.indexOf(item.key), 0, draggedTab); setTabOrderDraft(next); setDraggedTab(null); }}>
-              {reorderingTabs && <span className="profile-tab-drag-handle" draggable onDragStart={() => setDraggedTab(item.key)} onDragEnd={() => setDraggedTab(null)} aria-label={`Переместить вкладку ${item.label}`} title="Перетащите вкладку">☰</span>}
+            {orderedProfileTabs.map((item) => <div ref={(element) => { if (element) tabRowRefs.current.set(item.key, element); else tabRowRefs.current.delete(item.key); }} className={`profile-nav-row ${reorderingTabs ? "is-reordering" : ""}`} key={item.key} onDragOver={(event) => { if (reorderingTabs) event.preventDefault(); }} onDragEnter={() => moveDraggedTab(item.key)} onDrop={() => setDraggedTab(null)}>
+              {reorderingTabs && <span className="profile-tab-drag-handle" draggable onDragStart={() => { for (const [tab, element] of tabRowRefs.current) previousTabPositions.current.set(tab, element.getBoundingClientRect().top); setDraggedTab(item.key); }} onDragEnd={() => setDraggedTab(null)} aria-label={`Переместить вкладку ${item.label}`} title="Перетащите вкладку">☰</span>}
               <button className={activeTab === item.key ? "active" : ""} type="button" onClick={() => openTab(item.key)}>{item.label}</button>
             </div>)}
             <button className={activeTab === "settings" ? "active" : ""} type="button" onClick={() => openTab("settings")}>Настройки</button>
@@ -530,8 +577,7 @@ export function MyProfile({ onBack, user, users, friends, friendRequests, follow
                   <label className={invalidFields.name ? "field-invalid" : ""}>{profile.type === "Издатель" ? "Название издательства *" : "Имя *"}<input required aria-invalid={invalidFields.name} value={profile.name} onChange={(event) => { setProfile({ ...profile, name: event.target.value }); setInvalidFields((current) => ({ ...current, name: false })); }} /></label>
                   <label>Тип профиля<CustomSelect ariaLabel="Тип профиля" value={profile.type} onChange={(type) => { if (type === "Издатель" && profile.type !== "Издатель") setPublisherTypeNotice(true); else setProfile({ ...profile, type }); }} options={["Читатель", "Писатель", "Блогер", "Издатель"].map((item) => ({ value: item as UserProfileData["type"], label: item }))} /></label>
                 </div>
-                <div className="form-row profile-identity-row"><CityAutocomplete value={profile.city} required invalid={invalidFields.city} onChange={(city, cityId, country) => { setProfile({ ...profile, city, cityId, country }); setInvalidFields((current) => ({ ...current, city: false })); }} />{profile.type !== "Издатель" && <><label className={invalidFields.birthDate ? "field-invalid" : ""}>Дата рождения *<input required aria-invalid={invalidFields.birthDate} type="date" max={new Date().toISOString().slice(0, 10)} value={profile.birthDate ?? ""} onChange={(event) => { setProfile({ ...profile, birthDate: event.target.value }); setInvalidFields((current) => ({ ...current, birthDate: false })); }} /></label><label>Пол<CustomSelect ariaLabel="Пол" value={profile.gender} onChange={(gender) => setProfile({ ...profile, gender })} options={["Не указан", "Мужской", "Женский"].map((item) => ({ value: item as UserProfileData["gender"], label: item }))} /></label></>}</div>
-                {profile.type !== "Издатель" && <label className="profile-checkbox"><input type="checkbox" checked={Boolean(profile.showBirthDateToFriends)} onChange={(event) => setProfile({ ...profile, showBirthDateToFriends: event.target.checked })} />Показывать дату рождения друзьям</label>}
+                <div className="form-row profile-identity-row"><CityAutocomplete value={profile.city} required invalid={invalidFields.city} onChange={(city, cityId, country) => { setProfile({ ...profile, city, cityId, country }); setInvalidFields((current) => ({ ...current, city: false })); }} />{profile.type !== "Издатель" && <><div className="profile-birth-field"><label className={invalidFields.birthDate ? "field-invalid" : ""}>Дата рождения *<input required aria-invalid={invalidFields.birthDate} type="date" max={new Date().toISOString().slice(0, 10)} value={profile.birthDate ?? ""} onChange={(event) => { setProfile({ ...profile, birthDate: event.target.value }); setInvalidFields((current) => ({ ...current, birthDate: false })); }} /></label><label className="profile-checkbox profile-birth-visibility"><input type="checkbox" checked={Boolean(profile.showBirthDateToFriends)} onChange={(event) => setProfile({ ...profile, showBirthDateToFriends: event.target.checked })} />Показывать дату рождения друзьям</label></div><label>Пол<CustomSelect ariaLabel="Пол" value={profile.gender} onChange={(gender) => setProfile({ ...profile, gender })} options={["Не указан", "Мужской", "Женский"].map((item) => ({ value: item as UserProfileData["gender"], label: item }))} /></label></>}</div>
                 {profile.type === "Издатель" ? <>
                   <label>Ссылка на сайт издательства *<input required type="url" value={profile.publisherWebsite ?? ""} onChange={(event) => setProfile({ ...profile, publisherWebsite: event.target.value })} /></label>
                   <label>Об издательстве *<textarea required rows={5} value={profile.bio} onChange={(event) => setProfile({ ...profile, bio: event.target.value })} /></label>
@@ -591,8 +637,10 @@ export function MyProfile({ onBack, user, users, friends, friendRequests, follow
           {activeTab === "events" && <MyEventsTab createdEvents={events.filter((item) => item.creatorId === user.id)} participatingEvents={events.filter((item) => item.creatorId !== user.id && item.reminderSet)} users={users} currentUserId={user.id} onOpenUser={onOpenUser} onEdit={onEditEvent} onDeleted={onDeleteEvent} />}
           {activeTab === "friends" && <ProfileFriendsTab friends={friends} outgoing={friendRequests.filter((request) => request.status === "pending" && request.fromId === user.id).map((request) => users.find((item) => item.id === request.toId)).filter(Boolean) as DemoUser[]} incoming={friendRequests.filter((request) => request.status === "pending" && request.toId === user.id).map((request) => users.find((item) => item.id === request.fromId)).filter(Boolean) as DemoUser[]} subscriptions={follows.filter((follow) => follow.followerId === user.id).map((follow) => users.find((item) => item.id === follow.targetId)).filter((item): item is DemoUser => Boolean(item) && !item!.isAdmin)} followers={follows.filter((follow) => follow.targetId === user.id).map((follow) => users.find((item) => item.id === follow.followerId)).filter((item): item is DemoUser => Boolean(item) && !item!.isAdmin)} onOpenUser={onOpenUser} />}
           {activeTab === "settings" && <div className="simple-profile-tab"><div className="profile-title-row"><div><h1>Настройки</h1><p>Управление профилем Book Meet</p></div></div><section className="profile-menu-order-settings"><h2>Изменить порядок пунктов меню профиля</h2><div className="profile-menu-order-actions"><button className="outline-button" type="button" onClick={() => { setTabOrderDraft(profile.tabOrder ?? defaultTabOrder); setReorderingTabs(true); }}>Изменить</button>{reorderingTabs && <button className="primary-button" type="button" onClick={() => void applyTabOrder()}>Применить</button>}</div><p>В режиме изменения перетащите вкладку за значок из трёх полосок слева. «Настройки» всегда остаются последними.</p></section><section className="blocked-users-settings"><h2>Заблокированные пользователи</h2>{users.some((item) => item.blockedByMe) ? <div className="blocked-user-grid">{users.filter((item) => item.blockedByMe).map((item) => <button type="button" key={item.id} className="blocked-user-card" onClick={() => onOpenUser(item.id)}><span className={`avatar avatar-sm avatar-${item.color} ${item.avatarUrl ? "has-photo" : ""}`} style={item.avatarUrl ? { backgroundImage: `url(${item.avatarUrl})` } : undefined}>{!item.avatarUrl && item.initials}</span><span><strong>{item.profile.name}</strong><small>{item.profile.type} · {item.profile.city}</small></span></button>)}</div> : <p>Заблокированных пользователей нет.</p>}</section></div>}
+          {activeTab === "settings" && <section className="profile-delete-settings"><h2>Удаление профиля</h2><p>Профиль можно восстановить в течение года. Материалы и комментарии сохранятся, сообщения и аватар будут удалены.</p><button className="quiet-danger-button" type="button" onClick={() => setDeleteProfileConfirm(true)}>Удалить профиль</button></section>}
         </div>
       </section>
+      {deleteProfileConfirm && <div className="notice-backdrop" role="presentation" onMouseDown={() => setDeleteProfileConfirm(false)}><section className="confirm-social-modal" role="alertdialog" aria-modal="true" onMouseDown={(event) => event.stopPropagation()}><h2>Действительно удалить профиль?</h2><p>В течение года вы сможете восстановить его при следующей авторизации.</p><div className="form-actions"><button type="button" onClick={() => setDeleteProfileConfirm(false)}>Отмена</button><button className="quiet-danger-button" type="button" onClick={() => void deleteProfile()}>Удалить</button></div></section></div>}
       {requiredNotice && <div className="notice-backdrop" role="presentation" onMouseDown={() => setRequiredNotice(false)}><section className="required-fields-notice" role="alertdialog" aria-modal="true" aria-labelledby="required-fields-title" onMouseDown={(event) => event.stopPropagation()}><h2 id="required-fields-title">Заполните обязательные поля</h2><button className="primary-button" type="button" autoFocus onClick={() => setRequiredNotice(false)}>Ок</button></section></div>}
       {publisherTypeNotice && <div className="notice-backdrop" role="presentation"><section className="publisher-type-notice" role="alertdialog" aria-modal="true" onMouseDown={(event) => event.stopPropagation()}><h2>Профиль издателя требует подтверждения</h2><p>Профиль «Издатель» требует официального подтверждения деятельности. После заполнения юридических данных анкета будет отправлена администратору на модерацию. До одобрения можно просматривать сайт, но нельзя публиковать материалы или взаимодействовать с пользователями.</p><div className="form-actions"><button type="button" onClick={() => setPublisherTypeNotice(false)}>Отмена</button><button className="primary-button" type="button" onClick={() => { setProfile({ ...profile, type: "Издатель", city: "", cityId: undefined, gender: "Не указан", publisherStatus: "draft", publisherSalesLinks: profile.publisherSalesLinks ?? [] }); setPublisherTypeNotice(false); }}>Продолжить</button></div></section></div>}
       {unsavedNotice && <div className="notice-backdrop" role="presentation"><section className="unsaved-changes-notice" role="alertdialog" aria-modal="true" aria-labelledby="unsaved-changes-title" onMouseDown={(event) => event.stopPropagation()}><h2 id="unsaved-changes-title">Остались несохраненные изменения, вы действительно хотите выйти?</h2><div className="form-actions"><button type="button" onClick={discardChangesAndLeave}>Выйти без сохранения</button><button className="primary-button" type="button" autoFocus onClick={() => { pendingExitRef.current = null; setUnsavedNotice(false); }}>Вернуться к редактированию</button></div></section></div>}
