@@ -30,7 +30,9 @@ import {
   EventModal,
   OccasionForm,
   OccasionModal,
+  PublicationEditor,
   ReadingModal,
+  ReviewEditor,
   UnifiedBookModal,
   UserProfileModal,
   deleteReadingMaterial,
@@ -127,6 +129,7 @@ export function useBookMeetController() {
   const [editingOccasion, setEditingOccasion] = useState<Occasion | null>(null);
   const [selectedOccasion, setSelectedOccasion] = useState<Occasion | null>(null);
   const [profileAction, setProfileAction] = useState<"review" | "excerpt" | "book" | null>(null);
+  const [quickMaterialAction, setQuickMaterialAction] = useState<"review" | "excerpt" | null>(null);
   const [profileEditId, setProfileEditId] = useState<number | null>(null);
   const [roleRestrictionNotice, setRoleRestrictionNotice] = useState<"review" | "excerpt" | "occasion" | "publisher-pending" | null>(null);
   const [blocks, setBlocks] = useState<UserBlock[]>([]);
@@ -528,6 +531,10 @@ export function useBookMeetController() {
     }
     if (action === "excerpt" && currentUser?.profile.type !== "Писатель" && currentUser?.profile.type !== "Блогер") {
       setRoleRestrictionNotice("excerpt");
+      return;
+    }
+    if (action === "review" || action === "excerpt") {
+      setQuickMaterialAction(action);
       return;
     }
     setProfileAction(action);
@@ -958,6 +965,8 @@ export function useBookMeetController() {
       {selectedMaterial && <ReadingModal item={selectedMaterial} currentUser={currentUser} users={visibleUsers} likedUserIds={likes[`${selectedMaterial.kind}-${selectedMaterial.id}`] ?? []} onToggleLike={() => toggleLike(selectedMaterial)} onComment={(text) => addComment(selectedMaterial, text)} onOpenUser={openUserProfile} onClose={() => setSelectedMaterial(null)} onReport={selectedMaterial.ownerId !== currentUser.id && !currentUser.isAdmin ? () => openReportDialog({ kind: selectedMaterial.kind, id: selectedMaterial.id }) : undefined} onEdit={currentUser.isAdmin || selectedMaterial.ownerId === currentUser.id ? () => void editReadingMaterial(selectedMaterial, currentUser) : undefined} onDelete={currentUser.isAdmin || selectedMaterial.ownerId === currentUser.id ? () => void deleteReadingMaterial(selectedMaterial, currentUser) : undefined} />}
       {adminEditingMaterial && <AdminCatalogEditor item={adminEditingMaterial} users={users} onClose={() => setAdminEditingMaterial(null)} onSave={async (payload) => { const response = await fetch(`/api/admin/materials/${adminEditingMaterial.kind}/${adminEditingMaterial.id}`, { method: "PATCH", credentials: "same-origin", headers: { "content-type": "application/json" }, body: JSON.stringify(payload) }); const data = await response.json().catch(() => ({})) as { error?: string }; if (!response.ok) { window.alert(data.error ?? "Не удалось сохранить изменения"); return; } setAdminEditingMaterial(null); await refreshBootstrap(); }} />}
       {detailNotification && <NotificationDetail notification={detailNotification} actor={users.find((user) => user.id === detailNotification.actorId)} isFollowing={follows.some((follow) => follow.followerId === currentUser.id && follow.targetId === detailNotification.actorId)} onClose={() => setDetailNotification(null)} onFollow={() => followUser(detailNotification.actorId)} />}
+      {quickMaterialAction === "review" && <ReviewEditor catalog={catalogFromUsers(users)} onClose={() => setQuickMaterialAction(null)} onSave={(review) => { const nextUser = { ...currentUser, reviews: [review, ...currentUser.reviews] }; setQuickMaterialAction(null); void handleUserChange(nextUser); }} />}
+      {quickMaterialAction === "excerpt" && <PublicationEditor catalog={catalogFromUsers(users)} onClose={() => setQuickMaterialAction(null)} onSave={(excerpt) => { const nextUser = { ...currentUser, excerpts: [excerpt, ...(currentUser.excerpts ?? [])] }; setQuickMaterialAction(null); void handleUserChange(nextUser); }} />}
       {eventFormOpen && <div className="modal-backdrop" onMouseDown={() => setEventFormOpen(false)}><section className="event-editor-modal" onMouseDown={(event) => event.stopPropagation()}><EventForm catalog={catalogFromUsers(users)} onCreateBook={() => { setEventFormOpen(false); startCreating("book"); }} onCancel={() => setEventFormOpen(false)} onSave={createEvent} /></section></div>}
       {editingEvent && <div className="modal-backdrop" onMouseDown={() => setEditingEvent(null)}><section className="event-editor-modal" onMouseDown={(event) => event.stopPropagation()}><EventForm initial={editingEvent} catalog={catalogFromUsers(users)} onCreateBook={() => { setEditingEvent(null); startCreating("book"); }} submitLabel="Отправить повторно" onCancel={() => setEditingEvent(null)} onSave={resubmitEvent} /></section></div>}
       {selectedEvent && <EventModal item={selectedEvent} users={visibleUsers} currentUserId={currentUser.id} onOpenUser={openUserProfile} onReport={selectedEvent.creatorId !== currentUser.id && !currentUser.isAdmin ? () => openReportDialog({ kind: "event", id: selectedEvent.id }) : undefined} onOpenBook={selectedEvent.linkedBookId ? () => {

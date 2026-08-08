@@ -170,7 +170,12 @@ test("исправления карточки книги, страны, горо
   assert.match(cities, /Жезқазған/);
   assert.match(cities, /language_code/);
   assert.match(controller, /retainWhenInactive/);
+  assert.match(controller, /quickMaterialAction === "review"/);
+  assert.match(controller, /quickMaterialAction === "excerpt"/);
   assert.match(content, /className="book-reader-row"[^>]+onClick/);
+  assert.match(content, /reader\.avatarUrl \? "has-photo"/);
+  assert.match(content, /wishlist-card material-clickable-card/);
+  assert.match(content, /export function PublicationEditor/);
   assert.match(home, /item\.country\?\.toLocaleLowerCase/);
   assert.match(styles, /admin-report-buttons button:last-child/);
   assert.match(styles, /occasion-form \.adult-material-checkbox input/);

@@ -580,7 +580,13 @@ function bookProductFromHtml(html, source) {
   const titleParts = pageTitle.split(/\s+[—|]\s+/).map(decodeHtml);
   const author = decodeHtml(marwinAuthor || structuredAuthor || metaContent(html, "book:author") || embeddedAuthor || (titleParts[0] === title ? titleParts[1] : ""));
   const offers = Array.isArray(product?.offers) ? product.offers[0] : product?.offers;
-  const rawImage = (Array.isArray(product?.image) ? product.image[0] : product?.image) || metaContent(html, "og:image");
+  const structuredImage = Array.isArray(product?.image) ? product.image[0] : product?.image;
+  const rawImage = (typeof structuredImage === "object" ? structuredImage?.url || structuredImage?.contentUrl : structuredImage)
+    || metaContent(html, "og:image:secure_url")
+    || metaContent(html, "og:image")
+    || metaContent(html, "twitter:image")
+    || decodeHtml(html.match(/<link[^>]+rel=["']image_src["'][^>]+href=["']([^"']+)/i)?.[1])
+    || decodeHtml(html.match(/["'](?:coverUrl|cover_url|imageUrl|image_url)["']\s*:\s*["']([^"']+)/i)?.[1]);
   const price = Number(offers?.price);
   const isbn = normalizeIsbn(
     product?.isbn || product?.isbn13 || product?.isbn10 || product?.gtin13 || product?.gtin
