@@ -184,7 +184,7 @@ export async function loadUsers(connection = getPool(), viewerId = null) {
         type: row.profile_type,
         gender: row.gender ?? "Не указан",
         birthDate: Number(row.id) === Number(viewerId) || viewerIsAdmin || row.show_birth_date_to_friends && isViewerFriend(row.id) ? sqlDate(row.birth_date) || undefined : undefined,
-        age: ageFromBirthDate(row.birth_date) ?? undefined,
+        age: Number(row.id) === Number(viewerId) || viewerIsAdmin ? ageFromBirthDate(row.birth_date) ?? undefined : undefined,
         showBirthDateToFriends: Number(row.id) === Number(viewerId) || viewerIsAdmin ? Boolean(row.show_birth_date_to_friends) : undefined,
         tabOrder: parseJson(row.profile_tab_order),
         bio: row.bio ?? "",

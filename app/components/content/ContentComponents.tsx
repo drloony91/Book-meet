@@ -1,4 +1,5 @@
 import React, { FormEvent, useEffect, useMemo, useRef, useState } from "react";
+import * as XLSX from "xlsx";
 import { Avatar } from "../chat/ChatComponents";
 import type { Friend } from "../chat/types";
 import { CustomSelect } from "../common/CustomSelect";
@@ -90,7 +91,8 @@ export function EventStatusLabel({ status }: { status: EventStatus }) {
 }
 
 export function EventCard({ item, own, onOpen, onOpenBook, onEdit, compact = false }: { item: BookEvent; own: boolean; onOpen: () => void; onOpenBook?: () => void; onEdit?: () => void; compact?: boolean }) {
-  return <article className={`event-card event-card-clickable ${compact ? "event-card-compact" : ""} ${item.pinned ? "is-pinned" : ""}`} role="button" tabIndex={0} onClick={onOpen} onKeyDown={(event) => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); onOpen(); } }}><div className="event-date"><strong>{new Date(`${item.date}T00:00:00`).toLocaleDateString("ru-RU", { day: "2-digit", month: "short" })}</strong><span>{item.time}</span></div><div className="event-card-copy"><div>{own && <EventStatusLabel status={item.status} />}<span className="section-subtitle">{item.pinned && <b className="pinned-event-label">Закреплено · </b>}{item.isAdult && <b>18+ · </b>}{item.city}{!compact && item.bookTitle && <><i className="event-book-dot" aria-hidden="true" /><button className="event-book-inline" type="button" onClick={(event) => { event.stopPropagation(); onOpenBook?.(); }}>{item.bookTitle} · {item.bookAuthor}</button></>}</span></div><h3>{item.title}</h3>{!compact && <><p>{item.summary}</p><small>{item.address}</small></>}{own && item.status === "needs_changes" && onEdit && <div className="moderated-card-actions"><button className="outline-button" type="button" onClick={(event) => { event.stopPropagation(); onEdit(); }}>Редактировать</button></div>}</div></article>;
+  const dateTime = `${new Date(`${item.date}T00:00:00`).toLocaleDateString("ru-RU", { day: "numeric", month: "long" })}${item.time ? ` · ${item.time}` : ""}`;
+  return <article className={`event-card event-card-clickable event-card-modern ${compact ? "event-card-compact" : ""} ${item.pinned ? "is-pinned" : ""}`} role="button" tabIndex={0} onClick={onOpen} onKeyDown={(event) => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); onOpen(); } }}><div className="event-card-copy"><div>{own && <EventStatusLabel status={item.status} />}<span className="section-subtitle">{item.pinned && <b className="pinned-event-label">Закреплено · </b>}{item.isAdult && <b>18+ · </b>}{dateTime}{!compact && item.bookTitle && <><i className="event-book-dot" aria-hidden="true" /><button className="event-book-inline" type="button" onClick={(event) => { event.stopPropagation(); onOpenBook?.(); }}>{item.bookTitle} · {item.bookAuthor}</button></>}</span></div><h3>{item.title}</h3>{!compact && <><p>{item.summary}</p><small className="event-location-line"><span>{item.city}</span><i aria-hidden="true" />{item.address}</small></>}{own && item.status === "needs_changes" && onEdit && <div className="moderated-card-actions"><button className="outline-button" type="button" onClick={(event) => { event.stopPropagation(); onEdit(); }}>Редактировать</button></div>}</div></article>;
 }
 
 export async function editReadingMaterial(item: ReadingItem, currentUser: DemoUser) {
@@ -232,7 +234,7 @@ export function MultiCityPicker({ values, onChange }: { values: string[]; onChan
 }
 
 export const emptyOccasion = { type: "" as "" | OccasionType, primaryText: "", audienceText: "", isAdult: false, targetGender: "Все" as Occasion["targetGender"], targetCities: [] as string[], targetProfileType: "Все" as Occasion["targetProfileType"], meetingDate: "", meetingStartTime: "", meetingEndTime: "" };
-export const occasionLabels = { meet: "Познакомиться", discuss: "Обсудить", invite: "Встретиться" } as const;
+export const occasionLabels = { meet: "Познакомиться", discuss: "Обсудить книгу", invite: "Встретиться" } as const;
 const occasionFieldLabels = {
   meet: { primary: "Обо мне", audience: "С кем хочу познакомиться" },
   discuss: { primary: "Что хочу обсудить", audience: "С кем хочу это обсудить" },
@@ -243,7 +245,8 @@ function occasionDateLabel(item: Occasion) {
   if (item.type !== "invite" || !item.meetingDate) return null;
   const date = new Date(`${item.meetingDate}T00:00:00`);
   const dateText = date.toLocaleDateString("ru-RU", { day: "numeric", month: "long", year: "numeric" });
-  if (!item.meetingStartTime || !item.meetingEndTime) return dateText;
+  if (!item.meetingStartTime) return dateText;
+  if (!item.meetingEndTime) return `${dateText} · ${item.meetingStartTime}`;
   const nextDay = item.meetingEndTime < item.meetingStartTime;
   return `${dateText} · ${item.meetingStartTime}–${item.meetingEndTime}${nextDay ? " (завершение на следующий день)" : ""}`;
 }
@@ -255,7 +258,7 @@ export function OccasionForm({ initial, onCancel, onSave, submitLabel = "Отп�
   const texts = value.type ? occasionFieldLabels[value.type] : null;
   const tomorrow = new Date(); tomorrow.setDate(tomorrow.getDate() + 1);
   const minimumDate = `${tomorrow.getFullYear()}-${String(tomorrow.getMonth() + 1).padStart(2, "0")}-${String(tomorrow.getDate()).padStart(2, "0")}`;
-  const incompleteTime = Boolean(value.meetingStartTime) !== Boolean(value.meetingEndTime);
+  const incompleteTime = Boolean(value.meetingEndTime) && !Boolean(value.meetingStartTime);
   return <form className="occasion-form" onSubmit={async (event) => { event.preventDefault(); if (!value.type || incompleteTime) return; setSaving(true); try { await onSave(value); } finally { setSaving(false); } }}><div className="profile-title-row"><div><span className="section-subtitle">Поводы познакомиться</span><h2>{initial ? "Редактировать повод" : "Предложить повод для знакомства"}</h2></div></div><div><span className="occasion-type-label">Тип предложения</span><div className="occasion-type-switch" role="group" aria-label="Тип предложения">{(["meet", "discuss", "invite"] as OccasionType[]).map((type) => <button className={value.type === type ? "active" : ""} type="button" key={type} aria-pressed={value.type === type} onClick={() => changeType(type)}>{occasionLabels[type]}</button>)}</div></div>{value.type && texts && <><label>{texts.primary}<textarea required rows={5} value={value.primaryText} onChange={(event) => setValue({ ...value, primaryText: event.target.value })} placeholder={value.type === "invite" ? "Например: сходить в книжный, музей или театр, выпить кофе, посмотреть кино или выйти на прогулку." : undefined} /></label><fieldset className="occasion-audience-box"><legend>Кого вы ищете</legend><label>{texts.audience}<textarea required rows={4} value={value.audienceText} onChange={(event) => setValue({ ...value, audienceText: event.target.value })} placeholder="Опишите, с кем вам хотелось бы познакомиться, пообщаться или встретиться." /></label><div className="occasion-audience-grid"><label>Пол собеседника<CustomSelect ariaLabel="Пол собеседника" value={value.targetGender} onChange={(targetGender) => setValue({ ...value, targetGender })} options={["Все", "Мужской", "Женский"].map((item) => ({ value: item as Occasion["targetGender"], label: item }))} /></label><label>Тип профиля собеседника<CustomSelect ariaLabel="Тип профиля собеседника" value={value.targetProfileType} onChange={(targetProfileType) => setValue({ ...value, targetProfileType })} options={["Все", "Читатель", "Писатель", "Блогер"].map((item) => ({ value: item as Occasion["targetProfileType"], label: item }))} /></label></div></fieldset>{value.type === "invite" && <fieldset className="occasion-schedule-box"><legend>Когда?</legend><label>Дата<input required type="date" min={minimumDate} value={value.meetingDate} onChange={(event) => setValue({ ...value, meetingDate: event.target.value })} /></label><div className="occasion-time-range"><label>Время от<input type="time" value={value.meetingStartTime} onChange={(event) => setValue({ ...value, meetingStartTime: event.target.value })} /></label><label>Время до<input type="time" value={value.meetingEndTime} onChange={(event) => setValue({ ...value, meetingEndTime: event.target.value })} /></label></div>{incompleteTime && <p className="field-error">Укажите оба времени либо оставьте оба поля пустыми.</p>}</fieldset>}<MultiCityPicker values={value.targetCities} onChange={(targetCities) => setValue({ ...value, targetCities })} /><label className="adult-material-checkbox"><input type="checkbox" checked={value.isAdult} onChange={(event) => setValue({ ...value, isAdult: event.target.checked })} />Повод не предназначен для лиц младше 18 лет</label></>}<div className="form-actions"><button type="button" onClick={onCancel}>Отмена</button><button className="primary-button" disabled={saving || !value.type || !value.targetCities.length || incompleteTime} type="submit">{saving ? "Сохраняем…" : submitLabel}</button></div></form>;
 }
 
@@ -325,7 +328,9 @@ export function ReadingModal({ item, currentUser, users = [], likedUserIds = [],
     return () => { active = false; window.clearInterval(timer); };
   }, [item.id, item.kind]);
 
-  if (!routedPopup.active) return null;
+  // A nested book has its own address. Keep this material mounted behind it so
+  // closing the book restores both the previous popup and its URL.
+  if (!routedPopup.active && !bookPopup) return null;
   return (
     <div className="modal-backdrop" role="presentation" onMouseDown={routedClose}>
       <article className="reading-modal" role="dialog" aria-modal="true" aria-labelledby="reading-title" onMouseDown={(event) => event.stopPropagation()}>
@@ -382,8 +387,7 @@ function PublicProfileDetails({ user }: { user: DemoUser }) {
     {(user.profile.publisherSalesLinks ?? []).length > 0 && <div><span>Где продаются книги</span><div className="writer-book-links">{user.profile.publisherSalesLinks!.map((link) => <a className="outline-button" href={link.url} target="_blank" rel="noreferrer" key={link.id}>{link.label}</a>)}</div></div>}
   </div>;
   return <div className="public-profile-details">
-    {typeof user.profile.age === "number" && <div><span>Возраст</span><p>{user.profile.age}</p></div>}
-    {user.profile.birthDate && <div><span>Дата рождения</span><p>{new Intl.DateTimeFormat("ru-RU", { day: "numeric", month: "long", year: "numeric", timeZone: "UTC" }).format(new Date(`${user.profile.birthDate}T00:00:00Z`))}</p></div>}
+    {user.profile.birthDate && <div><span>День рождения</span><p>{new Intl.DateTimeFormat("ru-RU", { day: "numeric", month: "long", timeZone: "UTC" }).format(new Date(`${user.profile.birthDate}T00:00:00Z`))}</p></div>}
     {textField("О себе", user.profile.bio, "profile-bio-wide")}
     {user.profile.type === "Писатель" && textField("Книги, повлиявшие на меня, как на автора", user.profile.authorInfluences)}
     {user.profile.type === "Писатель" && textField("О чем мои тексты", user.profile.writingThemes)}
@@ -396,7 +400,7 @@ function PublicProfileDetails({ user }: { user: DemoUser }) {
   </div>;
 }
 
-export function UserProfileModal({ user, viewer, users, events = [], likes, friendCount, relationship, incomingMessage, isFollowing, canMessage, blockedByMe = false, onClose, onAddFriend, onCancelFriendRequest, onAccept, onReject, onRemoveFriend, onOpenChat, onFollow, onUnfollow, onUnblock, onReport, onToggleLike, onComment, onOpenUser }: { user: DemoUser; viewer: DemoUser; users: DemoUser[]; events?: BookEvent[]; likes: Record<string, number[]>; friendCount: number; relationship: "none" | "outgoing" | "incoming" | "friends"; incomingMessage?: string; isFollowing: boolean; canMessage: boolean; blockedByMe?: boolean; onClose: () => void; onAddFriend: (message: string) => void; onCancelFriendRequest: () => Promise<void>; onAccept: () => void; onReject: (comment: string) => void; onRemoveFriend: () => void; onOpenChat: () => void; onFollow: () => void; onUnfollow: () => Promise<void>; onUnblock?: () => Promise<void>; onReport?: () => void; onToggleLike: (item: ReadingItem) => void; onComment: (item: ReadingItem, text: string) => Promise<MaterialComment | null>; onOpenUser: (userId: number) => void }) {
+export function UserProfileModal({ user, viewer, users, events = [], likes, friendCount, relationship, incomingMessage, isFollowing, canMessage, blockedByMe = false, onClose, onAddFriend, onCancelFriendRequest, onAccept, onReject, onRemoveFriend, onOpenChat, onFollow, onUnfollow, onBlock, onUnblock, onReport, onToggleLike, onComment, onOpenUser }: { user: DemoUser; viewer: DemoUser; users: DemoUser[]; events?: BookEvent[]; likes: Record<string, number[]>; friendCount: number; relationship: "none" | "outgoing" | "incoming" | "friends"; incomingMessage?: string; isFollowing: boolean; canMessage: boolean; blockedByMe?: boolean; onClose: () => void; onAddFriend: (message: string) => void; onCancelFriendRequest: () => Promise<void>; onAccept: () => void; onReject: (comment: string) => void; onRemoveFriend: () => void; onOpenChat: () => void; onFollow: () => void; onUnfollow: () => Promise<void>; onBlock?: () => Promise<void>; onUnblock?: () => Promise<void>; onReport?: () => void; onToggleLike: (item: ReadingItem) => void; onComment: (item: ReadingItem, text: string) => Promise<MaterialComment | null>; onOpenUser: (userId: number) => void }) {
   const routedPopup = useRoutedPopup(`/users/${user.id}`, "/users", onClose, `${user.profile.name} — Book Meet`);
   const routedClose = routedPopup.close;
   const [rejecting, setRejecting] = useState(false);
@@ -427,7 +431,7 @@ export function UserProfileModal({ user, viewer, users, events = [], likes, frie
     return () => window.removeEventListener("keydown", close);
   }, [routedClose]);
 
-  if (!routedPopup.active) return null;
+  if (!routedPopup.active && !openedBook && !openedAuthorBook && !openedReview && !openedPublisherEvent && !openedPublisherNews) return null;
   if (user.deletedAt || user.purged) return <div className="modal-backdrop profile-modal-backdrop" onMouseDown={routedClose}><section className="simple-warning-modal deleted-profile-notice" role="dialog" aria-modal="true" onMouseDown={(event) => event.stopPropagation()}><button className="modal-close" type="button" onClick={routedClose}>×</button><h2>Профиль удалён</h2><p>Материалы и комментарии пользователя остаются доступны, но его профиль больше не отображается.</p>{viewer.isAdmin && !user.purged ? <div className="form-actions"><button className="outline-button" type="button" title="Восстановить профиль" onClick={async () => { const response = await fetch(`/api/admin/users/${user.id}/restore`, { method: "POST", credentials: "same-origin" }); if (response.ok) window.location.reload(); }}>↶ Восстановить</button><button className="quiet-danger-button" type="button" title="Удалить окончательно" onClick={async () => { if (!window.confirm("Удалить профиль окончательно? Это действие нельзя отменить.")) return; const response = await fetch(`/api/admin/users/${user.id}/permanent`, { method: "DELETE", credentials: "same-origin" }); if (response.ok) window.location.reload(); }}>🗑 Удалить окончательно</button></div> : <button className="primary-button" type="button" onClick={routedClose}>Закрыть</button>}</section></div>;
   return (
     <div className="modal-backdrop profile-overlay-top" role="presentation" onMouseDown={routedClose}>
@@ -439,6 +443,7 @@ export function UserProfileModal({ user, viewer, users, events = [], likes, frie
           <span className="profile-type">{user.profile.type}</span>
           <h2 id="public-profile-title">{user.profile.name}</h2>{user.profile.city && <p className="profile-location">⌖ {user.profile.city}</p>}<p className={`profile-presence ${user.online ? "is-online" : ""}`}>{user.online ? "В сети" : "Не в сети"}</p>
           <div className="public-profile-actions">
+            {!blockedByMe && onBlock && <button className="profile-block-button" type="button" title={viewer.isAdmin ? "Заблокировать пользователя на сайте" : "Заблокировать пользователя"} aria-label="Заблокировать пользователя" onClick={() => void onBlock()}>🔒</button>}
             {blockedByMe && <><span className="blocked-profile-label">Вы заблокировали пользователя</span><button className="outline-button" type="button" onClick={() => setUnblockConfirm(true)}>Разблокировать</button></>}
             {!blockedByMe && <>
             {relationship === "incoming" && <><button className="primary-button" type="button" onClick={onAccept}>Начать дружить</button><button className="outline-button" type="button" onClick={() => setRejecting(true)}>Отклонить предложение</button></>}
@@ -486,7 +491,7 @@ export function UserProfileModal({ user, viewer, users, events = [], likes, frie
   );
 }
 
-export function UnifiedBookModal({ book: sourceBook, users, onClose, onOpenUser, onOpenReview, onEdit, onDelete, onReport, nested = false }: { book: LibraryBook | AuthorBook; users: DemoUser[]; onClose: () => void; onOpenUser?: (userId: number) => void; onOpenReview?: (review: UserReview, user: DemoUser) => void; onEdit?: () => void; onDelete?: () => void; onReport?: () => void; nested?: boolean }) {
+export function UnifiedBookModal({ book: sourceBook, users, events = [], onClose, onOpenUser, onOpenReview, onOpenEvent, onEdit, onDelete, onReport, nested = false, retainWhenInactive = false }: { book: LibraryBook | AuthorBook; users: DemoUser[]; events?: BookEvent[]; onClose: () => void; onOpenUser?: (userId: number) => void; onOpenReview?: (review: UserReview, user: DemoUser) => void; onOpenEvent?: (event: BookEvent) => void; onEdit?: () => void; onDelete?: () => void; onReport?: () => void; nested?: boolean; retainWhenInactive?: boolean }) {
   const book = resolveCanonicalBook(sourceBook, users);
   const bookAuthorProfile = book.creatorUserId ? users.find((user) => user.id === book.creatorUserId) : undefined;
   const routedPopup = useRoutedPopup(`/books/${book.id}`, "/", onClose, `${book.title} — Book Meet`);
@@ -494,12 +499,12 @@ export function UnifiedBookModal({ book: sourceBook, users, onClose, onOpenUser,
   const [tab, setTab] = useState<"about" | "readers" | "reviews" | "wishers">("about");
   const [warningLink, setWarningLink] = useState<BookLink | null>(null);
   const [openedReview, setOpenedReview] = useState<{ review: UserReview; reviewer: DemoUser } | null>(null);
-  const isLibraryBook = "rating" in book;
   const sameBook = (title: string, author: string) => title.toLowerCase() === book.title.toLowerCase() && author.toLowerCase() === book.author.toLowerCase();
   const readers = users.flatMap((reader) => reader.books.filter((item) => sameBook(item.title, item.author) && (item.readingStatus ?? "read") !== "want").map((item) => ({ reader, item })));
   const bookReviews = users.flatMap((reviewer) => reviewer.reviews.filter((review) => sameBook(review.bookTitle, review.bookAuthor)).map((review) => ({ reviewer, review })));
   const wishers = users.filter((user) => user.books.some((item) => sameBook(item.title, item.author) && item.readingStatus === "want") || (user.wishBooks ?? []).some((item) => item.catalogBookId === book.id || sameBook(item.title, item.author)));
-  if (!routedPopup.active) return null;
+  const relatedEvents = events.filter((event) => event.status === "published" && event.linkedBookId === book.id && eventTimestamp(event) > Date.now()).sort((a, b) => eventTimestamp(a) - eventTimestamp(b));
+  if (!routedPopup.active && !openedReview && !retainWhenInactive) return null;
   return (
     <div className={nested ? "nested-modal-backdrop" : "modal-backdrop"} onMouseDown={routedClose}>
       <section className="unified-book-modal" onMouseDown={(event) => event.stopPropagation()}>
@@ -515,7 +520,7 @@ export function UnifiedBookModal({ book: sourceBook, users, onClose, onOpenUser,
               <button className={tab === "reviews" ? "active" : ""} type="button" onClick={() => setTab("reviews")}>Рецензии</button>
               <button className={tab === "wishers" ? "active" : ""} type="button" onClick={() => setTab("wishers")}>Хотят почитать</button>
             </nav>
-            {tab === "about" && <div className="unified-book-section">{(book.isbn || book.publisher) && <dl className="book-edition-details">{book.isbn && <><dt>ISBN</dt><dd>{book.isbn}</dd></>}{book.publisher && <><dt>Издательство</dt><dd>{book.publisher}</dd></>}</dl>}<p>{book.annotation || "Аннотация пока не добавлена."}</p>{isLibraryBook && <><strong>★ {book.rating}</strong><blockquote>«{book.review}»</blockquote></>}{book.flipUrl && <div className="writer-book-links"><button type="button" onClick={() => setWarningLink({ id: -1, label: "Flip", url: book.flipUrl!, action: "Купить" })}>Купить на Flip</button></div>}{(book.links ?? []).filter((link) => link.url !== book.flipUrl).length > 0 && <div className="writer-book-links">{(book.links ?? []).filter((link) => link.url !== book.flipUrl).map((link) => <button type="button" key={link.id} onClick={() => setWarningLink(link)}>{link.action} · {link.label}</button>)}</div>}</div>}
+            {tab === "about" && <div className="unified-book-section">{(book.isbn || book.publisher) && <dl className="book-edition-details">{book.isbn && <><dt>ISBN</dt><dd>{book.isbn}</dd></>}{book.publisher && <><dt>Издательство</dt><dd>{book.publisher}</dd></>}</dl>}<p>{book.annotation || "Аннотация пока не добавлена."}</p>{relatedEvents.length > 0 && <div className="book-related-events">{relatedEvents.map((event) => <button type="button" key={event.id} onClick={() => onOpenEvent?.(event)}><strong>{event.title}</strong><span>{new Date(`${event.date}T00:00:00`).toLocaleDateString("ru-RU")} · {event.time} · {event.city}</span></button>)}</div>}{book.flipUrl && <div className="writer-book-links"><button type="button" onClick={() => setWarningLink({ id: -1, label: "Flip", url: book.flipUrl!, action: "Купить" })}>Купить на Flip</button></div>}{(book.links ?? []).filter((link) => link.url !== book.flipUrl).length > 0 && <div className="writer-book-links">{(book.links ?? []).filter((link) => link.url !== book.flipUrl).map((link) => <button type="button" key={link.id} onClick={() => setWarningLink(link)}>{link.action} · {link.label}</button>)}</div>}</div>}
             {tab === "readers" && <div className="book-readers-list">{readers.length ? readers.map(({ reader, item }) => <button type="button" className="book-reader-row" key={`${reader.id}-${item.id}`} onClick={() => onOpenUser?.(reader.id)}><span className={`avatar avatar-sm avatar-${reader.color}`}>{reader.initials}</span><span><span className="inline-user-link">{reader.profile.name}</span>{(item.readingStatus ?? "read") === "read" && item.rating > 0 && <strong> · ★ {item.rating}</strong>}<small className="book-reader-status">{item.readingStatus === "reading" ? `Читает сейчас${item.lastReadChapter ? ` · глава ${item.lastReadChapter}` : ""}` : "Прочитано"}</small>{item.readingStatus === "reading" && item.readingComment && <span className="book-reader-note">«{item.readingComment}»</span>}{item.review && <span className="book-reader-note">«{item.review}»</span>}</span></button>) : <p>Пока никто не читает и не прочитал эту книгу.</p>}</div>}
             {tab === "reviews" && <div className="book-review-results">{bookReviews.length ? bookReviews.map(({ reviewer, review }) => <button type="button" key={`${reviewer.id}-${review.id}`} onClick={() => onOpenReview ? onOpenReview(review, reviewer) : setOpenedReview({ review, reviewer })}><strong>★ {review.rating} · {review.createdAt}</strong><p>{review.preview}</p><span className="inline-user-link">{reviewer.profile.name}</span></button>) : <div><p>Рецензий пока нет</p><button className="primary-button" type="button" onClick={() => window.dispatchEvent(new CustomEvent("bookmeet:create-review"))}>Напишите рецензию первым</button></div>}</div>}
             {tab === "wishers" && <div className="book-readers-list">{wishers.length ? wishers.map((user) => <button type="button" className="book-reader-row" key={user.id} onClick={() => onOpenUser?.(user.id)}><span className={`avatar avatar-sm avatar-${user.color}`}>{user.initials}</span><span><span className="inline-user-link">{user.profile.name}</span><span className="book-reader-note">{user.profile.type} · {user.profile.city}</span></span></button>) : <p>Пока никто не добавил эту книгу в список «Хочу почитать!».</p>}</div>}
@@ -902,6 +907,8 @@ export function LibraryTab({ books, setBooks, userId, users, initialAdd = false 
   const [editingBook, setEditingBook] = useState<LibraryBook | null | undefined>(() => initialAdd ? null : undefined);
   const [viewingBook, setViewingBook] = useState<LibraryBook | null>(null);
   const [statsOpen, setStatsOpen] = useState(false);
+  const [importing, setImporting] = useState(false);
+  const importInputRef = useRef<HTMLInputElement>(null);
   const now = new Date();
   const currentMonth = now.getMonth() + 1;
   const currentYear = now.getFullYear();
@@ -910,6 +917,32 @@ export function LibraryTab({ books, setBooks, userId, users, initialAdd = false 
   const wantCount = books.filter((book) => book.readingStatus === "want").length;
   const readingCount = books.filter((book) => book.readingStatus === "reading").length;
   const visibleBooks = books.filter((book) => (book.readingStatus ?? "read") === statusFilter);
+
+  async function importBooks(file?: File) {
+    if (!file) return;
+    setImporting(true);
+    try {
+      const workbook = XLSX.read(await file.arrayBuffer(), { type: "array" });
+      const rows = XLSX.utils.sheet_to_json<Record<string, unknown>>(workbook.Sheets[workbook.SheetNames[0]], { defval: "" });
+      const existing = new Set(catalogFromUsers(users).map((book) => normalizeBookKey(`${book.author}|${book.title}`)));
+      const imported: LibraryBook[] = [];
+      for (const row of rows.slice(0, 1000)) {
+        const value = (keys: string[]) => String(keys.map((key) => row[key]).find(Boolean) ?? "").trim();
+        const author = value(["Автор", "автор", "Author", "author"]);
+        const title = value(["Название", "название", "Книга", "Title", "title"]);
+        const key = normalizeBookKey(`${author}|${title}`);
+        if (!author || !title || existing.has(key)) continue;
+        const response = await fetch("/api/books", { method: "POST", credentials: "same-origin", headers: { "content-type": "application/json" }, body: JSON.stringify({ userId, author, title, isbn: value(["ISBN", "isbn"]), publisher: value(["Издательство", "Publisher", "publisher"]), annotation: value(["Аннотация", "Описание", "Annotation", "annotation"]), coverUrl: value(["Обложка", "Cover", "coverUrl"]), genres: value(["Жанры", "Genres", "genres"]).split(/[,;]+/).map((item) => item.trim()).filter(Boolean), readingStatus: "read", rating: 0, shortReview: "", coverTone: "blue" }) });
+        if (!response.ok) continue;
+        const data = await response.json() as { book?: LibraryBook };
+        if (data.book) imported.push(data.book);
+        existing.add(key);
+      }
+      if (imported.length) setBooks((current) => [...imported, ...current]);
+      window.alert(`Импорт завершён. Добавлено книг: ${imported.length}. Дубликаты пропущены.`);
+    } catch (error) { console.warn(error); window.alert("Не удалось прочитать файл. Используйте CSV, XLS или XLSX с колонками «Автор» и «Название»."); }
+    finally { setImporting(false); }
+  }
 
   async function updateRating(id: number, rating: number) {
     const book = books.find((item) => item.id === id);
@@ -941,7 +974,7 @@ export function LibraryTab({ books, setBooks, userId, users, initialAdd = false 
     <div className="library-tab">
       <div className="profile-title-row library-title-row">
         <div><h1>Моя библиотека</h1><button className="library-reading-summary" type="button" onClick={() => setStatsOpen(true)}><span>В {readingMonthsPrepositional[currentMonth - 1]} прочитано: <strong>{monthReadCount}</strong> {booksWord(monthReadCount)}</span><i aria-hidden="true" /><span>В {currentYear} году прочитано: <strong>{yearReadCount}</strong> {booksWord(yearReadCount)}</span></button><div className="library-status-summary"><span>Хочу прочитать: <strong>{wantCount}</strong> {booksWord(wantCount)}</span><i aria-hidden="true" /><span>Читаю сейчас: <strong>{readingCount}</strong> {booksWord(readingCount)}</span></div></div>
-        <button className="primary-button creation-action-button" type="button" onClick={() => setEditingBook(null)}>＋ Добавить книгу</button>
+        <div className="library-import-actions"><button className="outline-button" type="button" disabled={importing} onClick={() => importInputRef.current?.click()}>{importing ? "Импортируем…" : "Импорт CSV / Excel"}</button><input ref={importInputRef} type="file" hidden accept=".csv,.xls,.xlsx" onChange={(event) => { void importBooks(event.target.files?.[0]); event.currentTarget.value = ""; }} /><button className="primary-button creation-action-button" type="button" onClick={() => setEditingBook(null)}>＋ Добавить книгу</button></div>
       </div>
       <div className="library-toolbar">
         <div className="library-status-filter" role="group" aria-label="Фильтр книг по статусу"><button className={statusFilter === "want" ? "active" : ""} type="button" onClick={() => setStatusFilter("want")}>Хочу прочитать</button><button className={statusFilter === "reading" ? "active" : ""} type="button" onClick={() => setStatusFilter("reading")}>Читаю</button><button className={statusFilter === "read" ? "active" : ""} type="button" onClick={() => setStatusFilter("read")}>Прочитано</button></div>
@@ -1143,6 +1176,7 @@ export function AuthorBooksTab({ books, setBooks, userId, author, users, publish
 
 export function RichTextEditor({ value, onChange }: { value: string; onChange: (value: string) => void }) {
   const editorRef = useRef<HTMLDivElement>(null);
+  const imageInputRef = useRef<HTMLInputElement>(null);
   const [fontSizeValue, setFontSizeValue] = useState("16");
   const [spoilerHint, setSpoilerHint] = useState(false);
   useEffect(() => {
@@ -1192,6 +1226,20 @@ export function RichTextEditor({ value, onChange }: { value: string; onChange: (
     onChange(sanitizeRichHtml(editor.innerHTML));
   }
 
+  function insertImage(file?: File) {
+    if (!file || !file.type.startsWith("image/") || file.size > 3 * 1024 * 1024) {
+      if (file) window.alert("Выберите изображение размером до 3 МБ");
+      return;
+    }
+    const reader = new FileReader();
+    reader.onload = () => {
+      editorRef.current?.focus();
+      document.execCommand("insertHTML", false, `<p><img src="${String(reader.result ?? "")}" alt="Изображение в тексте" contenteditable="false" style="width:100%;max-width:100%"></p><p><br></p>`);
+      onChange(sanitizeRichHtml(editorRef.current?.innerHTML ?? ""));
+    };
+    reader.readAsDataURL(file);
+  }
+
   return <div className="rich-editor-shell">
     <div className="rich-editor-toolbar" aria-label="Форматирование текста">
       <button type="button" title="Жирный" onMouseDown={(event) => event.preventDefault()} onClick={() => run("bold")}><b>Ж</b></button>
@@ -1208,6 +1256,8 @@ export function RichTextEditor({ value, onChange }: { value: string; onChange: (
       <button type="button" title="Маркированный список" onMouseDown={(event) => event.preventDefault()} onClick={() => run("insertUnorderedList")}>•≡</button>
       <button type="button" title="Нумерованный список" onMouseDown={(event) => event.preventDefault()} onClick={() => run("insertOrderedList")}>1≡</button>
       <span className="toolbar-divider" />
+      <button type="button" title="Вставить изображение" onMouseDown={(event) => event.preventDefault()} onClick={() => imageInputRef.current?.click()}>▧</button>
+      <input ref={imageInputRef} className="rich-image-input" type="file" accept="image/*" onChange={(event) => { insertImage(event.target.files?.[0]); event.currentTarget.value = ""; }} />
       <button type="button" title="Скрыть под спойлер" onMouseDown={(event) => event.preventDefault()} onClick={toggleRichSpoiler}>▦</button>
       {spoilerHint && <span className="toolbar-hint">Выделите текст для скрытия под спойлер</span>}
     </div>

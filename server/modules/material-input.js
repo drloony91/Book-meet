@@ -56,10 +56,10 @@ export function occasionPayload(body = {}) {
     if (!/^\d{4}-\d{2}-\d{2}$/.test(meetingDate) || meetingDate <= new Date().toISOString().slice(0, 10)) {
       throw Object.assign(new Error("Выберите будущую дату встречи"), { statusCode: 400 });
     }
-    if (Boolean(meetingStartTime) !== Boolean(meetingEndTime)) {
-      throw Object.assign(new Error("Укажите и начало, и окончание встречи либо оставьте время пустым"), { statusCode: 400 });
+    if (meetingEndTime && !meetingStartTime) {
+      throw Object.assign(new Error("Время завершения можно указать только после времени начала"), { statusCode: 400 });
     }
-    if (meetingStartTime && (!/^([01]\d|2[0-3]):[0-5]\d$/.test(meetingStartTime) || !/^([01]\d|2[0-3]):[0-5]\d$/.test(meetingEndTime))) {
+    if (meetingStartTime && !/^([01]\d|2[0-3]):[0-5]\d$/.test(meetingStartTime) || meetingEndTime && !/^([01]\d|2[0-3]):[0-5]\d$/.test(meetingEndTime)) {
       throw Object.assign(new Error("Проверьте время встречи"), { statusCode: 400 });
     }
   }
@@ -71,9 +71,9 @@ export async function knownCity(connection, name, preferredId) {
   if (!cleanName || !CYRILLIC_CITY_PATTERN.test(cleanName)) throw Object.assign(new Error("Выберите город из списка на кириллице"), { statusCode: 400 });
   const sql = preferredId
     ? `SELECT c.id, ? AS selected_name FROM cities c
-        WHERE c.id = ? AND (c.name_key = ? OR EXISTS (SELECT 1 FROM city_aliases ca WHERE ca.city_id = c.id AND ca.name_key = ?)) LIMIT 1`
+        WHERE c.country_code = 'KZ' AND c.id = ? AND (c.name_key = ? OR EXISTS (SELECT 1 FROM city_aliases ca WHERE ca.city_id = c.id AND ca.name_key = ? AND ca.language_code = 'ru')) LIMIT 1`
     : `SELECT c.id, ? AS selected_name FROM cities c
-        WHERE c.name_key = ? OR EXISTS (SELECT 1 FROM city_aliases ca WHERE ca.city_id = c.id AND ca.name_key = ?) LIMIT 1`;
+        WHERE c.country_code = 'KZ' AND (c.name_key = ? OR EXISTS (SELECT 1 FROM city_aliases ca WHERE ca.city_id = c.id AND ca.name_key = ? AND ca.language_code = 'ru')) LIMIT 1`;
   const nameKey = normalizeIdentity(cleanName);
   const queryParams = preferredId ? [cleanName, Number(preferredId), nameKey, nameKey] : [cleanName, nameKey, nameKey];
   const [[city]] = await connection.query(sql, queryParams);

@@ -22,6 +22,7 @@ import { ChatScreen } from "../screens/ChatScreen";
 import { AuthBookTransition, LoginScreen } from "../screens/AuthScreens";
 import { PublishingDirectoryPage, UsersDirectoryPage } from "../screens/UsersDirectoryScreen";
 import { EventsDirectoryPage, HomeContent, MaterialsDirectoryPage, OccasionsDirectoryPage } from "../screens/ContentScreens";
+import { ContentHubControls } from "../components/content/ContentHubControls";
 import { AdminProfile, MyProfile } from "../screens/ProfileScreens";
 import {
   AdminCatalogEditor,
@@ -550,6 +551,14 @@ export function useBookMeetController() {
     setEventFormOpen(true);
   }
 
+  function startPublisherNewsCreation() {
+    setProfileAction(null);
+    setProfileEditId(null);
+    setView("profile");
+    window.history.pushState({ bookMeetPage: true, backgroundPath: normalizedPathname(window.location.pathname) }, "", "/profile/news");
+    notifyAppNavigation();
+  }
+
   function openUserProfile(userId: number) {
     if (blockedByUserIds.includes(userId)) {
       setBlockedProfileNotice(true);
@@ -665,9 +674,21 @@ export function useBookMeetController() {
   }
 
   async function unblockUser(targetId: number) {
-    const response = await apiFetch(`/api/social/blocks/${targetId}`, { method: "DELETE", credentials: "same-origin" });
+    const response = await apiFetch(currentUser?.isAdmin ? `/api/admin/users/${targetId}/suspension` : `/api/social/blocks/${targetId}`, { method: "DELETE", credentials: "same-origin" });
     const data = await response.json().catch(() => ({})) as { error?: string };
     if (!response.ok) throw new Error(data.error || "Не удалось разблокировать пользователя");
+    await refreshBootstrap();
+  }
+
+  async function blockUser(targetId: number) {
+    const endpoint = currentUser?.isAdmin ? `/api/admin/users/${targetId}/suspension` : "/api/social/blocks";
+    const body = currentUser?.isAdmin
+      ? { permanent: true, reason: "Заблокирован администратором" }
+      : { targetId };
+    const response = await apiFetch(endpoint, { method: "POST", credentials: "same-origin", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
+    const data = await response.json().catch(() => ({})) as { error?: string };
+    if (!response.ok) throw new Error(data.error || "Не удалось заблокировать пользователя");
+    setProfileUserId(null);
     await refreshBootstrap();
   }
 
@@ -926,13 +947,14 @@ export function useBookMeetController() {
           onSelectFriend={(friend) => openChat(friend.id)}
           expandedChat={chatExpanded && chat ? chat : undefined}
         >
+          <ContentHubControls view={view} profileType={currentUser.profile.type} onNavigate={navigateMainView} onEvent={startEventCreation} onReview={() => startCreating("review")} onPublication={() => startCreating("excerpt")} onOccasion={startOccasionCreation} onPublisherNews={startPublisherNewsCreation} />
           {workspaceContent}
         </WorkspaceScreen>
       )}
 
       {selectedFriend && !chatExpanded && (!currentRoute.overlay || currentRoute.overlay.kind === "chat") && <div className="chat-popup-layer"><div className="chat-popup">{chat}</div></div>}
 
-      {selectedBook && <UnifiedBookModal book={selectedBook} users={visibleUsers} onClose={() => setSelectedBook(null)} onReport={currentUser.isAdmin || selectedBook.creatorUserId === currentUser.id || users.some((user) => user.id === currentUser.id && (user.authorBooks ?? []).some((book) => book.id === selectedBook.id)) ? undefined : () => openReportDialog({ kind: "book", id: selectedBook.id })} onOpenUser={openUserProfile} onOpenReview={(review, user) => { setSelectedBook(null); setSelectedMaterial({ id: review.id, kind: "review", title: review.bookTitle, author: user.profile.name, text: review.fullText, ownerId: user.id, createdAt: review.createdAt, preview: review.preview, bookAuthor: review.bookAuthor, rating: review.rating }); }} />}
+      {selectedBook && <UnifiedBookModal book={selectedBook} users={visibleUsers} events={events} retainWhenInactive onClose={() => setSelectedBook(null)} onReport={currentUser.isAdmin || selectedBook.creatorUserId === currentUser.id || users.some((user) => user.id === currentUser.id && (user.authorBooks ?? []).some((book) => book.id === selectedBook.id)) ? undefined : () => openReportDialog({ kind: "book", id: selectedBook.id })} onOpenUser={openUserProfile} onOpenEvent={(event) => setSelectedEvent(event)} onOpenReview={(review, user) => { setSelectedMaterial({ id: review.id, kind: "review", title: review.bookTitle, author: user.profile.name, text: review.fullText, ownerId: user.id, createdAt: review.createdAt, preview: review.preview, bookAuthor: review.bookAuthor, rating: review.rating }); }} />}
       {selectedMaterial && <ReadingModal item={selectedMaterial} currentUser={currentUser} users={visibleUsers} likedUserIds={likes[`${selectedMaterial.kind}-${selectedMaterial.id}`] ?? []} onToggleLike={() => toggleLike(selectedMaterial)} onComment={(text) => addComment(selectedMaterial, text)} onOpenUser={openUserProfile} onClose={() => setSelectedMaterial(null)} onReport={selectedMaterial.ownerId !== currentUser.id && !currentUser.isAdmin ? () => openReportDialog({ kind: selectedMaterial.kind, id: selectedMaterial.id }) : undefined} onEdit={currentUser.isAdmin || selectedMaterial.ownerId === currentUser.id ? () => void editReadingMaterial(selectedMaterial, currentUser) : undefined} onDelete={currentUser.isAdmin || selectedMaterial.ownerId === currentUser.id ? () => void deleteReadingMaterial(selectedMaterial, currentUser) : undefined} />}
       {adminEditingMaterial && <AdminCatalogEditor item={adminEditingMaterial} users={users} onClose={() => setAdminEditingMaterial(null)} onSave={async (payload) => { const response = await fetch(`/api/admin/materials/${adminEditingMaterial.kind}/${adminEditingMaterial.id}`, { method: "PATCH", credentials: "same-origin", headers: { "content-type": "application/json" }, body: JSON.stringify(payload) }); const data = await response.json().catch(() => ({})) as { error?: string }; if (!response.ok) { window.alert(data.error ?? "Не удалось сохранить изменения"); return; } setAdminEditingMaterial(null); await refreshBootstrap(); }} />}
       {detailNotification && <NotificationDetail notification={detailNotification} actor={users.find((user) => user.id === detailNotification.actorId)} isFollowing={follows.some((follow) => follow.followerId === currentUser.id && follow.targetId === detailNotification.actorId)} onClose={() => setDetailNotification(null)} onFollow={() => followUser(detailNotification.actorId)} />}
@@ -946,7 +968,7 @@ export function useBookMeetController() {
       {editingOccasion && <div className="modal-backdrop" onMouseDown={() => setEditingOccasion(null)}><section className="event-editor-modal" onMouseDown={(event) => event.stopPropagation()}><OccasionForm initial={editingOccasion} submitLabel="Отправить повторно" onCancel={() => setEditingOccasion(null)} onSave={resubmitOccasion} /></section></div>}
       {selectedOccasion && <OccasionModal item={selectedOccasion} onReport={selectedOccasion.creatorId !== currentUser.id && !currentUser.isAdmin ? () => openReportDialog({ kind: "occasion", id: selectedOccasion.id }) : undefined} onOpenUser={openUserProfile} onClose={() => setSelectedOccasion(null)} />}
       {roleRestrictionNotice && <div className="modal-backdrop" onMouseDown={() => setRoleRestrictionNotice(null)}><section className="simple-warning-modal" role="dialog" aria-modal="true" onMouseDown={(event) => event.stopPropagation()}><h2>{roleRestrictionNotice === "review" ? "Рецензии могут писать только читатели и блогеры" : roleRestrictionNotice === "excerpt" ? "Публикации могут создавать только писатели и блогеры" : roleRestrictionNotice === "occasion" ? "Издательства не могут создавать поводы познакомиться" : "Профиль издательства ожидает официального подтверждения"}</h2><button className="primary-button" type="button" autoFocus onClick={() => setRoleRestrictionNotice(null)}>Закрыть</button></section></div>}
-      {profileUser && profileUser.id !== currentUser.id && <UserProfileModal user={profileUser} viewer={currentUser} users={visibleUsers} events={events} likes={likes} friendCount={friendships.filter((item) => item.userA === profileUser.id || item.userB === profileUser.id).length} relationship={relationshipToProfile} incomingMessage={friendRequests.find((request) => request.status === "pending" && request.fromId === profileUser.id && request.toId === currentUser.id)?.message} isFollowing={isFriendPair(currentUser.id, profileUser.id) || follows.some((follow) => follow.followerId === currentUser.id && follow.targetId === profileUser.id)} canMessage={Boolean(currentUser.isAdmin || profileUser.isAdmin)} blockedByMe={Boolean(profileUser.blockedByMe)} onClose={() => setProfileUserId(null)} onAddFriend={(message) => sendFriendRequest(profileUser.id, message)} onCancelFriendRequest={() => cancelFriendRequest(profileUser.id)} onAccept={() => acceptFriend(profileUser.id)} onReject={(comment) => rejectFriend(profileUser.id, comment)} onRemoveFriend={() => removeFriend(profileUser.id)} onOpenChat={() => openChat(profileUser.id)} onFollow={() => followUser(profileUser.id)} onUnfollow={() => unfollowUser(profileUser.id)} onUnblock={() => unblockUser(profileUser.id)} onReport={currentUser.isAdmin ? undefined : () => openReportDialog({ kind: "user", id: profileUser.id })} onToggleLike={toggleLike} onComment={addComment} onOpenUser={openUserProfile} />}
+      {profileUser && profileUser.id !== currentUser.id && <UserProfileModal user={profileUser} viewer={currentUser} users={visibleUsers} events={events} likes={likes} friendCount={friendships.filter((item) => item.userA === profileUser.id || item.userB === profileUser.id).length} relationship={relationshipToProfile} incomingMessage={friendRequests.find((request) => request.status === "pending" && request.fromId === profileUser.id && request.toId === currentUser.id)?.message} isFollowing={isFriendPair(currentUser.id, profileUser.id) || follows.some((follow) => follow.followerId === currentUser.id && follow.targetId === profileUser.id)} canMessage={Boolean(currentUser.isAdmin || profileUser.isAdmin)} blockedByMe={Boolean(profileUser.blockedByMe || currentUser.isAdmin && profileUser.suspension)} onClose={() => setProfileUserId(null)} onAddFriend={(message) => sendFriendRequest(profileUser.id, message)} onCancelFriendRequest={() => cancelFriendRequest(profileUser.id)} onAccept={() => acceptFriend(profileUser.id)} onReject={(comment) => rejectFriend(profileUser.id, comment)} onRemoveFriend={() => removeFriend(profileUser.id)} onOpenChat={() => openChat(profileUser.id)} onFollow={() => followUser(profileUser.id)} onUnfollow={() => unfollowUser(profileUser.id)} onBlock={() => blockUser(profileUser.id)} onUnblock={() => unblockUser(profileUser.id)} onReport={currentUser.isAdmin ? undefined : () => openReportDialog({ kind: "user", id: profileUser.id })} onToggleLike={toggleLike} onComment={addComment} onOpenUser={openUserProfile} />}
       {blockedProfileNotice && <div className="nested-modal-backdrop" onMouseDown={() => setBlockedProfileNotice(false)}><section className="confirm-social-modal" role="alertdialog" aria-modal="true" onMouseDown={(event) => event.stopPropagation()}><h2>Кажется, с вами не хотят общаться</h2><button className="primary-button" type="button" autoFocus onClick={() => setBlockedProfileNotice(false)}>Ок</button></section></div>}
       {adultRestrictionNotice && <div className="nested-modal-backdrop"><section className="adult-restriction-modal" role="alertdialog" aria-modal="true" aria-labelledby="adult-restriction-title"><span className="adult-restriction-mark" aria-hidden="true">18+</span><h2 id="adult-restriction-title">Материал предназначен для лиц старше 18 лет</h2>{adultRestrictionNotice === "missing" && <p>Пожалуйста, укажите дату рождения в профиле, чтобы система могла определить ваш возраст.</p>}<div className="form-actions">{adultRestrictionNotice === "missing" ? <><button className="primary-button" type="button" onClick={() => leaveRestrictedMaterial(true)}>Перейти в профиль</button><button className="outline-button" type="button" onClick={() => leaveRestrictedMaterial(false)}>Выйти</button></> : <button className="primary-button" type="button" autoFocus onClick={() => leaveRestrictedMaterial(false)}>Ок</button>}</div></section></div>}
       <SafetyCenter onChanged={() => void refreshBootstrap()} />

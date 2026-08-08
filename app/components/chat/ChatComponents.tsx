@@ -58,7 +58,7 @@ export function FriendsPanel({
             </span>
           </button>
         ))}
-        {!adminMode && realFriendCount === 0 && <div className="friends-empty"><p>У вас нет друзей</p><button type="button" onClick={onFindFriends}>Найти друзей</button></div>}
+        {!adminMode && realFriendCount === 0 && <div className="friends-empty"><p>У вас нет друзей</p></div>}
         {hasSearchablePeople && filtered.length === 0 && <div className="friends-empty"><p>Совпадений не найдено</p></div>}
         {adminMode && !friends.length && <div className="friends-empty"><p>Запросов пока нет</p></div>}
       </div>

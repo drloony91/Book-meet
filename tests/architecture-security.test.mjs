@@ -99,7 +99,7 @@ test("этапы 5 и 6 закрепляют доступ 18+, поводы и �
   assert.match(migration, /meeting_date DATE NULL/);
   assert.match(migration, /meeting_start_time TIME NULL/);
   assert.match(materialInput, /Выберите будущую дату встречи/);
-  assert.match(materialInput, /Укажите и начало, и окончание встречи либо оставьте время пустым/);
+  assert.match(materialInput, /Время завершения можно указать только после времени начала/);
   assert.match(data, /adultAccess: \{ status: adultStatus, restricted: restrictedAdultMaterials \}/);
   assert.match(data, /WHERE is_adult = 1 AND status = 'published'/);
   assert.match(controller, /Материал предназначен для лиц старше 18 лет/);
@@ -169,7 +169,7 @@ test("исправления карточки книги, страны, горо
   assert.match(cities, /Жезказган/);
   assert.match(cities, /Жезқазған/);
   assert.match(cities, /language_code/);
-  assert.match(controller, /setSelectedBook\(null\); setSelectedMaterial/);
+  assert.match(controller, /retainWhenInactive/);
   assert.match(content, /className="book-reader-row"[^>]+onClick/);
   assert.match(home, /item\.country\?\.toLocaleLowerCase/);
   assert.match(styles, /admin-report-buttons button:last-child/);

@@ -4,7 +4,7 @@ export function sanitizeRichHtml(value: string) {
   if (typeof document === "undefined" || !value) return "";
   const template = document.createElement("template");
   template.innerHTML = value;
-  const allowed = new Set(["P", "DIV", "BR", "STRONG", "B", "EM", "I", "U", "S", "STRIKE", "UL", "OL", "LI", "SPAN"]);
+  const allowed = new Set(["P", "DIV", "BR", "STRONG", "B", "EM", "I", "U", "S", "STRIKE", "UL", "OL", "LI", "SPAN", "IMG"]);
   const clean = (node: Node) => {
     for (const child of Array.from(node.childNodes)) {
       if (child.nodeType === Node.COMMENT_NODE) { child.remove(); continue; }
@@ -17,7 +17,16 @@ export function sanitizeRichHtml(value: string) {
       const textAlign = element.style.textAlign;
       const fontSize = element.style.fontSize;
       const spoiler = element.tagName === "SPAN" && element.classList.contains("spoiler");
+      const imageSource = element.tagName === "IMG" ? element.getAttribute("src") ?? "" : "";
+      const imageWidth = element.tagName === "IMG" ? element.style.width : "";
       for (const attribute of Array.from(element.attributes)) element.removeAttribute(attribute.name);
+      if (element.tagName === "IMG" && imageSource.startsWith("data:image/")) {
+        element.setAttribute("src", imageSource);
+        element.setAttribute("alt", "Изображение в тексте");
+        element.setAttribute("contenteditable", "false");
+        element.style.width = /^\d{1,3}(?:\.\d+)?%$/.test(imageWidth) ? imageWidth : "100%";
+        element.style.maxWidth = "100%";
+      }
       if (spoiler) element.className = "spoiler";
       if (["left", "right", "center", "justify"].includes(textAlign)) element.style.textAlign = textAlign;
       if (["12px", "14px", "16px", "18px", "22px", "28px"].includes(fontSize)) element.style.fontSize = fontSize;
