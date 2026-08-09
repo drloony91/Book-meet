@@ -19,6 +19,7 @@ export function FriendsPanel({
   onCreateOccasion,
   collapsed = false,
   onToggleCollapsed,
+  onExpandCollapsed,
   adminMode = false,
 }: {
   friends: Friend[];
@@ -28,6 +29,7 @@ export function FriendsPanel({
   onCreateOccasion: () => void;
   collapsed?: boolean;
   onToggleCollapsed?: () => void;
+  onExpandCollapsed?: () => void;
   adminMode?: boolean;
 }) {
   const [query, setQuery] = useState("");
@@ -36,17 +38,17 @@ export function FriendsPanel({
     [query, friends],
   );
   const realFriendCount = friends.filter((friend) => !friend.support && !friend.supportCase).length;
-  const hasSearchablePeople = adminMode ? friends.length > 0 : realFriendCount > 0;
+  const hasSearchablePeople = friends.length > 0;
 
   return (
-    <aside className={`friends-panel ${!hasSearchablePeople ? "is-empty" : ""} ${collapsed ? "is-collapsed" : ""}`} aria-label="Список друзей">
+    <aside className={`friends-panel ${!hasSearchablePeople ? "is-empty" : ""} ${collapsed ? "is-collapsed" : ""}`} aria-label="Список друзей" onClick={(event) => { if (collapsed && !(event.target as Element).closest(".friends-collapse-toggle")) onExpandCollapsed?.(); }}>
       <div className="friends-heading">
         <div>
           <h2>{adminMode ? "Запросы" : "Друзья"} <span>{adminMode ? friends.length : realFriendCount}</span></h2>
         </div>
         {!adminMode && <button className="friends-find-button" type="button" onClick={onFindFriends}>Найти друзей</button>}
       </div>
-      {!adminMode && <button className="friends-collapse-toggle" type="button" onClick={onToggleCollapsed} aria-label={collapsed ? "Развернуть друзей" : "Свернуть друзей"} title={collapsed ? "Развернуть друзей" : "Свернуть друзей"}><span aria-hidden="true">&lt;</span><span aria-hidden="true">&gt;</span></button>}
+      {!adminMode && <button className={`friends-collapse-toggle ${collapsed ? "is-collapsed" : ""}`} type="button" onClick={onToggleCollapsed} aria-label={collapsed ? "Развернуть друзей" : "Свернуть друзей"} title={collapsed ? "Развернуть друзей" : "Свернуть друзей"}><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m14.5 6-6 6 6 6" /></svg></button>}
       {hasSearchablePeople && (
         <label className="friend-search">
           <span aria-hidden="true">⌕</span>

@@ -20,6 +20,7 @@ export function sanitizeRichHtml(value: string) {
       const imageFrame = element.tagName === "DIV" && element.classList.contains("rich-image-frame");
       const inlineBook = element.tagName === "DIV" && element.classList.contains("rich-inline-book");
       const preservedSpanClass = element.tagName === "SPAN" ? ["rich-image-resize-handle", "rich-inline-book-cover", "rich-inline-book-copy", "rich-inline-book-remove"].find((name) => element.classList.contains(name)) : undefined;
+      const coverBackground = preservedSpanClass === "rich-inline-book-cover" ? element.style.backgroundImage : "";
       const bookId = inlineBook ? element.getAttribute("data-book-id") ?? "" : "";
       const imageSource = element.tagName === "IMG" ? element.getAttribute("src") ?? "" : "";
       const imageWidth = imageFrame ? element.style.width : element.tagName === "IMG" ? element.style.width : "";
@@ -33,6 +34,7 @@ export function sanitizeRichHtml(value: string) {
       }
       if (spoiler) element.className = "spoiler";
       if (preservedSpanClass) { element.className = preservedSpanClass; element.setAttribute("contenteditable", "false"); }
+      if (preservedSpanClass === "rich-inline-book-cover" && /^url\(["']?(?:https?:\/\/|\/uploads\/|data:image\/)/i.test(coverBackground)) element.style.backgroundImage = coverBackground;
       if (imageFrame) { element.className = "rich-image-frame"; element.setAttribute("contenteditable", "false"); element.style.width = /^\d{1,3}(?:\.\d+)?%$/.test(imageWidth) ? imageWidth : "100%"; element.style.maxWidth = "100%"; }
       if (inlineBook && /^\d+$/.test(bookId)) { element.className = "rich-inline-book"; element.setAttribute("data-book-id", bookId); element.setAttribute("contenteditable", "false"); }
       if (["left", "right", "center", "justify"].includes(textAlign)) element.style.textAlign = textAlign;

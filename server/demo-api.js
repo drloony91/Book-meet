@@ -159,7 +159,7 @@ function bootstrap(userId) {
   };
   const relatedBlocks = state.blocks.filter((block) => block.blockerId === userId || block.blockedId === userId);
   const blockedByUserIds = relatedBlocks.filter((block) => block.blockedId === userId).map((block) => block.blockerId);
-  const visibleUsers = users.filter((user) => user.profile.type !== "Издатель"
+  const visibleUsers = users.filter((user) => !["Издатель", "Сообщество"].includes(user.profile.type)
     || user.profile.publisherStatus === "approved"
     || user.id === userId
     || viewer?.isAdmin).filter((user) => viewer?.isAdmin || user.id === userId || !blockedByUserIds.includes(user.id)).map((user) => {
@@ -312,8 +312,8 @@ router.use((request, response, next) => {
     || request.path === "/users/me/profile-complete"
     || request.path === "/auth/logout") return next();
   const user = users.find((item) => item.id === request.demoUserId);
-  if (user?.profile.type === "Издатель" && user.profile.publisherStatus !== "approved") {
-    return response.status(403).json({ error: "Профиль издательства ожидает официального подтверждения" });
+  if (["Издатель", "Сообщество"].includes(user?.profile.type) && user.profile.publisherStatus !== "approved") {
+    return response.status(403).json({ error: "Профиль организации ожидает официального подтверждения" });
   }
   next();
 });
@@ -519,7 +519,7 @@ router.put("/users/me/state", (request, response) => {
   const user = users.find((item) => item.id === request.demoUserId);
   if (!user) return response.status(404).json({ error: "Пользователь не найден" });
   const profile = request.body?.profile;
-  const publisher = profile?.type === "Издатель";
+  const publisher = ["Издатель", "Сообщество"].includes(profile?.type);
   if (!String(profile?.name ?? "").trim() || !Number(profile?.cityId)) return response.status(400).json({ error: "Заполните обязательные поля" });
   if (!publisher && !/^\d{4}-\d{2}-\d{2}$/.test(String(profile?.birthDate ?? ""))) return response.status(400).json({ error: "Укажите корректную дату рождения" });
   if (!publisher) {
@@ -533,7 +533,7 @@ router.put("/users/me/state", (request, response) => {
   if (publisher) {
     const required = [profile.publisherWebsite, profile.bio, profile.publisherLegalName, profile.publisherBin, profile.publisherAccount, profile.publisherBik, profile.publisherBank, profile.publisherLegalAddress, profile.publisherPostalAddress];
     if (required.some((value) => !String(value ?? "").trim())) return response.status(400).json({ error: "Заполните обязательные поля издательства" });
-    const currentApproved = user.profile.type === "Издатель" && user.profile.publisherStatus === "approved";
+    const currentApproved = user.profile.type === profile.type && user.profile.publisherStatus === "approved";
     profile.publisherStatus = currentApproved ? "approved" : "pending";
     profile.publisherBin = String(profile.publisherBin).replace(/\D/g, "").slice(0, 12);
   } else {
@@ -543,7 +543,7 @@ router.put("/users/me/state", (request, response) => {
   if (request.body?.avatarUrl !== undefined) user.avatarUrl = request.body.avatarUrl || undefined;
   if ((profile.type === "Читатель" || profile.type === "Блогер") && Array.isArray(request.body?.reviews)) user.reviews = structuredClone(request.body.reviews);
   if ((profile.type === "Писатель" || profile.type === "Блогер") && Array.isArray(request.body?.excerpts)) user.excerpts = structuredClone(request.body.excerpts);
-  if (profile.type === "Издатель" && profile.publisherStatus === "approved" && Array.isArray(request.body?.publisherNews)) user.publisherNews = structuredClone(request.body.publisherNews);
+  if (["Издатель", "Сообщество"].includes(profile.type) && profile.publisherStatus === "approved" && Array.isArray(request.body?.publisherNews)) user.publisherNews = structuredClone(request.body.publisherNews);
   response.json({ ok: true });
 });
 
@@ -587,8 +587,8 @@ router.get("/books", (request, response) => {
 router.post("/books", (request, response) => {
   const user = users.find((item) => item.id === request.demoUserId);
   const payload = structuredClone(request.body ?? {});
-  if (payload.isAuthor && user.profile.type !== "Писатель" && user.profile.type !== "Издатель") return response.status(403).json({ error: "Добавлять книги могут только писатели и подтверждённые издательства" });
-  if (!payload.isAuthor && user.profile.type === "Издатель") return response.status(403).json({ error: "Издательские книги добавляются во вкладке «Книги издательства»" });
+  if (payload.isAuthor && user.profile.type !== "Писатель" && !["Издатель", "Сообщество"].includes(user.profile.type)) return response.status(403).json({ error: "Добавлять книги могут только писатели и подтверждённые организации" });
+  if (!payload.isAuthor && ["Издатель", "Сообщество"].includes(user.profile.type)) return response.status(403).json({ error: "Книги организации добавляются в специальной вкладке профиля" });
   const rating = Number(payload.rating);
   if (!payload.isAuthor && (payload.readingStatus ?? "read") === "read" && (!Number.isInteger(rating * 2) || rating < 0.5 || rating > 5)) return response.status(400).json({ error: "Оценка должна быть от 0,5 до 5 с шагом 0,5" });
   if (!payload.isAuthor) {
@@ -829,7 +829,7 @@ router.get("/admin/statistics", (request, response) => {
   const viewer = users.find((user) => user.id === request.demoUserId);
   if (!viewer?.isAdmin) return response.status(403).json({ error: "Доступно только администратору" });
   const communityUsers = users.filter((user) => !user.isAdmin && !user.deletedAt && !user.purged);
-  const usersByType = { "Читатель": 0, "Писатель": 0, "Блогер": 0, "Издатель": 0 };
+  const usersByType = { "Читатель": 0, "Писатель": 0, "Блогер": 0, "Издатель": 0, "Сообщество": 0 };
   const cityCounts = new Map();
   for (const user of communityUsers) {
     if (Object.prototype.hasOwnProperty.call(usersByType, user.profile.type)) usersByType[user.profile.type] += 1;
@@ -875,12 +875,15 @@ router.delete("/comments/:id", (request, response) => {
 
 router.post("/social/friend-requests", (request, response) => {
   const targetId = Number(request.body.targetId);
+  const source = users.find((user) => user.id === request.demoUserId);
   const target = users.find((user) => user.id === targetId);
   if (!target) return response.status(404).json({ error: "Пользователь не найден" });
   if (target.isAdmin) return response.status(403).json({ error: "Службу поддержки нельзя добавить в друзья" });
+  if (source?.profile.type === "Сообщество") return response.status(403).json({ error: "Сообщество не может отправлять запросы дружбы" });
   const entry = { id: nextId++, fromId: request.demoUserId, toId: targetId, status: "pending", message: String(request.body.message ?? "") };
   state.friendRequests.push(entry);
-  notification(targetId, request.demoUserId, "friend_request", "Новый друг", `${users.find((user) => user.id === request.demoUserId)?.profile.name} хочет добавить вас в друзья.`);
+  const membership = target.profile.type === "Сообщество";
+  notification(targetId, request.demoUserId, "friend_request", membership ? "Новая заявка" : "Новый друг", membership ? `${source?.profile.name} хочет присоединиться к сообществу.` : `${source?.profile.name} хочет добавить вас в друзья.`);
   response.json({ ok: true, request: entry });
 });
 
@@ -902,7 +905,8 @@ router.post("/social/friends/:targetId/accept", (request, response) => {
     if (!state.follows.some((item) => item.followerId === follow.followerId && item.targetId === follow.targetId)) state.follows.push(follow);
   }
   const key = conversationKey(targetId, request.demoUserId);
-  (state.messages[key] ??= []).push({ id: nextId++, system: true, text: "Теперь вы друзья и можете начать переписку", time: "сейчас" });
+  const community = users.find((user) => user.id === request.demoUserId)?.profile.type === "Сообщество";
+  (state.messages[key] ??= []).push({ id: nextId++, system: true, text: community ? "Заявка принята. Теперь вы участник сообщества и можете начать переписку" : "Теперь вы друзья и можете начать переписку", time: "сейчас" });
   response.json({ ok: true });
 });
 
@@ -1017,7 +1021,7 @@ router.patch("/admin/events/:id", (request, response) => {
 
 router.post("/occasions", (request, response) => {
   const creator = users.find((user) => user.id === request.demoUserId);
-  if (creator?.profile.type === "Издатель") return response.status(403).json({ error: "Издательства не могут создавать поводы познакомиться" });
+  if (["Издатель", "Сообщество"].includes(creator?.profile.type)) return response.status(403).json({ error: "Организационные профили не могут создавать поводы познакомиться" });
   const catalog = users.flatMap((user) => [...user.books, ...(user.authorBooks ?? [])]);
   const linkedBook = catalog.find((book) => book.id === Number(request.body.linkedBookId));
   const occasion = { id: nextId++, creatorId: request.demoUserId, type: request.body.type, primaryText: String(request.body.primaryText ?? ""), audienceText: String(request.body.audienceText ?? ""), isAdult: Boolean(request.body.isAdult), targetGender: request.body.targetGender, targetCities: structuredClone(request.body.targetCities ?? []), targetProfileType: request.body.targetProfileType, meetingDate: request.body.type === "invite" ? String(request.body.meetingDate ?? "") : undefined, meetingStartTime: request.body.type === "invite" ? String(request.body.meetingStartTime ?? "") || undefined : undefined, meetingEndTime: request.body.type === "invite" ? String(request.body.meetingEndTime ?? "") || undefined : undefined, meetingCity: request.body.type === "invite" ? String(request.body.meetingCity ?? request.body.targetCities?.[0] ?? "") : undefined, meetingCityId: Number(request.body.meetingCityId) || undefined, meetingAddress: request.body.type === "invite" ? String(request.body.meetingAddress ?? "") : undefined, meetingMapUrl: request.body.type === "invite" ? String(request.body.meetingMapUrl ?? "") : undefined, linkedBookId: linkedBook?.id, linkedBooks: linkedBook ? [{ id: linkedBook.id, title: linkedBook.title, author: linkedBook.author, annotation: linkedBook.annotation, coverUrl: linkedBook.coverUrl, coverTone: linkedBook.coverTone }] : [], status: "pending", moderationNote: "", creatorName: creator?.profile.name ?? "", createdAt: new Date().toISOString() };
@@ -1053,14 +1057,15 @@ router.patch("/admin/occasions/:id", (request, response) => {
 router.patch("/admin/publishers/:id", (request, response) => {
   const admin = users.find((user) => user.id === request.demoUserId);
   if (!admin?.isAdmin) return response.status(403).json({ error: "Доступно только администратору" });
-  const publisher = users.find((user) => user.id === Number(request.params.id) && user.profile.type === "Издатель");
-  if (!publisher) return response.status(404).json({ error: "Профиль издательства не найден" });
+  const publisher = users.find((user) => user.id === Number(request.params.id) && ["Издатель", "Сообщество"].includes(user.profile.type));
+  if (!publisher) return response.status(404).json({ error: "Профиль организации не найден" });
   const statuses = { accept: "approved", revision: "needs_changes", reject: "rejected" };
   const status = statuses[request.body?.action];
   if (!status) return response.status(400).json({ error: "Неизвестное действие модерации" });
   publisher.profile.publisherStatus = status;
   publisher.profile.publisherModerationNote = String(request.body?.note ?? "");
-  notification(publisher.id, admin.id, "event_moderation", status === "approved" ? "Профиль издательства подтверждён" : status === "needs_changes" ? "Профиль издательства требует доработки" : "Профиль издательства отклонён", publisher.profile.publisherModerationNote || "Статус профиля издательства изменён.");
+  const organization = publisher.profile.type === "Сообщество" ? "сообщества" : "издательства";
+  notification(publisher.id, admin.id, "event_moderation", status === "approved" ? `Профиль ${organization} подтверждён` : status === "needs_changes" ? `Профиль ${organization} требует доработки` : `Профиль ${organization} отклонён`, publisher.profile.publisherModerationNote || "Статус профиля организации изменён.");
   response.json({ ok: true });
 });
 

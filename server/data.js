@@ -61,7 +61,7 @@ export async function loadUsers(connection = getPool(), viewerId = null) {
   );
   const [bookRows] = await connection.query(
     `SELECT ub.user_id, ub.rating, ub.short_review, ub.read_month, ub.read_year, ub.reading_status, ub.last_read_chapter, ub.reading_comment, ub.is_author,
-             b.id, b.creator_user_id, b.author, b.title, b.isbn, b.publisher, b.genres, b.annotation, b.is_adult, b.cover_path, b.cover_tone, b.flip_url
+             b.id, b.creator_user_id, b.author, b.title, b.isbn, b.publisher, b.genres, b.annotation, b.is_adult, b.cover_path, b.cover_tone, b.flip_url, b.created_at AS book_created_at
        FROM user_books ub
        JOIN books b ON b.id = ub.book_id
       ORDER BY ub.created_at DESC`,
@@ -107,7 +107,7 @@ export async function loadUsers(connection = getPool(), viewerId = null) {
     Number(friendship.user_high_id) === Number(viewerId) && Number(friendship.user_low_id) === Number(targetId)
   ));
   return userRows.filter((row) => row.role === "admin"
-    || row.profile_type !== "Издатель"
+    || !["Издатель", "Сообщество"].includes(row.profile_type)
     || row.publisher_status === "approved"
     || Number(row.id) === Number(viewerId)
     || viewerIsAdmin).filter((row) => viewerIsAdmin
@@ -142,6 +142,7 @@ export async function loadUsers(connection = getPool(), viewerId = null) {
       links: linkRows.filter((link) => Number(link.book_id) === Number(book.id)).filter((link, index, all) => all.findIndex((item) => item.url === link.url) === index).map((link) => ({
         id: Number(link.id), label: link.label, url: link.url, action: link.action,
       })),
+      createdAtValue: book.book_created_at ? new Date(book.book_created_at).toISOString() : undefined,
     }));
     const authorBooks = userBooks.filter((book) => book.is_author).map((book) => ({
       id: Number(book.id),
@@ -163,6 +164,7 @@ export async function loadUsers(connection = getPool(), viewerId = null) {
       links: linkRows.filter((link) => Number(link.book_id) === Number(book.id)).filter((link, index, all) => all.findIndex((item) => item.url === link.url) === index).map((link) => ({
         id: Number(link.id), label: link.label, url: link.url, action: link.action,
       })),
+      createdAtValue: book.book_created_at ? new Date(book.book_created_at).toISOString() : undefined,
     }));
     return {
       id: Number(row.id),
@@ -205,7 +207,7 @@ export async function loadUsers(connection = getPool(), viewerId = null) {
         strangerMessage: row.stranger_message ?? "",
         favoriteGenres: parseJson(row.favorite_genres),
         dislikedGenres: parseJson(row.disliked_genres),
-        publisherStatus: row.publisher_status ?? (row.profile_type === "Издатель" ? "pending" : "not_required"),
+        publisherStatus: row.publisher_status ?? (["Издатель", "Сообщество"].includes(row.profile_type) ? "pending" : "not_required"),
         publisherWebsite: row.publisher_website ?? "",
         publisherSalesLinks: parseJson(row.publisher_sales_links),
         publisherLegalName: viewerIsAdmin || Number(row.id) === Number(viewerId) ? row.publisher_legal_name ?? "" : "",

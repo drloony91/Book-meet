@@ -8,6 +8,9 @@ export function BookMeetHeader({
   initials,
   avatarUrl,
   unreadCount,
+  unreadMessages,
+  chatsOpen,
+  showMobileChats = true,
   notificationsOpen,
   notificationsMenu,
   onHome,
@@ -16,6 +19,7 @@ export function BookMeetHeader({
   onCommunities,
   onPartners,
   onNotifications,
+  onChats,
   onProfile,
   onLogout,
 }: {
@@ -24,6 +28,9 @@ export function BookMeetHeader({
   initials: string;
   avatarUrl?: string;
   unreadCount: number;
+  unreadMessages: number;
+  chatsOpen: boolean;
+  showMobileChats?: boolean;
   notificationsOpen: boolean;
   notificationsMenu?: ReactNode;
   onHome: () => void;
@@ -32,6 +39,7 @@ export function BookMeetHeader({
   onCommunities: () => void;
   onPartners: () => void;
   onNotifications: () => void;
+  onChats: () => void;
   onProfile: () => void;
   onLogout: () => void;
 }) {
@@ -51,6 +59,7 @@ export function BookMeetHeader({
         <button type="button" onClick={onPartners}>Наши партнеры</button>
       </nav>
       <div className="topbar-account-actions">
+        {showMobileChats && <button className={`mobile-chat-button ${unreadMessages ? "has-messages" : ""}`} type="button" onClick={onChats} aria-label={`Диалоги: ${unreadMessages}`} aria-expanded={chatsOpen}><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 5.5h16v11H9l-5 3v-14Z" /></svg>{unreadMessages > 0 && <b>{unreadMessages > 99 ? "99+" : unreadMessages}</b>}</button>}
         <button className={`notification-button ${unreadCount ? "has-notifications" : ""}`} type="button" onClick={onNotifications} aria-label={`Уведомления: ${unreadCount}`} aria-expanded={notificationsOpen}>
           <span>🔔</span>{unreadCount > 0 && <b>{unreadCount > 99 ? "99+" : unreadCount}</b>}
         </button>
@@ -78,25 +87,30 @@ export function WorkspaceScreen({
   adminMode,
   contentHub = false,
   expandedChat,
+  mobileFriendsOpen = false,
   children,
   onFindFriends,
   onCreateOccasion,
   onSelectFriend,
+  onCloseMobileFriends,
 }: {
   friends: Friend[];
   selectedId: number | null;
   adminMode: boolean;
   contentHub?: boolean;
   expandedChat?: ReactNode;
+  mobileFriendsOpen?: boolean;
   children: ReactNode;
   onFindFriends: () => void;
   onCreateOccasion: () => void;
   onSelectFriend: (friend: Friend) => void;
+  onCloseMobileFriends?: () => void;
 }) {
   const [friendsCollapsed, setFriendsCollapsed] = useState(false);
   return (
-    <div className={`workspace ${friends.length ? "" : "workspace-without-friends"} ${contentHub ? "workspace-content-hub" : ""} ${friendsCollapsed ? "friends-collapsed" : ""}`}>
-      <FriendsPanel friends={friends} selectedId={selectedId} adminMode={adminMode} collapsed={friendsCollapsed} onToggleCollapsed={() => setFriendsCollapsed((value) => !value)} onFindFriends={onFindFriends} onCreateOccasion={onCreateOccasion} onSelect={(friend) => { if (friendsCollapsed) setFriendsCollapsed(false); onSelectFriend(friend); }} />
+    <div className={`workspace ${friends.length ? "" : "workspace-without-friends"} ${contentHub ? "workspace-content-hub" : ""} ${friendsCollapsed ? "friends-collapsed" : ""} ${mobileFriendsOpen ? "mobile-friends-open" : "mobile-friends-closed"}`}>
+      {mobileFriendsOpen && <button className="mobile-friends-backdrop" type="button" aria-label="Закрыть список диалогов" onClick={onCloseMobileFriends} />}
+      <FriendsPanel friends={friends} selectedId={selectedId} adminMode={adminMode} collapsed={friendsCollapsed} onToggleCollapsed={() => setFriendsCollapsed((value) => !value)} onExpandCollapsed={() => { if (friendsCollapsed) setFriendsCollapsed(false); }} onFindFriends={onFindFriends} onCreateOccasion={onCreateOccasion} onSelect={(friend) => { if (friendsCollapsed) setFriendsCollapsed(false); onSelectFriend(friend); }} />
       <section className="workspace-main">
         {expandedChat ?? children}
       </section>

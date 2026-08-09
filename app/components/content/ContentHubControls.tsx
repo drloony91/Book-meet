@@ -31,7 +31,7 @@ export function ContentHubControls({ view, profileType, showSwitch = true, onNav
   }, [open]);
   const choose = (action: () => void) => { setOpen(false); action(); };
   if (!["home", "events", "reviews", "publications", "occasions"].includes(view)) return null;
-  const publisher = profileType === "Издатель";
+  const publisher = profileType === "Издатель" || profileType === "Сообщество";
   return <>
     {showSwitch && <nav className="content-hub-switch" aria-label="Разделы главной страницы">
       <span className={`content-hub-indicator at-${sections.findIndex((item) => item.view === view)}`} aria-hidden="true" />

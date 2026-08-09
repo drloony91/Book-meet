@@ -41,18 +41,38 @@ export function UsersDirectoryPage({ currentUser, users, onOpenUser }: { current
 }
 
 export function PublishingDirectoryPage({ users, events, onOpenUser }: { users: DemoUser[]; events: BookEvent[]; onOpenUser: (userId: number) => void }) {
-  const publishers = useMemo(() => users
-    .filter((user) => !user.isAdmin && user.profile.type === "Издатель" && user.profile.publisherStatus === "approved")
-    .sort((first, second) => (Date.parse(second.joinedAt ?? "") || second.id) - (Date.parse(first.joinedAt ?? "") || first.id)), [users]);
+  return <OrganizationDirectoryPage type="Издатель" users={users} events={events} onOpenUser={onOpenUser} />;
+}
+
+export function CommunitiesDirectoryPage({ users, events, onOpenUser }: { users: DemoUser[]; events: BookEvent[]; onOpenUser: (userId: number) => void }) {
+  return <OrganizationDirectoryPage type="Сообщество" users={users} events={events} onOpenUser={onOpenUser} />;
+}
+
+function OrganizationDirectoryPage({ type, users, events, onOpenUser }: { type: "Издатель" | "Сообщество"; users: DemoUser[]; events: BookEvent[]; onOpenUser: (userId: number) => void }) {
+  const [query, setQuery] = useState("");
+  const organizations = useMemo(() => {
+    const needle = query.trim().toLocaleLowerCase("ru");
+    const activity = (user: DemoUser) => Math.max(
+      Date.parse(user.joinedAt ?? "") || user.id,
+      ...(user.publisherNews ?? []).map((item) => Date.parse(item.createdAtValue ?? item.createdAt) || item.id),
+      ...events.filter((item) => item.creatorId === user.id && item.status === "published").map((item) => Date.parse(item.createdAt) || item.id),
+      ...(user.authorBooks ?? []).map((book) => Date.parse(book.createdAtValue ?? "") || book.id),
+    );
+    return users
+      .filter((user) => !user.isAdmin && user.profile.type === type && user.profile.publisherStatus === "approved")
+      .filter((user) => !needle || user.profile.name.toLocaleLowerCase("ru").includes(needle))
+      .sort((first, second) => activity(second) - activity(first) || first.profile.name.localeCompare(second.profile.name, "ru"));
+  }, [events, query, type, users]);
+  const community = type === "Сообщество";
   return <main className="content-scroll directory-page publishing-directory-page">
-    <div className="directory-heading"><div><h1>Новинки издательств</h1><p>Познакомьтесь с издательствами! Книги, события и новости издательства — в одном месте.</p></div></div>
-    {publishers.length ? <div className="publishing-list">{publishers.map((publisher) => {
+    <div className="directory-heading"><div><h1>{community ? "Книжные сообщества" : "Новинки издательств"}</h1><p>{community ? "Книжные клубы, объединения, их книги, события и новости." : "Познакомьтесь с издательствами! Книги, события и новости издательства — в одном месте."}</p></div><label className="books-search-field"><span>Поиск по названию</span><input type="search" value={query} onChange={(event) => setQuery(event.target.value)} placeholder={community ? "Название сообщества" : "Название издательства"} /></label></div>
+    {organizations.length ? <div className="publishing-list">{organizations.map((publisher) => {
       const latestNews = [...(publisher.publisherNews ?? [])].sort((first, second) => Date.parse(second.createdAtValue ?? second.createdAt) - Date.parse(first.createdAtValue ?? first.createdAt))[0];
       const latestEvent = events.filter((item) => item.creatorId === publisher.id && item.status === "published").sort((first, second) => Date.parse(second.createdAt) - Date.parse(first.createdAt))[0];
       return <article className="publishing-card" key={publisher.id} onClick={() => onOpenUser(publisher.id)}>
         <div className="publishing-card-intro">
           <button className={`avatar avatar-lg avatar-${publisher.color} ${publisher.avatarUrl ? "has-photo" : ""}`} style={publisher.avatarUrl ? { backgroundImage: `url(${publisher.avatarUrl})` } : undefined} type="button" onClick={() => onOpenUser(publisher.id)}>{!publisher.avatarUrl && publisher.initials}</button>
-          <div className="publishing-card-copy"><h2>{publisher.profile.name}</h2><p>{publisher.profile.bio || "Издательство пока не добавило описание."}</p></div>
+          <div className="publishing-card-copy"><h2>{publisher.profile.name}</h2><p>{publisher.profile.bio || `${community ? "Сообщество" : "Издательство"} пока не добавило описание.`}</p></div>
         </div>
         <div className="publishing-latest-books">{(publisher.authorBooks ?? []).slice(0, 3).map((book) => <div className="publishing-mini-book" key={book.id}><div className={`library-book-cover library-cover-${book.coverTone}`} style={book.coverUrl ? { backgroundImage: `url(${book.coverUrl})` } : undefined}>{!book.coverUrl && <><em>{book.author}</em><strong>{book.title}</strong><span>Book Meet</span></>}</div><div><strong>{book.title}</strong><span>{book.author}</span><p>{book.annotation}</p></div></div>)}</div>
         {(latestNews || latestEvent) && <div className="publishing-card-updates">
@@ -61,6 +81,6 @@ export function PublishingDirectoryPage({ users, events, onOpenUser }: { users: 
           <div>{latestEvent ? <><span className="section-subtitle">Последнее событие</span><strong>{latestEvent.title}</strong><p>{latestEvent.date} · {latestEvent.city} · {latestEvent.summary}</p></> : <p>Событий пока нет.</p>}</div>
         </div>}
       </article>;
-    })}</div> : <div className="profile-tab-placeholder">Подтверждённых издательств пока нет.</div>}
+    })}</div> : <div className="profile-tab-placeholder">{query ? "Ничего не найдено." : `Подтверждённых ${community ? "сообществ" : "издательств"} пока нет.`}</div>}
   </main>;
 }

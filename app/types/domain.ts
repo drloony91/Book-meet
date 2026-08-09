@@ -4,7 +4,7 @@ export type FriendRequest = { id: number; fromId: number; toId: number; status: 
 export type Friendship = { userA: number; userB: number };
 export type Follow = { followerId: number; targetId: number };
 export type NotificationType = "friend_request" | "friendship_started" | "friend_rejected" | "new_message" | "new_follower" | "publication" | "friendship_ended" | "like" | "comment" | "event_submitted" | "event_moderation" | "event_reminder" | "author_book_activity" | "gift_reserved";
-export type SocialNotification = { id: number; userId: number; actorId: number; type: NotificationType; title: string; text: string; unread: boolean; createdAt: string; materialId?: number; materialKind?: "review" | "excerpt" | "event" | "occasion" | "book" | "wishlist" };
+export type SocialNotification = { id: number; userId: number; actorId: number; type: NotificationType; title: string; text: string; unread: boolean; createdAt: string; materialId?: number; materialKind?: "review" | "excerpt" | "event" | "occasion" | "publisher_news" | "book" | "wishlist" };
 
 export type EventStatus = "pending" | "needs_changes" | "rejected" | "published";
 export type LinkedBookPreview = { id: number; title: string; author: string; annotation?: string; coverUrl?: string; coverTone?: string };
@@ -110,6 +110,7 @@ export type LibraryBook = {
   isAdult?: boolean;
   flipUrl?: string;
   links?: BookLink[];
+  createdAtValue?: string;
 };
 
 export type BookLink = { id: number; label: string; url: string; action?: "Купить" | "Читать" | "Слушать" };
@@ -128,7 +129,7 @@ export type UserProfileData = {
   city: string;
   cityId?: number;
   country?: string;
-  type: "Читатель" | "Писатель" | "Блогер" | "Издатель";
+  type: "Читатель" | "Писатель" | "Блогер" | "Издатель" | "Сообщество";
   gender: "Мужской" | "Женский" | "Не указан";
   birthDate?: string;
   age?: number;
@@ -199,7 +200,7 @@ export type AdminCatalogItem = {
 
 export type AdminStatistics = {
   totalUsers: number;
-  usersByType: Record<"Читатель" | "Писатель" | "Блогер" | "Издатель", number>;
+  usersByType: Record<"Читатель" | "Писатель" | "Блогер" | "Издатель" | "Сообщество", number>;
   cities: Array<{ city: string; count: number }>;
   books: number;
   reviews: number;

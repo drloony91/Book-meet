@@ -6,6 +6,7 @@ export function AdminStatisticsPanel({ statistics }: { statistics: AdminStatisti
     ["Писатели", statistics?.usersByType["Писатель"] ?? 0],
     ["Блогеры", statistics?.usersByType["Блогер"] ?? 0],
     ["Издатели", statistics?.usersByType["Издатель"] ?? 0],
+    ["Сообщества", statistics?.usersByType["Сообщество"] ?? 0],
   ] as const;
   const materials = [
     ["Книги", statistics?.books ?? 0],

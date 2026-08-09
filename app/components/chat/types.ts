@@ -1,7 +1,7 @@
 export type Friend = {
   id: number;
   name: string;
-  type: "Читатель" | "Писатель" | "Блогер" | "Издатель";
+  type: "Читатель" | "Писатель" | "Блогер" | "Издатель" | "Сообщество";
   city: string;
   initials: string;
   color: string;

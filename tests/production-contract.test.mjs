@@ -379,10 +379,34 @@ test("publisher profiles are moderated, private and separated from writer public
   assert.match(migration, /publisher_status VARCHAR\(30\)/);
   assert.match(migration, /CREATE TABLE IF NOT EXISTS publisher_news/);
   assert.match(api, /router\.patch\("\/admin\/publishers\/:id"/);
-  assert.match(api, /Профиль издательства ожидает официального подтверждения/);
+  assert.match(api, /Профиль организации ожидает официального подтверждения/);
   assert.match(data, /viewerIsAdmin \|\| Number\(row\.id\) === Number\(viewerId\) \? row\.publisher_bin/);
   assert.match(routes, /publishing: "\/publishing"/);
   assert.match(profile, /Книги издательства/);
   assert.match(profile, /Новости издательства/);
   assert.match(directory, /export function PublishingDirectoryPage/);
+});
+
+test("communities, membership chats and responsive conversation panels share production contracts", async () => {
+  const api = await readFile(path.join(root, "server", "api.js"), "utf8");
+  const profile = await readFile(path.join(root, "app", "screens", "ProfileScreens.tsx"), "utf8");
+  const content = await readFile(path.join(root, "app", "components", "content", "ContentComponents.tsx"), "utf8");
+  const directory = await readFile(path.join(root, "app", "screens", "UsersDirectoryScreen.tsx"), "utf8");
+  const layout = await readFile(path.join(root, "app", "components", "layout", "AppLayout.tsx"), "utf8");
+  const css = await readFile(path.join(root, "app", "globals.css"), "utf8");
+  assert.match(api, /profile_type IN \('Издатель', 'Сообщество'\)/);
+  assert.match(api, /Сообщество не может отправлять запросы дружбы/);
+  assert.match(api, /хочет присоединиться к сообществу/);
+  assert.match(api, /creator_user_id AS owner_id, title FROM events/);
+  assert.match(api, /creator_user_id AS owner_id, primary_text AS title FROM occasions/);
+  assert.match(api, /user_id AS owner_id, title FROM publisher_news/);
+  assert.match(profile, /Участники сообщества/);
+  assert.match(content, /Присоединиться к сообществу/);
+  assert.match(content, /profileFriends/);
+  assert.match(directory, /export function CommunitiesDirectoryPage/);
+  assert.match(directory, /Название сообщества/);
+  assert.match(layout, /mobile-chat-button/);
+  assert.match(css, /workspace\.mobile-friends-closed > \.friends-panel/);
+  assert.match(css, /grid-template-columns: repeat\(6,minmax\(0,1fr\)\)/);
+  assert.match(css, /\.rich-editor-toolbar \{ flex-wrap: nowrap/);
 });

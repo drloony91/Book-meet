@@ -775,8 +775,9 @@ async function publisherAccess(connection, userId) {
     [userId],
   );
   return {
-    isPublisher: profile?.profile_type === "Издатель",
-    approved: profile?.profile_type !== "Издатель" || profile?.publisher_status === "approved",
+    isPublisher: ["Издатель", "Сообщество"].includes(profile?.profile_type),
+    isCommunity: profile?.profile_type === "Сообщество",
+    approved: !["Издатель", "Сообщество"].includes(profile?.profile_type) || profile?.publisher_status === "approved",
     status: profile?.publisher_status ?? "not_required",
   };
 }
@@ -784,7 +785,7 @@ async function publisherAccess(connection, userId) {
 async function requireApprovedPublisher(connection, userId) {
   const access = await publisherAccess(connection, userId);
   if (access.isPublisher && !access.approved) {
-    throw Object.assign(new Error("Профиль издательства ожидает официального подтверждения"), { statusCode: 403 });
+    throw Object.assign(new Error("Профиль организации ожидает официального подтверждения"), { statusCode: 403 });
   }
   return access;
 }
@@ -827,6 +828,18 @@ async function materialInfo(connection, kind, id) {
   }
   if (kind === "excerpt") {
     const [[row]] = await connection.query("SELECT user_id AS owner_id, book_title AS title FROM excerpts WHERE id = ?", [id]);
+    return row;
+  }
+  if (kind === "event") {
+    const [[row]] = await connection.query("SELECT creator_user_id AS owner_id, title FROM events WHERE id = ? AND status = 'published'", [id]);
+    return row;
+  }
+  if (kind === "occasion") {
+    const [[row]] = await connection.query("SELECT creator_user_id AS owner_id, primary_text AS title FROM occasions WHERE id = ? AND status = 'published'", [id]);
+    return row;
+  }
+  if (kind === "publisher_news") {
+    const [[row]] = await connection.query("SELECT user_id AS owner_id, title FROM publisher_news WHERE id = ?", [id]);
     return row;
   }
   return null;
@@ -1146,7 +1159,7 @@ router.get("/admin/statistics", asyncRoute(async (request, response) => {
           SELECT user_high_id AS user_id FROM friendships
         ) friendship_people) AS friendship_users`,
   );
-  const usersByType = { "Читатель": 0, "Писатель": 0, "Блогер": 0, "Издатель": 0 };
+  const usersByType = { "Читатель": 0, "Писатель": 0, "Блогер": 0, "Издатель": 0, "Сообщество": 0 };
   for (const row of typeRows) {
     if (Object.prototype.hasOwnProperty.call(usersByType, row.profile_type)) usersByType[row.profile_type] = Number(row.total);
   }
@@ -1533,7 +1546,7 @@ router.post("/occasions", asyncRoute(async (request, response) => {
   const occasion = await withTransaction(async (connection) => {
     await assertAdultMaterialAllowed(connection, userId, payload.isAdult);
     const access = await publisherAccess(connection, userId);
-    if (access.isPublisher) throw Object.assign(new Error("Издательства не могут создавать поводы познакомиться"), { statusCode: 403 });
+    if (access.isPublisher) throw Object.assign(new Error("Организационные профили не могут создавать поводы познакомиться"), { statusCode: 403 });
     const cities = await knownCities(connection, payload.targetCities);
     payload.targetCities = cities.map((city) => city.name);
     if (payload.type === "invite") { payload.meetingCity = cities[0].name; payload.meetingCityId = cities[0].id; }
@@ -1636,10 +1649,10 @@ router.patch("/admin/publishers/:id", asyncRoute(async (request, response) => {
   await withTransaction(async (connection) => {
     if (!(await isAdmin(connection, adminId))) throw Object.assign(new Error("Доступно только администратору"), { statusCode: 403 });
     const [[publisher]] = await connection.query(
-      "SELECT p.publisher_status, p.display_name FROM profiles p JOIN users u ON u.id = p.user_id WHERE p.user_id = ? AND p.profile_type = 'Издатель' FOR UPDATE",
+      "SELECT p.publisher_status, p.display_name, p.profile_type FROM profiles p JOIN users u ON u.id = p.user_id WHERE p.user_id = ? AND p.profile_type IN ('Издатель', 'Сообщество') FOR UPDATE",
       [publisherId],
     );
-    if (!publisher) throw Object.assign(new Error("Профиль издательства не найден"), { statusCode: 404 });
+    if (!publisher) throw Object.assign(new Error("Профиль организации не найден"), { statusCode: 404 });
     const statuses = { accept: "approved", revision: "needs_changes", reject: "rejected" };
     const status = statuses[action];
     if (!status) throw Object.assign(new Error("Неизвестное действие модерации"), { statusCode: 400 });
@@ -1647,10 +1660,11 @@ router.patch("/admin/publishers/:id", asyncRoute(async (request, response) => {
       "UPDATE profiles SET publisher_status = ?, publisher_moderation_note = ? WHERE user_id = ?",
       [status, note || null, publisherId],
     );
+    const organizationName = publisher.profile_type === "Сообщество" ? "сообщества" : "издательства";
     const titles = {
-      accept: "Профиль издательства подтверждён",
-      revision: "Профиль издательства требует доработки",
-      reject: "Профиль издательства отклонён",
+      accept: `Профиль ${organizationName} подтверждён`,
+      revision: `Профиль ${organizationName} требует доработки`,
+      reject: `Профиль ${organizationName} отклонён`,
     };
     await connection.query(
       `INSERT INTO notifications (user_id, actor_user_id, notification_type, title, body)
@@ -1664,11 +1678,12 @@ router.patch("/admin/publishers/:id", asyncRoute(async (request, response) => {
 router.put("/users/me/state", asyncRoute(async (request, response) => {
   const userId = request.bookMeetUser.id;
   const { profile, avatarUrl, reviews = [], excerpts = [], publisherNews = [] } = request.body ?? {};
-  const requestedType = profile?.type === "Писатель" ? "Писатель" : profile?.type === "Блогер" ? "Блогер" : profile?.type === "Издатель" ? "Издатель" : "Читатель";
+  const requestedType = profile?.type === "Писатель" ? "Писатель" : profile?.type === "Блогер" ? "Блогер" : profile?.type === "Издатель" ? "Издатель" : profile?.type === "Сообщество" ? "Сообщество" : "Читатель";
+  const isOrganization = ["Издатель", "Сообщество"].includes(requestedType);
   if (!String(profile?.name ?? "").trim() || !Number(profile?.cityId)) return response.status(400).json({ error: "Заполните обязательные поля" });
-  const birthDate = requestedType === "Издатель" ? null : String(profile?.birthDate ?? "").trim();
+  const birthDate = isOrganization ? null : String(profile?.birthDate ?? "").trim();
   const birthAge = birthDate ? ageFromBirthDate(birthDate) : null;
-  if (requestedType !== "Издатель" && (birthAge === null || birthAge < 0 || birthAge > 120)) {
+  if (!isOrganization && (birthAge === null || birthAge < 0 || birthAge > 120)) {
     return response.status(400).json({ error: "Укажите корректную дату рождения" });
   }
   const tabOrder = Array.isArray(profile?.tabOrder)
@@ -1677,19 +1692,19 @@ router.put("/users/me/state", asyncRoute(async (request, response) => {
   await withTransaction(async (connection) => {
     const city = await knownCity(connection, profile.city, profile.cityId);
     const [[currentProfile]] = await connection.query("SELECT profile_type, publisher_status FROM profiles WHERE user_id = ? FOR UPDATE", [userId]);
-    const switchingToPublisher = requestedType === "Издатель" && currentProfile?.profile_type !== "Издатель";
-    const publisherStatus = requestedType === "Издатель"
+    const switchingToPublisher = isOrganization && currentProfile?.profile_type !== requestedType;
+    const publisherStatus = isOrganization
       ? switchingToPublisher || currentProfile?.publisher_status !== "approved" ? "pending" : "approved"
       : "not_required";
-    const salesLinks = requestedType === "Издатель" ? publisherSalesLinks(profile.publisherSalesLinks) : [];
-    if (requestedType === "Издатель") {
+    const salesLinks = isOrganization ? publisherSalesLinks(profile.publisherSalesLinks) : [];
+    if (isOrganization) {
       const requiredPublisherFields = [
         profile.publisherWebsite, profile.bio, profile.publisherLegalName, profile.publisherBin,
         profile.publisherAccount, profile.publisherBik, profile.publisherBank,
         profile.publisherLegalAddress, profile.publisherPostalAddress,
       ];
       if (requiredPublisherFields.some((value) => !String(value ?? "").trim())) {
-        throw Object.assign(new Error("Заполните обязательные поля издательства"), { statusCode: 400 });
+        throw Object.assign(new Error(`Заполните обязательные поля ${requestedType === "Сообщество" ? "сообщества" : "издательства"}`), { statusCode: 400 });
       }
     }
     const [[currentUser]] = await connection.query("SELECT avatar_path FROM users WHERE id = ? FOR UPDATE", [userId]);
@@ -1709,25 +1724,25 @@ router.put("/users/me/state", asyncRoute(async (request, response) => {
         WHERE user_id = ?`,
       [
         profile.name.trim(), city?.name ?? "", city?.id ?? null, requestedType,
-        requestedType === "Издатель" ? "Не указан" : ["Мужской", "Женский", "Не указан"].includes(profile.gender) ? profile.gender : "Не указан",
-        birthDate || null, requestedType === "Издатель" ? 0 : profile.showBirthDateToFriends ? 1 : 0, JSON.stringify(tabOrder), profile.homeView === "classic" ? "classic" : "feed",
+        isOrganization ? "Не указан" : ["Мужской", "Женский", "Не указан"].includes(profile.gender) ? profile.gender : "Не указан",
+        birthDate || null, isOrganization ? 0 : profile.showBirthDateToFriends ? 1 : 0, JSON.stringify(tabOrder), profile.homeView === "classic" ? "classic" : "feed",
         profile.bio ?? "", requestedType === "Писатель" ? profile.authorInfluences ?? "" : "", requestedType === "Писатель" ? profile.writingThemes ?? "" : "",
-        requestedType === "Издатель" ? "" : profile.weekend ?? "", requestedType === "Издатель" ? "" : profile.joy ?? "",
-        requestedType === "Издатель" ? "" : profile.talk ?? "", requestedType === "Издатель" ? "" : profile.strangerMessage ?? "",
-        requestedType === "Издатель" ? "[]" : JSON.stringify(profile.favoriteGenres ?? []), requestedType === "Издатель" ? "[]" : JSON.stringify(profile.dislikedGenres ?? []),
-        publisherStatus, requestedType === "Издатель" ? cleanUrl(profile.publisherWebsite) : null,
-        requestedType === "Издатель" ? JSON.stringify(salesLinks) : null,
-        requestedType === "Издатель" ? String(profile.publisherLegalName).trim() : null,
-        requestedType === "Издатель" ? String(profile.publisherBin).replace(/\D/g, "").slice(0, 12) : null,
-        requestedType === "Издатель" ? String(profile.publisherAccount).trim() : null,
-        requestedType === "Издатель" ? String(profile.publisherBik).trim() : null,
-        requestedType === "Издатель" ? String(profile.publisherBank).trim() : null,
-        requestedType === "Издатель" ? String(profile.publisherLegalAddress).trim() : null,
-        requestedType === "Издатель" ? String(profile.publisherPostalAddress).trim() : null,
+        isOrganization ? "" : profile.weekend ?? "", isOrganization ? "" : profile.joy ?? "",
+        isOrganization ? "" : profile.talk ?? "", isOrganization ? "" : profile.strangerMessage ?? "",
+        isOrganization ? "[]" : JSON.stringify(profile.favoriteGenres ?? []), isOrganization ? "[]" : JSON.stringify(profile.dislikedGenres ?? []),
+        publisherStatus, isOrganization ? cleanUrl(profile.publisherWebsite) : null,
+        isOrganization ? JSON.stringify(salesLinks) : null,
+        isOrganization ? String(profile.publisherLegalName).trim() : null,
+        isOrganization ? String(profile.publisherBin).replace(/\D/g, "").slice(0, 12) : null,
+        isOrganization ? String(profile.publisherAccount).trim() : null,
+        isOrganization ? String(profile.publisherBik).trim() : null,
+        isOrganization ? String(profile.publisherBank).trim() : null,
+        isOrganization ? String(profile.publisherLegalAddress).trim() : null,
+        isOrganization ? String(profile.publisherPostalAddress).trim() : null,
         publisherStatus, userId,
       ],
     );
-    if (requestedType === "Издатель") {
+    if (isOrganization) {
       const newsIds = [];
       for (const item of publisherNews) {
         const title = String(item?.title ?? "").trim();
@@ -2009,10 +2024,10 @@ router.post("/books", asyncRoute(async (request, response) => {
     if (payload.isAuthor) {
       const [[profile]] = await connection.query("SELECT profile_type, publisher_status FROM profiles WHERE user_id = ?", [userId]);
       const canPublishBook = profile?.profile_type === "Писатель"
-        || profile?.profile_type === "Издатель" && profile?.publisher_status === "approved";
-      if (!canPublishBook) throw Object.assign(new Error("Добавлять книги могут только писатели и подтверждённые издательства"), { statusCode: 403 });
+        || ["Издатель", "Сообщество"].includes(profile?.profile_type) && profile?.publisher_status === "approved";
+      if (!canPublishBook) throw Object.assign(new Error("Добавлять книги могут только писатели и подтверждённые организации"), { statusCode: 403 });
     } else if (access.isPublisher) {
-      throw Object.assign(new Error("Издательские книги добавляются во вкладке «Книги издательства»"), { statusCode: 403 });
+      throw Object.assign(new Error("Книги организации добавляются в специальной вкладке профиля"), { statusCode: 403 });
     }
     let bookId = Number(payload.useExistingId || 0);
     let uploadedCoverPath = null;
@@ -2612,17 +2627,20 @@ router.post("/social/friend-requests", asyncRoute(async (request, response) => {
   if (!targetId || targetId === userId) return response.status(400).json({ error: "Некорректный пользователь" });
   await withTransaction(async (connection) => {
     await assertUsersCanInteract(connection, userId, targetId);
-    const [[target]] = await connection.query("SELECT role FROM users WHERE id = ?", [targetId]);
+    const [[target]] = await connection.query("SELECT u.role, p.profile_type FROM users u JOIN profiles p ON p.user_id = u.id WHERE u.id = ?", [targetId]);
+    const [[source]] = await connection.query("SELECT profile_type FROM profiles WHERE user_id = ?", [userId]);
     if (!target) throw Object.assign(new Error("Пользователь не найден"), { statusCode: 404 });
     if (target.role === "admin") throw Object.assign(new Error("Службу поддержки нельзя добавить в друзья"), { statusCode: 403 });
+    if (source?.profile_type === "Сообщество") throw Object.assign(new Error("Сообщество не может отправлять запросы дружбы"), { statusCode: 403 });
     const low = Math.min(userId, targetId); const high = Math.max(userId, targetId);
     const [[friendship]] = await connection.query("SELECT 1 FROM friendships WHERE user_low_id = ? AND user_high_id = ?", [low, high]);
-    if (friendship) throw Object.assign(new Error("Вы уже друзья"), { statusCode: 409 });
+    if (friendship) throw Object.assign(new Error(target.profile_type === "Сообщество" ? "Вы уже состоите в сообществе" : "Вы уже друзья"), { statusCode: 409 });
     const [[pending]] = await connection.query("SELECT id FROM friend_requests WHERE status = 'pending' AND ((from_user_id = ? AND to_user_id = ?) OR (from_user_id = ? AND to_user_id = ?)) LIMIT 1", [userId, targetId, targetId, userId]);
-    if (pending) throw Object.assign(new Error("Предложение уже отправлено"), { statusCode: 409 });
+    if (pending) throw Object.assign(new Error(target.profile_type === "Сообщество" ? "Заявка на вступление уже отправлена" : "Предложение уже отправлено"), { statusCode: 409 });
     await connection.query("INSERT INTO friend_requests (from_user_id, to_user_id, message) VALUES (?, ?, ?)", [userId, targetId, message || null]);
     const [[actor]] = await connection.query("SELECT display_name FROM profiles WHERE user_id = ?", [userId]);
-    await connection.query("INSERT INTO notifications (user_id, actor_user_id, notification_type, title, body) VALUES (?, ?, 'friend_request', 'Новый друг', ?)", [targetId, userId, `${actor.display_name} хочет добавить вас в друзья.`]);
+    const membership = target.profile_type === "Сообщество";
+    await connection.query("INSERT INTO notifications (user_id, actor_user_id, notification_type, title, body) VALUES (?, ?, 'friend_request', ?, ?)", [targetId, userId, membership ? "Новая заявка" : "Новый друг", membership ? `${actor.display_name} хочет присоединиться к сообществу.` : `${actor.display_name} хочет добавить вас в друзья.`]);
   });
   response.status(201).json({ ok: true });
 }));
@@ -2648,14 +2666,17 @@ router.post("/social/friends/:targetId/accept", asyncRoute(async (request, respo
   const userId = request.bookMeetUser.id;
   const targetId = Number(request.params.targetId);
   await withTransaction(async (connection) => {
+    const [[currentProfile]] = await connection.query("SELECT profile_type FROM profiles WHERE user_id = ?", [userId]);
+    const membership = currentProfile?.profile_type === "Сообщество";
     const [updated] = await connection.query("UPDATE friend_requests SET status = 'accepted' WHERE status = 'pending' AND from_user_id = ? AND to_user_id = ?", [targetId, userId]);
     if (!updated.affectedRows) throw Object.assign(new Error("Предложение дружбы не найдено"), { statusCode: 404 });
     const low = Math.min(userId, targetId); const high = Math.max(userId, targetId);
     await connection.query("INSERT IGNORE INTO friendships (user_low_id, user_high_id) VALUES (?, ?)", [low, high]);
     await connection.query("INSERT IGNORE INTO follows (follower_user_id, target_user_id) VALUES (?, ?), (?, ?)", [userId, targetId, targetId, userId]);
-    const systemText = "Теперь вы друзья и можете начать переписку";
+    const systemText = membership ? "Заявка принята. Теперь вы участник сообщества и можете начать переписку" : "Теперь вы друзья и можете начать переписку";
     await connection.query("INSERT INTO messages (sender_user_id, recipient_user_id, body, is_system) VALUES (?, ?, ?, 1), (?, ?, ?, 1)", [targetId, userId, systemText, userId, targetId, systemText]);
-    await connection.query("INSERT INTO notifications (user_id, actor_user_id, notification_type, title, body) VALUES (?, ?, 'friendship_started', 'Теперь вы друзья', ?), (?, ?, 'friendship_started', 'Теперь вы друзья', ?)", [userId, targetId, systemText, targetId, userId, systemText]);
+    const title = membership ? "Заявка принята" : "Теперь вы друзья";
+    await connection.query("INSERT INTO notifications (user_id, actor_user_id, notification_type, title, body) VALUES (?, ?, 'friendship_started', ?, ?), (?, ?, 'friendship_started', ?, ?)", [userId, targetId, title, systemText, targetId, userId, title, systemText]);
   });
   response.json({ ok: true });
 }));
@@ -2665,11 +2686,13 @@ router.post("/social/friends/:targetId/reject", asyncRoute(async (request, respo
   const targetId = Number(request.params.targetId);
   const comment = String(request.body?.comment ?? "").trim().slice(0, 2000);
   await withTransaction(async (connection) => {
+    const [[currentProfile]] = await connection.query("SELECT profile_type FROM profiles WHERE user_id = ?", [userId]);
+    const membership = currentProfile?.profile_type === "Сообщество";
     const [updated] = await connection.query("UPDATE friend_requests SET status = 'rejected', rejection_comment = ? WHERE status = 'pending' AND from_user_id = ? AND to_user_id = ?", [comment || null, targetId, userId]);
     if (!updated.affectedRows) throw Object.assign(new Error("Предложение дружбы не найдено"), { statusCode: 404 });
     const [[actor]] = await connection.query("SELECT display_name FROM profiles WHERE user_id = ?", [userId]);
-    const text = `${actor.display_name} отклонил(а) предложение дружбы.${comment ? ` Комментарий: ${comment}` : ""} Вы можете подписаться на пользователя и следить за обновлениями.`;
-    await connection.query("INSERT INTO notifications (user_id, actor_user_id, notification_type, title, body) VALUES (?, ?, 'friend_rejected', 'Предложение дружбы отклонено', ?)", [targetId, userId, text]);
+    const text = membership ? `${actor.display_name} отклонило заявку на вступление.${comment ? ` Комментарий: ${comment}` : ""}` : `${actor.display_name} отклонил(а) предложение дружбы.${comment ? ` Комментарий: ${comment}` : ""} Вы можете подписаться на пользователя и следить за обновлениями.`;
+    await connection.query("INSERT INTO notifications (user_id, actor_user_id, notification_type, title, body) VALUES (?, ?, 'friend_rejected', ?, ?)", [targetId, userId, membership ? "Заявка отклонена" : "Предложение дружбы отклонено", text]);
   });
   response.json({ ok: true });
 }));
@@ -2680,8 +2703,10 @@ router.delete("/social/friends/:targetId", asyncRoute(async (request, response) 
   const low = Math.min(userId, targetId); const high = Math.max(userId, targetId);
   await withTransaction(async (connection) => {
     await connection.query("DELETE FROM friendships WHERE user_low_id = ? AND user_high_id = ?", [low, high]);
-    const [[actor]] = await connection.query("SELECT display_name FROM profiles WHERE user_id = ?", [userId]);
-    await connection.query("INSERT INTO notifications (user_id, actor_user_id, notification_type, title, body) VALUES (?, ?, 'friendship_ended', 'Дружба завершена', ?)", [targetId, userId, `${actor.display_name} перестал(а) дружить с вами.`]);
+    const [[actor]] = await connection.query("SELECT display_name, profile_type FROM profiles WHERE user_id = ?", [userId]);
+    const [[target]] = await connection.query("SELECT profile_type FROM profiles WHERE user_id = ?", [targetId]);
+    const membership = actor?.profile_type === "Сообщество" || target?.profile_type === "Сообщество";
+    await connection.query("INSERT INTO notifications (user_id, actor_user_id, notification_type, title, body) VALUES (?, ?, 'friendship_ended', ?, ?)", [targetId, userId, membership ? "Участие завершено" : "Дружба завершена", membership ? `${actor.display_name} завершило участие в сообществе.` : `${actor.display_name} перестал(а) дружить с вами.`]);
   });
   response.json({ ok: true });
 }));

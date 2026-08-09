@@ -383,11 +383,13 @@ export function MaterialPreviewCard({ item, index = 0, owner, book, likesCount, 
 }
 
 export function PublisherNewsCard({ item, owner, onOpen, onOpenUser }: { item: PublisherNews; owner?: DemoUser; onOpen: () => void; onOpenUser: (id: number) => void }) {
-  return <article className="excerpt-card material-preview-card publisher-news-card material-clickable-card" role="button" tabIndex={0} onClick={onOpen} onKeyDown={(event) => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); onOpen(); } }}><span className="quote-mark">“</span><p>{item.previewText}</p><div className="excerpt-footer"><div className={`author-dot ${owner?.avatarUrl ? "has-photo" : ""}`} style={owner?.avatarUrl ? { backgroundImage: `url(${owner.avatarUrl})` } : undefined}>{!owner?.avatarUrl && (owner?.profile.name ?? "И").slice(0, 1)}</div><div><h3>Новость издательства{item.isAdult ? " · 18+" : ""}</h3><span><button className="inline-user-link" type="button" onClick={(event) => { event.stopPropagation(); onOpenUser(item.ownerId); }}>{owner?.profile.name ?? "Издательство"}</button> · {item.title}</span></div></div></article>;
+  const community = owner?.profile.type === "Сообщество";
+  return <article className="excerpt-card material-preview-card publisher-news-card material-clickable-card" role="button" tabIndex={0} onClick={onOpen} onKeyDown={(event) => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); onOpen(); } }}><span className="quote-mark">“</span><p>{item.previewText}</p><div className="excerpt-footer"><div className={`author-dot ${owner?.avatarUrl ? "has-photo" : ""}`} style={owner?.avatarUrl ? { backgroundImage: `url(${owner.avatarUrl})` } : undefined}>{!owner?.avatarUrl && (owner?.profile.name ?? "И").slice(0, 1)}</div><div><h3>Новость {community ? "сообщества" : "издательства"}{item.isAdult ? " · 18+" : ""}</h3><span><button className="inline-user-link" type="button" onClick={(event) => { event.stopPropagation(); onOpenUser(item.ownerId); }}>{owner?.profile.name ?? (community ? "Сообщество" : "Издательство")}</button> · {item.title}</span></div></div></article>;
 }
 
 export function PublisherNewsModal({ item, owner, currentUser, users = [], onClose, onOpenUser, onEdit, onDelete, onReport }: { item: PublisherNews; owner?: DemoUser; currentUser?: DemoUser; users?: DemoUser[]; onClose: () => void; onOpenUser: (id: number) => void; onEdit?: () => void; onDelete?: () => void; onReport?: () => void }) {
-  return <div className="modal-backdrop" onMouseDown={onClose}><section className="reading-modal publisher-news-modal" onMouseDown={(event) => event.stopPropagation()}><ModalIconActions onEdit={onEdit} onDelete={onDelete} onReport={onReport} onClose={onClose} /><span className="section-subtitle">Новости издательства · {item.createdAt}</span><h2>{item.title}</h2><p className="reading-preview">{item.previewText}</p><div className="reading-text rich-reading-text" dangerouslySetInnerHTML={{ __html: sanitizeRichHtml(item.bodyHtml) }} /><p>Издательство: <button className="inline-user-link" type="button" onClick={() => onOpenUser(item.ownerId)}>{owner?.profile.name ?? "Издательство"}</button></p><MaterialEngagement kind="publisher_news" materialId={item.id} ownerId={item.ownerId} currentUser={currentUser} users={users.length ? users : owner ? [owner] : []} onOpenUser={onOpenUser} /></section></div>;
+  const community = owner?.profile.type === "Сообщество";
+  return <div className="modal-backdrop" onMouseDown={onClose}><section className="reading-modal publisher-news-modal" onMouseDown={(event) => event.stopPropagation()}><ModalIconActions onEdit={onEdit} onDelete={onDelete} onReport={onReport} onClose={onClose} /><span className="section-subtitle">Новости {community ? "сообщества" : "издательства"} · {item.createdAt}</span><h2>{item.title}</h2><p className="reading-preview">{item.previewText}</p><div className="reading-text rich-reading-text" dangerouslySetInnerHTML={{ __html: renderRichHtml(item.bodyHtml, catalogFromUsers(users)) }} /><p>{community ? "Сообщество" : "Издательство"}: <button className="inline-user-link" type="button" onClick={() => onOpenUser(item.ownerId)}>{owner?.profile.name ?? (community ? "Сообщество" : "Издательство")}</button></p><MaterialEngagement kind="publisher_news" materialId={item.id} ownerId={item.ownerId} currentUser={currentUser} users={users.length ? users : owner ? [owner] : []} onOpenUser={onOpenUser} /></section></div>;
 }
 
 export function HomeScopeSwitch({ city, country, value, onChange }: { city: string; country?: string; value: "country" | "city"; onChange: (value: "country" | "city") => void }) {
@@ -493,9 +495,9 @@ export function FriendProfile({ friend, onClose }: { friend: Friend; onClose: ()
 function PublicProfileDetails({ user }: { user: DemoUser }) {
   const textField = (label: string, value: string, className?: string) => value.trim() ? <div className={className}><span>{label}</span><p>{value}</p></div> : null;
   const genresField = (label: string, values: string[], disliked = false) => values.length ? <div><span>{label}</span><div className={`profile-tags ${disliked ? "disliked-tags" : ""}`}>{values.map((genre) => <span key={genre}>{genre}</span>)}</div></div> : null;
-  if (user.profile.type === "Издатель") return <div className="public-profile-details publisher-public-details">
-    {textField("Об издательстве", user.profile.bio, "profile-bio-wide")}
-    {user.profile.publisherWebsite && <div><span>Сайт издательства</span><p><a href={user.profile.publisherWebsite} target="_blank" rel="noreferrer">{user.profile.publisherWebsite}</a></p></div>}
+  if (["Издатель", "Сообщество"].includes(user.profile.type)) return <div className="public-profile-details publisher-public-details">
+    {textField(user.profile.type === "Сообщество" ? "О сообществе" : "Об издательстве", user.profile.bio, "profile-bio-wide")}
+    {user.profile.publisherWebsite && <div><span>Сайт {user.profile.type === "Сообщество" ? "сообщества" : "издательства"}</span><p><a href={user.profile.publisherWebsite} target="_blank" rel="noreferrer">{user.profile.publisherWebsite}</a></p></div>}
     {(user.profile.publisherSalesLinks ?? []).length > 0 && <div><span>Где продаются книги</span><div className="writer-book-links">{user.profile.publisherSalesLinks!.map((link) => <a className="outline-button" href={link.url} target="_blank" rel="noreferrer" key={link.id}>{link.label}</a>)}</div></div>}
   </div>;
   return <div className="public-profile-details">
@@ -512,7 +514,7 @@ function PublicProfileDetails({ user }: { user: DemoUser }) {
   </div>;
 }
 
-export function UserProfileModal({ user, viewer, users, events = [], occasions = [], likes, friendCount, relationship, incomingMessage, isFollowing, canMessage, blockedByMe = false, onClose, onAddFriend, onCancelFriendRequest, onAccept, onReject, onRemoveFriend, onOpenChat, onFollow, onUnfollow, onBlock, onUnblock, onReport, onToggleLike, onComment, onOpenUser }: { user: DemoUser; viewer: DemoUser; users: DemoUser[]; events?: BookEvent[]; occasions?: Occasion[]; likes: Record<string, number[]>; friendCount: number; relationship: "none" | "outgoing" | "incoming" | "friends"; incomingMessage?: string; isFollowing: boolean; canMessage: boolean; blockedByMe?: boolean; onClose: () => void; onAddFriend: (message: string) => void; onCancelFriendRequest: () => Promise<void>; onAccept: () => void; onReject: (comment: string) => void; onRemoveFriend: () => void; onOpenChat: () => void; onFollow: () => void; onUnfollow: () => Promise<void>; onBlock?: () => Promise<void>; onUnblock?: () => Promise<void>; onReport?: () => void; onToggleLike: (item: ReadingItem) => void; onComment: (item: ReadingItem, text: string) => Promise<MaterialComment | null>; onOpenUser: (userId: number) => void }) {
+export function UserProfileModal({ user, viewer, users, profileFriends = [], events = [], occasions = [], likes, friendCount, relationship, incomingMessage, isFollowing, canMessage, blockedByMe = false, onClose, onAddFriend, onCancelFriendRequest, onAccept, onReject, onRemoveFriend, onOpenChat, onFollow, onUnfollow, onBlock, onUnblock, onReport, onToggleLike, onComment, onOpenUser }: { user: DemoUser; viewer: DemoUser; users: DemoUser[]; profileFriends?: DemoUser[]; events?: BookEvent[]; occasions?: Occasion[]; likes: Record<string, number[]>; friendCount: number; relationship: "none" | "outgoing" | "incoming" | "friends"; incomingMessage?: string; isFollowing: boolean; canMessage: boolean; blockedByMe?: boolean; onClose: () => void; onAddFriend: (message: string) => void; onCancelFriendRequest: () => Promise<void>; onAccept: () => void; onReject: (comment: string) => void; onRemoveFriend: () => void; onOpenChat: () => void; onFollow: () => void; onUnfollow: () => Promise<void>; onBlock?: () => Promise<void>; onUnblock?: () => Promise<void>; onReport?: () => void; onToggleLike: (item: ReadingItem) => void; onComment: (item: ReadingItem, text: string) => Promise<MaterialComment | null>; onOpenUser: (userId: number) => void }) {
   const routedPopup = useRoutedPopup(`/users/${user.id}`, "/users", onClose, `${user.profile.name} — Book Meet`);
   const routedClose = routedPopup.close;
   const [rejecting, setRejecting] = useState(false);
@@ -522,7 +524,7 @@ export function UserProfileModal({ user, viewer, users, events = [], occasions =
   const [socialBusy, setSocialBusy] = useState(false);
   const [unblockConfirm, setUnblockConfirm] = useState(false);
   const [comment, setComment] = useState("");
-  const [activeTab, setActiveTab] = useState<"main" | "author-books" | "excerpts" | "publisher-events" | "publisher-news" | "library" | "wishlist" | "reviews" | "occasions">("main");
+  const [activeTab, setActiveTab] = useState<"main" | "author-books" | "excerpts" | "publisher-events" | "publisher-news" | "library" | "wishlist" | "reviews" | "occasions" | "members">("main");
   const [openedPublisherEvent, setOpenedPublisherEvent] = useState<BookEvent | null>(null);
   const [openedPublisherNews, setOpenedPublisherNews] = useState<PublisherNews | null>(null);
   const [openedOccasion, setOpenedOccasion] = useState<Occasion | null>(null);
@@ -531,12 +533,21 @@ export function UserProfileModal({ user, viewer, users, events = [], occasions =
   const [openedAuthorBook, setOpenedAuthorBook] = useState<LibraryBook | AuthorBook | null>(null);
   const [openedReview, setOpenedReview] = useState<ReadingItem | UserReview | null>(null);
   const [bookDetailTab, setBookDetailTab] = useState<"about" | "readers" | "reviews">("about");
-  const [libraryStatus, setLibraryStatus] = useState<"want" | "reading" | "read">("read");
+  const [libraryStatus, setLibraryStatus] = useState<"want" | "reading" | "read">(() =>
+    user.books.some((book) => (book.readingStatus ?? "read") === "read")
+      ? "read"
+      : user.books.some((book) => book.readingStatus === "reading") ? "reading" : "want",
+  );
   const commonBooks = viewer.books.filter((book) => user.books.some((other) => other.title.toLowerCase() === book.title.toLowerCase() && other.author.toLowerCase() === book.author.toLowerCase()));
   const commonFavoriteGenres = viewer.profile.favoriteGenres.filter((genre) => user.profile.favoriteGenres.includes(genre));
   const commonDislikedGenres = viewer.profile.dislikedGenres.filter((genre) => user.profile.dislikedGenres.includes(genre));
   const hasMatches = commonBooks.length + commonFavoriteGenres.length + commonDislikedGenres.length > 0;
   const openedReadingItem: ReadingItem | null = openedReview ? ("kind" in openedReview ? openedReview : { id: openedReview.id, kind: "review", title: openedReview.bookTitle, author: user.profile.name, text: openedReview.fullText, ownerId: user.id, createdAt: openedReview.createdAt, preview: openedReview.preview, bookAuthor: openedReview.bookAuthor, rating: openedReview.rating, isAdult: openedReview.isAdult }) : null;
+  const isCommunity = user.profile.type === "Сообщество";
+  const viewerIsCommunity = viewer.profile.type === "Сообщество";
+  const isOrganization = user.profile.type === "Издатель" || isCommunity;
+  const publicEvents = events.filter((item) => item.creatorId === user.id && item.status === "published");
+  const publicOccasions = occasions.filter((item) => item.creatorId === user.id && item.status === "published");
 
   useEffect(() => {
     const close = (event: KeyboardEvent) => event.key === "Escape" && routedClose();
@@ -559,32 +570,34 @@ export function UserProfileModal({ user, viewer, users, events = [], occasions =
             {!blockedByMe && onBlock && <button className="profile-block-button" type="button" title={viewer.isAdmin ? "Заблокировать пользователя на сайте" : "Заблокировать пользователя"} aria-label="Заблокировать пользователя" onClick={() => void onBlock()}>🔒</button>}
             {blockedByMe && <><span className="blocked-profile-label">Вы заблокировали пользователя</span><button className="outline-button" type="button" onClick={() => setUnblockConfirm(true)}>Разблокировать</button></>}
             {!blockedByMe && <>
-            {relationship === "incoming" && <><button className="primary-button" type="button" onClick={onAccept}>Начать дружить</button><button className="outline-button" type="button" onClick={() => setRejecting(true)}>Отклонить предложение</button></>}
-            {relationship === "outgoing" && <button className="outline-button" type="button" onClick={() => setCancellingRequest(true)}>Предложение отправлено</button>}
-            {relationship === "none" && <button className="primary-button tooltip-button" data-tooltip="При добавлении пользователя в друзья, вы подписываетесь на все его обновления и начинаете переписку. Внимание: Пользователь может не принять ваше предложение дружбы" type="button" onClick={() => setRequesting(true)}>Добавить в друзья</button>}
-            {relationship === "friends" && <><button className="primary-button" type="button" onClick={onOpenChat}>Написать</button><button className="quiet-danger-button" type="button" onClick={onRemoveFriend}>Перестать дружить</button></>}
+            {relationship === "incoming" && !isCommunity && <><button className="primary-button" type="button" onClick={onAccept}>{viewerIsCommunity ? "Принять в сообщество" : "Начать дружить"}</button><button className="outline-button" type="button" onClick={() => setRejecting(true)}>{viewerIsCommunity ? "Отклонить заявку" : "Отклонить предложение"}</button></>}
+            {relationship === "outgoing" && <button className="outline-button" type="button" onClick={() => setCancellingRequest(true)}>{isCommunity ? "Заявка отправлена" : "Предложение отправлено"}</button>}
+            {relationship === "none" && viewer.profile.type !== "Сообщество" && <button className="primary-button tooltip-button" data-tooltip={isCommunity ? "Сообщество подтвердит заявку. После вступления откроется общий диалог." : "После принятия предложения откроется переписка."} type="button" onClick={() => setRequesting(true)}>{isCommunity ? "Присоединиться к сообществу" : "Добавить в друзья"}</button>}
+            {relationship === "friends" && <><button className="primary-button" type="button" onClick={onOpenChat}>Написать</button><button className="quiet-danger-button" type="button" onClick={onRemoveFriend}>{isCommunity ? "Покинуть сообщество" : "Перестать дружить"}</button></>}
             {relationship !== "friends" && canMessage && <button className="primary-button" type="button" onClick={onOpenChat}>{user.isAdmin ? "Написать в поддержку" : "Написать"}</button>}
-            {relationship !== "friends" && !isFollowing && <button className="follow-button tooltip-button" data-tooltip="Вы подписываетесь на все обновления пользователя, но переписываться можно только с друзьями" type="button" onClick={onFollow}>Подписаться</button>}
+            {relationship !== "friends" && !isFollowing && !isCommunity && !viewerIsCommunity && <button className="follow-button tooltip-button" data-tooltip="Вы подписываетесь на все обновления пользователя, но переписываться можно только с друзьями" type="button" onClick={onFollow}>Подписаться</button>}
             {relationship !== "friends" && isFollowing && <button className="follow-button" type="button" disabled={socialBusy} onClick={async () => { setSocialBusy(true); try { await onUnfollow(); } finally { setSocialBusy(false); } }}>Отписаться</button>}
             </>}
           </div>
           {unblockConfirm && <div className="nested-modal-backdrop" onMouseDown={() => setUnblockConfirm(false)}><section className="confirm-social-modal" role="alertdialog" aria-modal="true" onMouseDown={(event) => event.stopPropagation()}><h2>Разблокировать пользователя?</h2><div className="form-actions"><button className="outline-button" type="button" onClick={async () => { await onUnblock?.(); setUnblockConfirm(false); }}>Да</button><button className="outline-button" type="button" onClick={() => setUnblockConfirm(false)}>Нет</button></div></section></div>}
           {relationship === "incoming" && incomingMessage && <div className="incoming-friend-message"><span>Сообщение к предложению дружбы</span><p>{incomingMessage}</p></div>}
-          {requesting && relationship === "none" && <form className="friend-request-form" onSubmit={(event) => { event.preventDefault(); onAddFriend(requestMessage.trim()); setRequesting(false); }}><textarea autoFocus rows={4} value={requestMessage} onChange={(event) => setRequestMessage(event.target.value)} placeholder="Напишите пользователю, почему вы хотите добавиться в друзья и начать переписку" /><button className="primary-button" type="submit">Отправить</button></form>}
+          {requesting && relationship === "none" && <form className="friend-request-form" onSubmit={(event) => { event.preventDefault(); onAddFriend(requestMessage.trim()); setRequesting(false); }}><textarea autoFocus rows={4} value={requestMessage} onChange={(event) => setRequestMessage(event.target.value)} placeholder={isCommunity ? "При желании добавьте сообщение к заявке" : "Напишите пользователю, почему вы хотите добавиться в друзья и начать переписку"} /><button className="primary-button" type="submit">Отправить</button></form>}
           {rejecting && <form className="reject-form" onSubmit={(event) => { event.preventDefault(); onReject(comment); }}><label>Почему вы не хотите дружить?<textarea rows={3} value={comment} onChange={(event) => setComment(event.target.value)} placeholder="Не обязательно" /></label><div><button type="button" onClick={() => setRejecting(false)}>Отмена</button><button type="submit">Отклонить</button></div></form>}
           {cancellingRequest && <div className="nested-modal-backdrop" onMouseDown={() => setCancellingRequest(false)}><section className="confirm-social-modal" role="alertdialog" aria-modal="true" onMouseDown={(event) => event.stopPropagation()}><h2>Отменить запрос?</h2><div className="form-actions"><button type="button" onClick={async () => { setSocialBusy(true); try { await onCancelFriendRequest(); setCancellingRequest(false); } finally { setSocialBusy(false); } }} disabled={socialBusy}>Да</button><button className="primary-button" type="button" autoFocus onClick={() => setCancellingRequest(false)}>Нет</button></div></section></div>}
-          <div className="public-profile-stats"><span><strong>{user.profile.type === "Издатель" ? user.authorBooks?.length ?? 0 : user.books.length}</strong> книг</span><span><strong>{user.profile.type === "Издатель" ? events.filter((item) => item.creatorId === user.id && item.status === "published").length : user.reviews.length}</strong> {user.profile.type === "Издатель" ? "событий" : "рецензий"}</span><span><strong>{friendCount}</strong> друзей</span></div>
-          {activeTab === "main" && user.profile.type !== "Издатель" && hasMatches && <section className="interest-matches"><h3>Совпадения по книжным интересам</h3><div className="interest-match-grid"><div title={commonBooks.map((book) => book.title).join(", ")}><strong>{commonBooks.length}</strong><span>общих книг</span></div><div title={commonFavoriteGenres.join(", ")}><strong>{commonFavoriteGenres.length}</strong><span>любимых жанров</span></div><div title={commonDislikedGenres.join(", ")}><strong>{commonDislikedGenres.length}</strong><span>нелюбимых жанров</span></div></div></section>}
+          <div className="public-profile-stats"><span><strong>{isOrganization ? user.authorBooks?.length ?? 0 : user.books.length}</strong> книг</span><span><strong>{isOrganization ? publicEvents.length : user.reviews.length}</strong> {isOrganization ? "событий" : "рецензий"}</span><span><strong>{friendCount}</strong> {isCommunity ? "участников" : "друзей"}</span></div>
+          {activeTab === "main" && !isOrganization && hasMatches && <section className="interest-matches"><h3>Совпадения по книжным интересам</h3><div className="interest-match-grid"><div title={commonBooks.map((book) => book.title).join(", ")}><strong>{commonBooks.length}</strong><span>общих книг</span></div><div title={commonFavoriteGenres.join(", ")}><strong>{commonFavoriteGenres.length}</strong><span>любимых жанров</span></div><div title={commonDislikedGenres.join(", ")}><strong>{commonDislikedGenres.length}</strong><span>нелюбимых жанров</span></div></div></section>}
           <nav className="public-profile-tabs" aria-label="Профиль пользователя">
             <button className={activeTab === "main" ? "active" : ""} type="button" onClick={() => setActiveTab("main")}>Основное</button>
-            {(user.profile.type === "Писатель" || user.profile.type === "Издатель") && <button className={activeTab === "author-books" ? "active" : ""} type="button" onClick={() => setActiveTab("author-books")}>{user.profile.type === "Издатель" ? "Книги издательства" : "Мои книги"} <span>{user.authorBooks?.length ?? 0}</span></button>}
-            {(user.profile.type === "Писатель" || user.profile.type === "Блогер") && <button className={activeTab === "excerpts" ? "active" : ""} type="button" onClick={() => setActiveTab("excerpts")}>Мой блог <span>{user.excerpts?.length ?? 0}</span></button>}
-            {user.profile.type === "Издатель" && <button className={activeTab === "publisher-events" ? "active" : ""} type="button" onClick={() => setActiveTab("publisher-events")}>События издательства <span>{events.filter((item) => item.creatorId === user.id && item.status === "published").length}</span></button>}
-            {user.profile.type === "Издатель" && <button className={activeTab === "publisher-news" ? "active" : ""} type="button" onClick={() => setActiveTab("publisher-news")}>Новости издательства <span>{user.publisherNews?.length ?? 0}</span></button>}
-            {user.profile.type !== "Издатель" && <button className={activeTab === "library" ? "active" : ""} type="button" onClick={() => setActiveTab("library")}>Библиотека <span>{user.books.length}</span></button>}
-            {relationship === "friends" && (user.profile.type === "Читатель" || user.profile.type === "Блогер") && <button className={activeTab === "wishlist" ? "active" : ""} type="button" onClick={() => setActiveTab("wishlist")}>Хочу почитать! <span>{profileWishBooks.length}</span></button>}
-            {(user.profile.type === "Читатель" || user.profile.type === "Блогер") && <button className={activeTab === "reviews" ? "active" : ""} type="button" onClick={() => setActiveTab("reviews")}>Рецензии <span>{user.reviews.length}</span></button>}
-            {user.profile.type !== "Издатель" && <button className={activeTab === "occasions" ? "active" : ""} type="button" onClick={() => setActiveTab("occasions")}>Мои поводы <span>{occasions.filter((item) => item.creatorId === user.id && item.status === "published").length}</span></button>}
+            {(user.profile.type === "Писатель" || isOrganization) && Boolean(user.authorBooks?.length) && <button className={activeTab === "author-books" ? "active" : ""} type="button" onClick={() => setActiveTab("author-books")}>{isCommunity ? "Книги сообщества" : user.profile.type === "Издатель" ? "Книги издательства" : "Книги"} <span>{user.authorBooks?.length ?? 0}</span></button>}
+            {(user.profile.type === "Писатель" || user.profile.type === "Блогер") && Boolean(user.excerpts?.length) && <button className={activeTab === "excerpts" ? "active" : ""} type="button" onClick={() => setActiveTab("excerpts")}>Блог <span>{user.excerpts?.length ?? 0}</span></button>}
+            {isOrganization && publicEvents.length > 0 && <button className={activeTab === "publisher-events" ? "active" : ""} type="button" onClick={() => setActiveTab("publisher-events")}>{isCommunity ? "События сообщества" : "События издательства"} <span>{publicEvents.length}</span></button>}
+            {!isOrganization && publicEvents.length > 0 && <button className={activeTab === "publisher-events" ? "active" : ""} type="button" onClick={() => setActiveTab("publisher-events")}>Мероприятия <span>{publicEvents.length}</span></button>}
+            {isOrganization && Boolean(user.publisherNews?.length) && <button className={activeTab === "publisher-news" ? "active" : ""} type="button" onClick={() => setActiveTab("publisher-news")}>{isCommunity ? "Новости сообщества" : "Новости издательства"} <span>{user.publisherNews?.length ?? 0}</span></button>}
+            {!isOrganization && user.books.length > 0 && <button className={activeTab === "library" ? "active" : ""} type="button" onClick={() => setActiveTab("library")}>Библиотека <span>{user.books.length}</span></button>}
+            {relationship === "friends" && (user.profile.type === "Читатель" || user.profile.type === "Блогер") && profileWishBooks.length > 0 && <button className={activeTab === "wishlist" ? "active" : ""} type="button" onClick={() => setActiveTab("wishlist")}>Хочу почитать! <span>{profileWishBooks.length}</span></button>}
+            {(user.profile.type === "Читатель" || user.profile.type === "Блогер") && user.reviews.length > 0 && <button className={activeTab === "reviews" ? "active" : ""} type="button" onClick={() => setActiveTab("reviews")}>Рецензии <span>{user.reviews.length}</span></button>}
+            {!isOrganization && publicOccasions.length > 0 && <button className={activeTab === "occasions" ? "active" : ""} type="button" onClick={() => setActiveTab("occasions")}>Поводы <span>{publicOccasions.length}</span></button>}
+            {isCommunity && <button className={activeTab === "members" ? "active" : ""} type="button" onClick={() => setActiveTab("members")}>Участники сообщества <span>{profileFriends.length}</span></button>}
           </nav>
           {activeTab === "main" && <PublicProfileDetails user={user} />}
           {activeTab === "author-books" && <div className="public-books-grid">{(user.authorBooks ?? []).map((book) => <button type="button" className="public-book-card" key={book.id} onClick={() => setOpenedAuthorBook(book)}><div className={`library-book-cover library-cover-${book.coverTone}`} style={book.coverUrl ? { backgroundImage: `url(${book.coverUrl})` } : undefined}>{!book.coverUrl && <><em>{book.author}</em><strong>{book.title}</strong><span>Book Meet</span></>}</div><h3>{book.title}</h3><p>{book.author}</p></button>)}</div>}
@@ -595,11 +608,12 @@ export function UserProfileModal({ user, viewer, users, events = [], occasions =
           {activeTab === "wishlist" && relationship === "friends" && <WishlistTab books={profileWishBooks} setBooks={setProfileWishBooks} owner={{ ...user, wishBooks: profileWishBooks }} viewer={viewer} users={users} readOnly />}
           {activeTab === "reviews" && (user.profile.type === "Читатель" || user.profile.type === "Блогер") && <div className="public-reviews-list">{user.reviews.map((review) => <button type="button" key={review.id} onClick={() => setOpenedReview({ id: review.id, kind: "review", title: review.bookTitle, author: user.profile.name, text: review.fullText, ownerId: user.id, createdAt: review.createdAt, preview: review.preview, bookAuthor: review.bookAuthor, rating: review.rating })}><span>★ {review.rating} · {review.createdAt}</span><h3>{review.bookTitle}</h3><p>{review.preview}</p><b>Читать →</b></button>)}</div>}
           {activeTab === "occasions" && <div className="occasion-grid">{occasions.filter((item) => item.creatorId === user.id && item.status === "published").map((item) => <OccasionCard key={item.id} item={item} own={false} onOpen={() => setOpenedOccasion(item)} />)}{!occasions.some((item) => item.creatorId === user.id && item.status === "published") && <div className="profile-tab-placeholder">Пользователь пока не создавал поводы.</div>}</div>}
+          {activeTab === "members" && <div className="community-members-grid">{profileFriends.map((member) => <button className="community-member-card" type="button" key={member.id} onClick={() => onOpenUser(member.id)}><span className={`avatar avatar-md avatar-${member.color} ${member.avatarUrl ? "has-photo" : ""}`} style={member.avatarUrl ? { backgroundImage: `url(${member.avatarUrl})` } : undefined}>{!member.avatarUrl && member.initials}</span><span><strong>{member.profile.name}</strong><small>{member.profile.type} · {member.profile.city}</small></span></button>)}</div>}
         </div>
         {openedBook && <UnifiedBookModal book={openedBook} users={users} events={events} nested onClose={() => setOpenedBook(null)} onOpenUser={onOpenUser} />}
         {openedReadingItem && <ReadingModal item={openedReadingItem} currentUser={viewer} users={users} likedUserIds={likes[`${openedReadingItem.kind}-${openedReadingItem.id}`] ?? []} onToggleLike={() => onToggleLike(openedReadingItem)} onComment={(text) => onComment(openedReadingItem, text)} onClose={() => setOpenedReview(null)} onReport={!viewer.isAdmin ? () => openReportDialog({ kind: openedReadingItem.kind, id: openedReadingItem.id }) : undefined} onOpenUser={onOpenUser} relationship={relationship} isFollowing={isFollowing} onAddFriend={onAddFriend} onFollow={onFollow} onEdit={viewer.isAdmin ? () => void editReadingMaterial(openedReadingItem, viewer) : undefined} onDelete={viewer.isAdmin ? () => void deleteReadingMaterial(openedReadingItem, viewer) : undefined} />}
         {openedAuthorBook && <UnifiedBookModal book={openedAuthorBook} users={users} nested onClose={() => setOpenedAuthorBook(null)} onOpenUser={onOpenUser} onReport={!viewer.isAdmin ? () => openReportDialog({ kind: "book", id: openedAuthorBook.id }) : undefined} />}
-        {openedPublisherEvent && <EventModal item={openedPublisherEvent} users={users} currentUserId={viewer.id} onOpenUser={onOpenUser} onClose={() => setOpenedPublisherEvent(null)} onReport={!viewer.isAdmin ? () => openReportDialog({ kind: "event", id: openedPublisherEvent.id }) : undefined} />}
+        {openedPublisherEvent && <EventModal item={openedPublisherEvent} users={users} currentUserId={viewer.id} currentUser={viewer} onOpenUser={onOpenUser} onClose={() => setOpenedPublisherEvent(null)} onReport={!viewer.isAdmin ? () => openReportDialog({ kind: "event", id: openedPublisherEvent.id }) : undefined} />}
         {openedPublisherNews && <PublisherNewsModal item={openedPublisherNews} owner={user} currentUser={viewer} users={users} onOpenUser={onOpenUser} onReport={!viewer.isAdmin ? () => openReportDialog({ kind: "publisher_news", id: openedPublisherNews.id }) : undefined} onClose={() => setOpenedPublisherNews(null)} />}
         {openedOccasion && <OccasionModal item={openedOccasion} currentUser={viewer} users={users} onOpenUser={onOpenUser} onOpenBook={(bookId) => setOpenedBook(catalogFromUsers(users).find((book) => book.id === bookId) ?? null)} onClose={() => setOpenedOccasion(null)} onReport={!viewer.isAdmin ? () => openReportDialog({ kind: "occasion", id: openedOccasion.id }) : undefined} />}
       </section>
@@ -987,10 +1001,11 @@ export function BookEditor({ book, catalog, onClose, onSave }: { book: LibraryBo
   );
 }
 
-export function ReadingStatsModal({ books, onClose }: { books: LibraryBook[]; onClose: () => void }) {
+export function ReadingStatsModal({ books, users, onClose }: { books: LibraryBook[]; users: DemoUser[]; onClose: () => void }) {
   const currentYear = new Date().getFullYear();
   const availableYears = Array.from(new Set([currentYear, ...books.map((book) => book.readYear).filter((year): year is number => Boolean(year))])).sort((a, b) => b - a);
   const [year, setYear] = useState(currentYear);
+  const [openedBook, setOpenedBook] = useState<LibraryBook | null>(null);
   const counts = readingMonths.map((_, index) => books.filter((book) => book.readYear === year && book.readMonth === index + 1).length);
   const maxCount = Math.max(1, ...counts);
   const chartLeft = 54;
@@ -1016,7 +1031,8 @@ export function ReadingStatsModal({ books, onClose }: { books: LibraryBook[]; on
         })}
       </svg>
     </div>
-    {monthlyGroups.length > 0 && <div className="reading-month-groups">{monthlyGroups.map((group) => <section className="reading-month-group" key={group.month}><h3>{group.month}</h3><div>{group.books.map((book) => <article className="reading-month-book" key={book.id}><div className={`library-book-cover library-cover-${book.coverTone}`} style={book.coverUrl ? { backgroundImage: `url(${book.coverUrl})` } : undefined}>{!book.coverUrl && <strong>{book.title.slice(0, 1)}</strong>}</div><span><strong>{book.title}</strong><small>{book.author}</small></span></article>)}</div></section>)}</div>}
+    {monthlyGroups.length > 0 && <div className="reading-month-groups">{monthlyGroups.map((group) => <section className="reading-month-group" key={group.month}><h3>{group.month}</h3><div>{group.books.map((book) => <button type="button" className="reading-month-book" key={book.id} onClick={() => setOpenedBook(book)}><div className={`library-book-cover library-cover-${book.coverTone}`} style={book.coverUrl ? { backgroundImage: `url(${book.coverUrl})` } : undefined}>{!book.coverUrl && <strong>{book.title.slice(0, 1)}</strong>}</div><span><strong>{book.title}</strong><small>{book.author}</small></span></button>)}</div></section>)}</div>}
+    {openedBook && <UnifiedBookModal book={openedBook} users={users} nested onClose={() => setOpenedBook(null)} />}
   </section></div>;
 }
 
@@ -1118,7 +1134,7 @@ export function LibraryTab({ books, setBooks, userId, users, initialAdd = false 
       </div>
       {editingBook !== undefined && <BookEditor book={editingBook} catalog={catalogFromUsers(users)} onClose={() => setEditingBook(undefined)} onSave={saveBook} />}
       {viewingBook && <UnifiedBookModal book={viewingBook} users={users} onClose={() => setViewingBook(null)} onEdit={() => { setEditingBook(viewingBook); setViewingBook(null); }} onDelete={async () => { if (!window.confirm(`Удалить «${viewingBook.title}» из библиотеки?`)) return; const response = await fetch(`/api/books/${viewingBook.id}`, { method: "DELETE", credentials: "same-origin" }); if (!response.ok) { window.alert("Не удалось удалить книгу"); return; } setBooks((current) => current.filter((book) => book.id !== viewingBook.id)); setViewingBook(null); }} />}
-      {statsOpen && <ReadingStatsModal books={books} onClose={() => setStatsOpen(false)} />}
+      {statsOpen && <ReadingStatsModal books={books} users={users} onClose={() => setStatsOpen(false)} />}
     </div>
   );
 }
@@ -1139,7 +1155,7 @@ export function ReviewEditor({ review, catalog, onClose, onSave }: { review?: Us
 
   return (
     <div className="modal-backdrop" role="presentation" onMouseDown={onClose}>
-      <section className="review-editor" role="dialog" aria-modal="true" aria-labelledby="review-editor-title" onMouseDown={(event) => event.stopPropagation()}>
+      <section className="review-editor blog-editor-modal" role="dialog" aria-modal="true" aria-labelledby="review-editor-title" onMouseDown={(event) => event.stopPropagation()}>
         <button className="modal-close" type="button" onClick={onClose} aria-label="Закрыть">×</button>
         <span className="section-subtitle">Мои рецензии</span><h2 id="review-editor-title">{review ? "Редактировать рецензию" : "Добавить рецензию"}</h2>
         <form className="book-fields" onSubmit={submit}>
@@ -1176,19 +1192,19 @@ export function ReviewsTab({ reviews, setReviews, owner, users, likes, onToggleL
   );
 }
 
-export function ProfileFriendsTab({ friends, outgoing, incoming, subscriptions, followers, onOpenUser }: { friends: DemoUser[]; outgoing: DemoUser[]; incoming: DemoUser[]; subscriptions: DemoUser[]; followers: DemoUser[]; onOpenUser: (userId: number) => void }) {
+export function ProfileFriendsTab({ friends, outgoing, incoming, subscriptions, followers, communityMode = false, onOpenUser }: { friends: DemoUser[]; outgoing: DemoUser[]; incoming: DemoUser[]; subscriptions: DemoUser[]; followers: DemoUser[]; communityMode?: boolean; onOpenUser: (userId: number) => void }) {
   const [mode, setMode] = useState<"friends" | "follows">("friends");
   const groups = mode === "friends"
     ? [
-      { key: "friends", title: "Текущие друзья", users: friends },
-      { key: "outgoing", title: "Запросы, отправленные вами", users: outgoing },
-      { key: "incoming", title: "Запросы, полученные вами", users: incoming },
+      { key: "friends", title: communityMode ? "Участники сообщества" : "Текущие друзья", users: friends },
+      ...(!communityMode ? [{ key: "outgoing", title: "Запросы, отправленные вами", users: outgoing }] : []),
+      { key: "incoming", title: communityMode ? "Заявки на вступление" : "Запросы, полученные вами", users: incoming },
     ]
     : [
       { key: "subscriptions", title: "Подписки", users: subscriptions },
       { key: "followers", title: "Подписчики", users: followers },
     ];
-  return <div className="profile-friends-tab"><div className="profile-title-row"><div><h1>Мои друзья</h1><p>Эти списки видите только вы</p></div></div><div className="profile-social-switch" role="tablist"><button className={mode === "friends" ? "active" : ""} type="button" onClick={() => setMode("friends")}>Друзья</button><button className={mode === "follows" ? "active" : ""} type="button" onClick={() => setMode("follows")}>Подписки</button></div><div className="profile-friend-groups">{groups.map((group) => <details key={group.key} open><summary><span>{group.title}</span><b>{group.users.length}</b></summary>{group.users.length > 0 && <div className="profile-friends-grid">{group.users.map((friend) => <button className="profile-friend-card" type="button" key={friend.id} onClick={() => onOpenUser(friend.id)}><span className={`avatar avatar-md avatar-${friend.color} ${friend.avatarUrl ? "has-photo" : ""}`} style={friend.avatarUrl ? { backgroundImage: `url(${friend.avatarUrl})` } : undefined}>{!friend.avatarUrl && friend.initials}</span><span className="profile-friend-copy"><strong>{friend.profile.name}</strong><small>{friend.profile.type}{friend.profile.city ? ` · ${friend.profile.city}` : ""}</small></span></button>)}</div>}</details>)}</div></div>;
+  return <div className="profile-friends-tab"><div className="profile-title-row"><div><h1>{communityMode ? "Участники сообщества" : "Мои друзья"}</h1><p>{communityMode ? "Участники видны всем пользователям, заявки — только сообществу" : "Эти списки видите только вы"}</p></div></div>{!communityMode && <div className="profile-social-switch" role="tablist"><button className={mode === "friends" ? "active" : ""} type="button" onClick={() => setMode("friends")}>Друзья</button><button className={mode === "follows" ? "active" : ""} type="button" onClick={() => setMode("follows")}>Подписки</button></div>}<div className="profile-friend-groups">{groups.map((group) => <details key={group.key} open><summary><span>{group.title}</span><b>{group.users.length}</b></summary>{group.users.length > 0 && <div className="profile-friends-grid">{group.users.map((friend) => <button className="profile-friend-card" type="button" key={friend.id} onClick={() => onOpenUser(friend.id)}><span className={`avatar avatar-md avatar-${friend.color} ${friend.avatarUrl ? "has-photo" : ""}`} style={friend.avatarUrl ? { backgroundImage: `url(${friend.avatarUrl})` } : undefined}>{!friend.avatarUrl && friend.initials}</span><span className="profile-friend-copy"><strong>{friend.profile.name}</strong><small>{friend.profile.type}{friend.profile.city ? ` · ${friend.profile.city}` : ""}</small></span></button>)}</div>}</details>)}</div></div>;
 }
 
 export function MyEventsTab({ createdEvents, participatingEvents, users, currentUserId, onOpenUser, onEdit, onDeleted }: { createdEvents: BookEvent[]; participatingEvents: BookEvent[]; users: DemoUser[]; currentUserId: number; onOpenUser: (userId: number) => void; onEdit: (item: BookEvent) => void; onDeleted: (id: number) => void }) {
@@ -1282,12 +1298,12 @@ export function WriterBookEditor({ book, author, allowFreeAuthor = false, onClos
   </div>;
 }
 
-export function AuthorBooksTab({ books, setBooks, userId, author, users, publisherMode = false, canCreate = true }: { books: AuthorBook[]; setBooks: React.Dispatch<React.SetStateAction<AuthorBook[]>>; userId: number; author: string; users: DemoUser[]; publisherMode?: boolean; canCreate?: boolean }) {
+export function AuthorBooksTab({ books, setBooks, userId, author, users, publisherMode = false, communityMode = false, canCreate = true }: { books: AuthorBook[]; setBooks: React.Dispatch<React.SetStateAction<AuthorBook[]>>; userId: number; author: string; users: DemoUser[]; publisherMode?: boolean; communityMode?: boolean; canCreate?: boolean }) {
   const [editing, setEditing] = useState<AuthorBook | null | undefined>(undefined); const [viewing, setViewing] = useState<AuthorBook | null>(null); const [warning, setWarning] = useState<BookLink | null>(null);
   async function save(book: AuthorBook) { const existingBook = books.some((item) => item.id === book.id) || Boolean(book.catalogBookId); const payload = { userId, ...book, format: "Книга", isAuthor: true, useExistingId: existingBook ? (book.catalogBookId ?? book.id) : undefined, links: book.links.map(({ label, url, action }) => ({ label, url, action })) }; try { let response = await fetch("/api/books", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(payload) }); if (response.status === 409) { const data = await response.json() as { match: { id: number; title: string; author: string } }; if (!window.confirm(`Вы имеете в виду эту книгу?\n\n${data.match.author} — «${data.match.title}»`)) return; response = await fetch("/api/books", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ ...payload, useExistingId: data.match.id }) }); } if (!response.ok) throw new Error("Не удалось сохранить книгу"); const data = await response.json() as { bookId: number }; const savedBook = { ...book, id: data.bookId }; setBooks((current) => current.some((item) => item.id === book.id) ? current.map((item) => item.id === book.id ? savedBook : item) : [savedBook, ...current]); setEditing(undefined); } catch (error) { console.warn(error); window.alert("Не удалось сохранить книгу. Проверьте соединение и попробуйте ещё раз."); } }
   return <div className="library-tab">
     <div className="profile-title-row library-title-row">
-      <div><h1>{publisherMode ? "Книги издательства" : "Мои книги"}</h1><p>{publisherMode ? "Книги, выпущенные вашим издательством" : "Книги, которые вы написали"}</p></div>
+      <div><h1>{communityMode ? "Книги сообщества" : publisherMode ? "Книги издательства" : "Мои книги"}</h1><p>{communityMode ? "Книги, добавленные вашим сообществом" : publisherMode ? "Книги, выпущенные вашим издательством" : "Книги, которые вы написали"}</p></div>
       {canCreate && <button className="primary-button" type="button" onClick={() => setEditing(null)}>＋ Добавить книгу</button>}
     </div>
     <div className="library-grid">{books.map((book) => <article className="library-book material-clickable-card" role="button" tabIndex={0} key={book.id} onClick={() => setViewing(book)} onKeyDown={(event) => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); setViewing(book); } }}><div className={`library-book-cover library-cover-${book.coverTone}`} style={book.coverUrl ? { backgroundImage: `url(${book.coverUrl})` } : undefined}>{!book.coverUrl && <><em>{book.author}</em><strong>{book.title}</strong><span>Book Meet</span></>}</div><div className="library-book-copy"><h3>{book.title}</h3><p>{book.author}</p><div className="writer-book-links">{book.links.map((link) => <button type="button" key={link.id} onClick={(event) => { event.stopPropagation(); setWarning(link); }}>{link.action} · {link.label}</button>)}</div></div></article>)}</div>
@@ -1374,7 +1390,8 @@ export function RichTextEditor({ value, onChange, catalog = [] }: { value: strin
   }
 
   function insertBook(book: LibraryBook | AuthorBook) {
-    insertHtml(`<div class="rich-inline-book" data-book-id="${book.id}" contenteditable="false"><span class="event-modal-book-cover rich-inline-book-cover library-cover-${book.coverTone || "blue"}" contenteditable="false">${book.title.slice(0, 1)}</span><span class="rich-inline-book-copy" contenteditable="false"><strong>${book.title.replace(/[<>&]/g, "")}</strong><small>${book.author.replace(/[<>&]/g, "")}</small><p>${(book.annotation || "Аннотация пока не добавлена.").replace(/[<>&]/g, "")}</p></span><span class="rich-inline-book-remove" contenteditable="false">×</span></div><p><br></p>`);
+    const safeCover = book.coverUrl ? encodeURI(book.coverUrl).replace(/["']/g, "%22") : "";
+    insertHtml(`<div class="rich-inline-book" data-book-id="${book.id}" contenteditable="false"><span class="event-modal-book-cover rich-inline-book-cover library-cover-${book.coverTone || "blue"}" contenteditable="false"${safeCover ? ` style="background-image:url('${safeCover}')"` : ""}>${safeCover ? "" : book.title.slice(0, 1)}</span><span class="rich-inline-book-copy" contenteditable="false"><strong>${book.title.replace(/[<>&]/g, "")}</strong><small>${book.author.replace(/[<>&]/g, "")}</small><p>${(book.annotation || "Аннотация пока не добавлена.").replace(/[<>&]/g, "")}</p></span><span class="rich-inline-book-remove" contenteditable="false">×</span></div><p><br></p>`);
     setBookSearchOpen(false); setBookQuery("");
   }
 
@@ -1416,9 +1433,9 @@ export function RichTextEditor({ value, onChange, catalog = [] }: { value: strin
   </div>;
 }
 
-export function PublisherNewsEditor({ item, catalog = [], onClose, onSave }: { item: PublisherNews; catalog?: (LibraryBook | AuthorBook)[]; onClose: () => void; onSave: (item: PublisherNews) => void }) {
+export function PublisherNewsEditor({ item, catalog = [], communityMode = false, onClose, onSave }: { item: PublisherNews; catalog?: (LibraryBook | AuthorBook)[]; communityMode?: boolean; onClose: () => void; onSave: (item: PublisherNews) => void }) {
   const [form, setForm] = useState(item);
-  return <div className="modal-backdrop" onMouseDown={onClose}><section className="review-editor blog-editor-modal publisher-news-editor" onMouseDown={(event) => event.stopPropagation()}><button className="modal-close" type="button" onClick={onClose}>×</button><h2>{item.id ? "Редактировать новость издательства" : "Добавить новость издательства"}</h2><form className="book-fields" onSubmit={(event) => { event.preventDefault(); const bodyHtml = sanitizeRichHtml(form.bodyHtml ?? ""); onSave({ ...form, title: form.title.trim(), previewText: form.previewText.trim().slice(0, 500), bodyHtml, body: bodyHtml.replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim() }); }}>
+  return <div className="modal-backdrop" onMouseDown={onClose}><section className="review-editor blog-editor-modal publisher-news-editor" onMouseDown={(event) => event.stopPropagation()}><button className="modal-close" type="button" onClick={onClose}>×</button><h2>{item.id ? `Редактировать новость ${communityMode ? "сообщества" : "издательства"}` : `Добавить новость ${communityMode ? "сообщества" : "издательства"}`}</h2><form className="book-fields" onSubmit={(event) => { event.preventDefault(); const bodyHtml = sanitizeRichHtml(form.bodyHtml ?? ""); onSave({ ...form, title: form.title.trim(), previewText: form.previewText.trim().slice(0, 500), bodyHtml, body: bodyHtml.replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim() }); }}>
     <label>Заголовок<input required value={form.title} onChange={(event) => setForm({ ...form, title: event.target.value })} /></label>
     <div className="blog-composer"><span className="field-label blog-composer-title">Что нового?</span><label className="blog-text-block blog-preview-field"><span className="blog-block-title">Эта часть текста будет видна на главной странице и внутри новости</span><textarea required rows={7} maxLength={500} placeholder="Напишите то, что привлечет читателей" value={form.previewText} onChange={(event) => setForm({ ...form, previewText: event.target.value })} /><small className={form.previewText.length >= 500 ? "limit-reached" : ""}>{form.previewText.length}/500</small></label><div className="blog-text-block blog-rich-block"><span className="blog-block-title">Эта часть текста будет видна только внутри новости</span><RichTextEditor value={form.bodyHtml ?? ""} onChange={(bodyHtml) => setForm({ ...form, bodyHtml })} catalog={catalog} /></div></div>
     <label className="adult-material-checkbox"><input type="checkbox" checked={Boolean(form.isAdult)} onChange={(event) => setForm({ ...form, isAdult: event.target.checked })} />Новость не предназначена для лиц младше 18 лет</label>
@@ -1426,12 +1443,13 @@ export function PublisherNewsEditor({ item, catalog = [], onClose, onSave }: { i
   </form></section></div>;
 }
 
-export function PublisherNewsTab({ news, setNews, owner, users = [owner], canCreate = true }: {
+export function PublisherNewsTab({ news, setNews, owner, users = [owner], canCreate = true, communityMode = false }: {
   news: PublisherNews[];
   setNews: React.Dispatch<React.SetStateAction<PublisherNews[]>>;
   owner: DemoUser;
   users?: DemoUser[];
   canCreate?: boolean;
+  communityMode?: boolean;
 }) {
   const [editing, setEditing] = useState<PublisherNews | null | undefined>(undefined);
   const [opened, setOpened] = useState<PublisherNews | null>(null);
@@ -1444,10 +1462,10 @@ export function PublisherNewsTab({ news, setNews, owner, users = [owner], canCre
     setEditing(undefined);
   };
   return <div className="publisher-news-tab">
-    <div className="profile-title-row"><div><h1>Новости издательства</h1><p>{news.length} публикаций</p></div>{canCreate && <button className="primary-button" type="button" onClick={() => begin(null)}>＋ Добавить новость</button>}</div>
+    <div className="profile-title-row"><div><h1>Новости {communityMode ? "сообщества" : "издательства"}</h1><p>{news.length} публикаций</p></div>{canCreate && <button className="primary-button" type="button" onClick={() => begin(null)}>＋ Добавить новость</button>}</div>
     {news.length ? <div className="publisher-news-grid">{news.map((item) => <article className="material-clickable-card" role="button" tabIndex={0} key={item.id} onClick={() => setOpened(item)} onKeyDown={(event) => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); setOpened(item); } }}><span className="section-subtitle">{item.createdAt}{item.isAdult ? " · 18+" : ""}</span><h3>{item.title}</h3><p>{item.previewText}</p></article>)}</div> : <div className="profile-tab-placeholder">Новости пока не опубликованы.</div>}
     {opened && <PublisherNewsModal item={opened} owner={owner} currentUser={owner} users={users} onOpenUser={() => undefined} onEdit={canCreate ? () => { begin(opened); setOpened(null); } : undefined} onDelete={canCreate ? () => { if (window.confirm(`Удалить новость «${opened.title}»?`)) { setNews((current) => current.filter((item) => item.id !== opened.id)); setOpened(null); } } : undefined} onClose={() => setOpened(null)} />}
-    {editing !== undefined && <PublisherNewsEditor item={form} catalog={catalogFromUsers(users)} onClose={() => setEditing(undefined)} onSave={save} />}
+    {editing !== undefined && <PublisherNewsEditor item={form} catalog={catalogFromUsers(users)} communityMode={communityMode} onClose={() => setEditing(undefined)} onSave={save} />}
   </div>;
 }
 
