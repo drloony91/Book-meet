@@ -151,6 +151,9 @@ export function LoginScreen({ onLogin, onRegister, initialError = "" }: { onLogi
       <div className="auth-provider-actions">
         {providers.google ? <div className="google-provider-button" ref={googleButtonRef} /> : <span>Google-вход будет доступен после добавления ключей сервиса.</span>}
       </div>
+      <button className="outline-button mobile-auth-mode-switch" type="button" onClick={() => changeMode(formMode === "login" ? "register" : "login")}>
+        {formMode === "login" ? "Создать профиль" : "Вернуться ко входу"}
+      </button>
     </div>;
   }
 

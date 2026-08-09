@@ -6,10 +6,10 @@ export function validateRichHtml(value) {
   const source = String(value ?? "");
   return sanitizeHtml(source, {
     allowedTags,
-    allowedAttributes: { div: ["style"], p: ["style"], span: ["style", "class"], img: ["src", "alt", "style", "contenteditable"] },
+    allowedAttributes: { div: ["style", "class", "data-book-id", "contenteditable"], p: ["style"], span: ["style", "class", "contenteditable"], img: ["src", "alt", "style", "contenteditable"] },
     allowedSchemesByTag: { img: ["data"] },
     exclusiveFilter: (frame) => frame.tag === "img" && !String(frame.attribs?.src ?? "").startsWith("data:image/"),
-    allowedClasses: { span: ["spoiler"] },
+    allowedClasses: { div: ["rich-image-frame", "rich-inline-book"], span: ["spoiler", "rich-image-resize-handle", "rich-inline-book-cover", "rich-inline-book-copy", "rich-inline-book-remove"] },
     allowedStyles: {
       "*": {
         "font-size": [/^(?:12|14|16|18|22|28)px$/],

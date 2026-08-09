@@ -48,7 +48,7 @@ export async function loadUsers(connection = getPool(), viewerId = null) {
     `SELECT u.id, u.username, u.initials, u.color, u.avatar_path, u.role, u.created_at, u.last_seen_at,
             u.deleted_at, u.deletion_expires_at, u.purged_at,
             u.suspension_reason, u.suspended_until, u.suspended_permanently,
-            p.display_name, p.city, p.city_id, c.country_name, p.profile_type, p.gender, p.birth_date, p.show_birth_date_to_friends, p.profile_tab_order,
+            p.display_name, p.city, p.city_id, c.country_name, p.profile_type, p.gender, p.birth_date, p.show_birth_date_to_friends, p.profile_tab_order, p.home_view,
             p.bio, p.author_influences, p.writing_themes, p.weekend, p.joy, p.talk,
             p.stranger_message, p.favorite_genres, p.disliked_genres,
             p.publisher_status, p.publisher_website, p.publisher_sales_links, p.publisher_legal_name,
@@ -82,6 +82,14 @@ export async function loadUsers(connection = getPool(), viewerId = null) {
     `SELECT e.id, e.user_id, e.book_id, e.book_title, e.preview_text, e.body_html, e.body, e.is_adult, e.read_url, e.created_at
        FROM excerpts e
       ORDER BY e.created_at DESC`,
+  );
+  const [materialBookRows] = await connection.query(
+    `SELECT mb.material_kind, mb.material_id, mb.book_id, mb.position,
+            b.title, b.author, b.annotation, b.cover_path, b.cover_tone
+       FROM material_books mb
+       JOIN books b ON b.id = mb.book_id
+      WHERE mb.material_kind IN ('review', 'excerpt')
+      ORDER BY mb.material_kind, mb.material_id, mb.position`,
   );
   const [publisherNewsRows] = await connection.query(
     `SELECT id, user_id, title, preview_text, body_html, body, is_adult, created_at
@@ -187,6 +195,7 @@ export async function loadUsers(connection = getPool(), viewerId = null) {
         age: Number(row.id) === Number(viewerId) || viewerIsAdmin ? ageFromBirthDate(row.birth_date) ?? undefined : undefined,
         showBirthDateToFriends: Number(row.id) === Number(viewerId) || viewerIsAdmin ? Boolean(row.show_birth_date_to_friends) : undefined,
         tabOrder: parseJson(row.profile_tab_order),
+        homeView: row.home_view === "classic" ? "classic" : "feed",
         bio: row.bio ?? "",
         authorInfluences: row.author_influences ?? "",
         writingThemes: row.writing_themes ?? "",
@@ -218,6 +227,8 @@ export async function loadUsers(connection = getPool(), viewerId = null) {
         rating: Number(review.rating),
         preview: review.preview,
         fullText: review.body,
+        bodyHtml: review.body,
+        bookIds: materialBookRows.filter((item) => item.material_kind === "review" && Number(item.material_id) === Number(review.id)).map((item) => Number(item.book_id)),
         isAdult: Boolean(review.is_adult),
         createdAt: formatDate(review.created_at),
         createdAtValue: new Date(review.created_at).toISOString(),
@@ -228,6 +239,7 @@ export async function loadUsers(connection = getPool(), viewerId = null) {
         bookTitle: excerpt.book_title ?? "",
         previewText: excerpt.preview_text ?? excerpt.body?.slice(0, 500) ?? "",
         bodyHtml: excerpt.body_html ?? "",
+        bookIds: materialBookRows.filter((item) => item.material_kind === "excerpt" && Number(item.material_id) === Number(excerpt.id)).map((item) => Number(item.book_id)),
         text: excerpt.body ?? "",
         isAdult: Boolean(excerpt.is_adult),
         link: excerpt.read_url ?? "",
@@ -352,7 +364,8 @@ export async function loadBootstrap(userId, options = {}) {
   const [occasionRows] = includeCatalog ? await pool.query(
     `SELECT o.id, o.creator_user_id, o.occasion_type, o.primary_text, o.audience_text,
             o.target_gender, o.target_cities, o.target_profile_type, o.meeting_date,
-            o.meeting_start_time, o.meeting_end_time, o.status, o.is_adult,
+            o.meeting_start_time, o.meeting_end_time, o.meeting_city, o.meeting_city_id,
+            o.meeting_address, o.meeting_map_url, o.book_id, o.status, o.is_adult,
             o.moderation_note, o.created_at, p.display_name AS creator_name
        FROM occasions o
        JOIN profiles p ON p.user_id = o.creator_user_id
@@ -360,6 +373,17 @@ export async function loadBootstrap(userId, options = {}) {
       ORDER BY o.created_at DESC`,
     [currentUser?.isAdmin ? 1 : 0, userId],
   ) : [[]];
+  const [materialBookRows] = includeCatalog ? await pool.query(
+    `SELECT mb.material_kind, mb.material_id, mb.book_id, mb.position,
+            b.title, b.author, b.annotation, b.cover_path, b.cover_tone
+       FROM material_books mb
+       JOIN books b ON b.id = mb.book_id
+      WHERE mb.material_kind IN ('event', 'occasion')
+      ORDER BY mb.material_kind, mb.material_id, mb.position`,
+  ) : [[]];
+  const linkedBooksFor = (kind, id) => materialBookRows
+    .filter((row) => row.material_kind === kind && Number(row.material_id) === Number(id))
+    .map((row) => ({ id: Number(row.book_id), title: row.title, author: row.author, annotation: row.annotation ?? "", coverUrl: row.cover_path ?? undefined, coverTone: row.cover_tone ?? "blue" }));
   const [reportRows] = includeModeration && currentUser?.isAdmin ? await pool.query(
     `SELECT r.id, r.reporter_user_id, r.target_kind, r.target_id, r.target_user_id, r.reason,
             r.status, r.created_at, reporter.display_name AS reporter_name, target.display_name AS target_user_name,
@@ -493,6 +517,8 @@ export async function loadBootstrap(userId, options = {}) {
       mapUrl: row.map_url ?? "", detailsUrl: row.details_url ?? "", status: row.status,
       moderationNote: row.moderation_note ?? "",
       linkedBookId: row.book_id ? Number(row.book_id) : undefined,
+      linkedBookIds: linkedBooksFor("event", row.id).map((book) => book.id),
+      linkedBooks: linkedBooksFor("event", row.id),
       bookTitle: row.book_title ?? undefined, bookAuthor: row.book_author ?? undefined,
       bookAnnotation: row.book_annotation ?? undefined, bookCoverUrl: row.book_cover_path ?? undefined,
       bookCoverTone: row.book_cover_tone ?? undefined, pinned: Boolean(row.is_pinned),
@@ -510,6 +536,12 @@ export async function loadBootstrap(userId, options = {}) {
       meetingDate: sqlDate(row.meeting_date) || undefined,
       meetingStartTime: row.meeting_start_time ? String(row.meeting_start_time).slice(0, 5) : undefined,
       meetingEndTime: row.meeting_end_time ? String(row.meeting_end_time).slice(0, 5) : undefined,
+      meetingCity: row.meeting_city ?? undefined,
+      meetingCityId: row.meeting_city_id ? Number(row.meeting_city_id) : undefined,
+      meetingAddress: row.meeting_address ?? undefined,
+      meetingMapUrl: row.meeting_map_url ?? undefined,
+      linkedBookId: row.book_id ? Number(row.book_id) : undefined,
+      linkedBooks: linkedBooksFor("occasion", row.id),
       status: row.status,
       moderationNote: row.moderation_note ?? "", creatorName: row.creator_name,
       createdAt: new Date(row.created_at).toISOString(),

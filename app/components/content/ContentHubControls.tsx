@@ -10,9 +10,10 @@ const sections: Array<{ view: RoutableMainView; label: string }> = [
   { view: "occasions", label: "Поводы" },
 ];
 
-export function ContentHubControls({ view, profileType, onNavigate, onEvent, onReview, onPublication, onOccasion, onPublisherNews }: {
+export function ContentHubControls({ view, profileType, showSwitch = true, onNavigate, onEvent, onReview, onPublication, onOccasion, onPublisherNews }: {
   view: MainView;
   profileType: UserProfileData["type"];
+  showSwitch?: boolean;
   onNavigate: (view: RoutableMainView) => void;
   onEvent: () => void;
   onReview: () => void;
@@ -24,10 +25,10 @@ export function ContentHubControls({ view, profileType, onNavigate, onEvent, onR
   if (!["home", "events", "reviews", "publications", "occasions"].includes(view)) return null;
   const publisher = profileType === "Издатель";
   return <>
-    <nav className="content-hub-switch" aria-label="Разделы главной страницы">
+    {showSwitch && <nav className="content-hub-switch" aria-label="Разделы главной страницы">
       <span className={`content-hub-indicator at-${sections.findIndex((item) => item.view === view)}`} aria-hidden="true" />
       {sections.map((item) => <button key={item.view} className={view === item.view ? "active" : ""} type="button" onClick={() => onNavigate(item.view)}>{item.label}</button>)}
-    </nav>
+    </nav>}
     <div className={`floating-create ${open ? "is-open" : ""}`}>
       <div className="floating-create-menu" aria-hidden={!open}>
         {(profileType !== "Читатель") && <button type="button" onClick={onEvent}>Добавить событие</button>}

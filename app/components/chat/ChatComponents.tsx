@@ -35,12 +35,11 @@ export function FriendsPanel({
   const hasSearchablePeople = adminMode ? friends.length > 0 : realFriendCount > 0;
 
   return (
-    <aside className="friends-panel" aria-label="Список друзей">
+    <aside className={`friends-panel ${!hasSearchablePeople ? "is-empty" : ""}`} aria-label="Список друзей">
       <div className="friends-heading">
         <div>
           <h2>{adminMode ? "Запросы" : "Друзья"} <span>{adminMode ? friends.length : realFriendCount}</span></h2>
         </div>
-        {!adminMode && <button className="find-friends-button" type="button" onClick={onFindFriends}>Найти друзей</button>}
       </div>
       {hasSearchablePeople && (
         <label className="friend-search">

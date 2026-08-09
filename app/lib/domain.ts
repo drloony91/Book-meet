@@ -17,8 +17,12 @@ export function sanitizeRichHtml(value: string) {
       const textAlign = element.style.textAlign;
       const fontSize = element.style.fontSize;
       const spoiler = element.tagName === "SPAN" && element.classList.contains("spoiler");
+      const imageFrame = element.tagName === "DIV" && element.classList.contains("rich-image-frame");
+      const inlineBook = element.tagName === "DIV" && element.classList.contains("rich-inline-book");
+      const preservedSpanClass = element.tagName === "SPAN" ? ["rich-image-resize-handle", "rich-inline-book-cover", "rich-inline-book-copy", "rich-inline-book-remove"].find((name) => element.classList.contains(name)) : undefined;
+      const bookId = inlineBook ? element.getAttribute("data-book-id") ?? "" : "";
       const imageSource = element.tagName === "IMG" ? element.getAttribute("src") ?? "" : "";
-      const imageWidth = element.tagName === "IMG" ? element.style.width : "";
+      const imageWidth = imageFrame ? element.style.width : element.tagName === "IMG" ? element.style.width : "";
       for (const attribute of Array.from(element.attributes)) element.removeAttribute(attribute.name);
       if (element.tagName === "IMG" && imageSource.startsWith("data:image/")) {
         element.setAttribute("src", imageSource);
@@ -28,6 +32,9 @@ export function sanitizeRichHtml(value: string) {
         element.style.maxWidth = "100%";
       }
       if (spoiler) element.className = "spoiler";
+      if (preservedSpanClass) { element.className = preservedSpanClass; element.setAttribute("contenteditable", "false"); }
+      if (imageFrame) { element.className = "rich-image-frame"; element.setAttribute("contenteditable", "false"); element.style.width = /^\d{1,3}(?:\.\d+)?%$/.test(imageWidth) ? imageWidth : "100%"; element.style.maxWidth = "100%"; }
+      if (inlineBook && /^\d+$/.test(bookId)) { element.className = "rich-inline-book"; element.setAttribute("data-book-id", bookId); element.setAttribute("contenteditable", "false"); }
       if (["left", "right", "center", "justify"].includes(textAlign)) element.style.textAlign = textAlign;
       if (["12px", "14px", "16px", "18px", "22px", "28px"].includes(fontSize)) element.style.fontSize = fontSize;
       clean(element);
@@ -64,7 +71,7 @@ export function catalogFromUsers(users: DemoUser[]) {
 export function reviewReadingItemById(users: DemoUser[], id: number): ReadingItem | null {
   for (const user of users) {
     const review = user.reviews.find((item) => item.id === id);
-    if (review) return { id: review.id, kind: "review", title: review.bookTitle, author: user.profile.name, text: review.fullText, ownerId: user.id, createdAt: review.createdAt, preview: review.preview, bookAuthor: review.bookAuthor, rating: review.rating, isAdult: review.isAdult };
+    if (review) return { id: review.id, kind: "review", title: review.bookTitle, author: user.profile.name, text: review.fullText, bodyHtml: review.bodyHtml, linkedBookId: review.bookId, ownerId: user.id, createdAt: review.createdAt, preview: review.preview, bookAuthor: review.bookAuthor, rating: review.rating, isAdult: review.isAdult };
   }
   return null;
 }
@@ -72,7 +79,7 @@ export function reviewReadingItemById(users: DemoUser[], id: number): ReadingIte
 export function excerptReadingItemById(users: DemoUser[], id: number): ReadingItem | null {
   for (const user of users) {
     const excerpt = (user.excerpts ?? []).find((item) => item.id === id);
-    if (excerpt) return { id: excerpt.id, kind: "excerpt", title: excerpt.bookTitle || "Публикация", author: user.profile.name, text: excerpt.text, preview: excerpt.previewText, bodyHtml: excerpt.bodyHtml, linkedBookId: excerpt.bookId, ownerId: user.id, createdAt: excerpt.createdAt, isAdult: excerpt.isAdult };
+    if (excerpt) return { id: excerpt.id, kind: "excerpt", title: excerpt.bookTitle || "Публикация", author: user.profile.name, text: excerpt.text, preview: excerpt.previewText, bodyHtml: excerpt.bodyHtml, linkedBookId: excerpt.bookId, linkedBookIds: excerpt.bookIds, ownerId: user.id, createdAt: excerpt.createdAt, isAdult: excerpt.isAdult };
   }
   return null;
 }

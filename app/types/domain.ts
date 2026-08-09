@@ -7,6 +7,7 @@ export type NotificationType = "friend_request" | "friendship_started" | "friend
 export type SocialNotification = { id: number; userId: number; actorId: number; type: NotificationType; title: string; text: string; unread: boolean; createdAt: string; materialId?: number; materialKind?: "review" | "excerpt" | "event" | "occasion" | "book" | "wishlist" };
 
 export type EventStatus = "pending" | "needs_changes" | "rejected" | "published";
+export type LinkedBookPreview = { id: number; title: string; author: string; annotation?: string; coverUrl?: string; coverTone?: string };
 export type BookEvent = {
   id: number;
   creatorId: number;
@@ -25,6 +26,8 @@ export type BookEvent = {
   status: EventStatus;
   moderationNote?: string;
   linkedBookId?: number;
+  linkedBookIds?: number[];
+  linkedBooks?: LinkedBookPreview[];
   bookTitle?: string;
   bookAuthor?: string;
   bookAnnotation?: string;
@@ -37,7 +40,7 @@ export type BookEvent = {
   createdAt: string;
 };
 export type OccasionType = "meet" | "discuss" | "invite";
-export type Occasion = { id: number; creatorId: number; type: OccasionType; primaryText: string; audienceText: string; isAdult?: boolean; targetGender: "Мужской" | "Женский" | "Все"; targetCities: string[]; targetProfileType: "Писатель" | "Читатель" | "Блогер" | "Все"; meetingDate?: string; meetingStartTime?: string; meetingEndTime?: string; status: EventStatus; moderationNote?: string; creatorName: string; createdAt: string };
+export type Occasion = { id: number; creatorId: number; type: OccasionType; primaryText: string; audienceText: string; isAdult?: boolean; targetGender: "Мужской" | "Женский" | "Все"; targetCities: string[]; targetProfileType: "Писатель" | "Читатель" | "Блогер" | "Все"; meetingDate?: string; meetingStartTime?: string; meetingEndTime?: string; meetingCity?: string; meetingCityId?: number; meetingAddress?: string; meetingMapUrl?: string; linkedBookId?: number; linkedBooks?: LinkedBookPreview[]; status: EventStatus; moderationNote?: string; creatorName: string; createdAt: string };
 export type CityOption = { id: number; name: string; countryCode: string; country: string };
 
 export type Review = {
@@ -45,6 +48,8 @@ export type Review = {
   ownerId: number;
   quote: string;
   fullText: string;
+  bodyHtml?: string;
+  linkedBookId?: number;
   book: string;
   author: string;
   user: string;
@@ -67,10 +72,11 @@ export type Excerpt = {
   createdAtValue?: string;
   bodyHtml?: string;
   linkedBookId?: number;
+  linkedBookIds?: number[];
   isAdult?: boolean;
 };
 
-export type ReadingItem = { id: number; kind: "review" | "excerpt"; title: string; author: string; text: string; ownerId?: number; createdAt?: string; preview?: string; bookAuthor?: string; rating?: number; bodyHtml?: string; linkedBookId?: number; isAdult?: boolean };
+export type ReadingItem = { id: number; kind: "review" | "excerpt"; title: string; author: string; text: string; ownerId?: number; createdAt?: string; preview?: string; bookAuthor?: string; rating?: number; bodyHtml?: string; linkedBookId?: number; linkedBookIds?: number[]; isAdult?: boolean };
 export type MaterialComment = { id: number; userId: number; text: string; createdAt: string };
 
 export type ProfileTab = "main" | "author-books" | "excerpts" | "publisher-news" | "library" | "wishlist" | "reviews" | "events" | "friends" | "admin" | "settings";
@@ -112,8 +118,8 @@ export type WishBook = Pick<LibraryBook, "id" | "author" | "title" | "genres" | 
 export type MarketplaceProductPreview = { marketplace: "Flip" | "Marwin/Меломан" | "Яндекс.Книги"; productUrl: string; title: string; author: string; isbn?: string; publisher?: string; catalogBookId?: number; annotation: string; coverUrl?: string; price?: number; currency: string; suggestedAction: "Купить" | "Читать" | "Слушать" };
 export type FlipProductPreview = MarketplaceProductPreview & { marketplace: "Flip"; suggestedAction: "Купить" };
 
-export type UserReview = { id: number; bookId?: number; bookTitle: string; bookAuthor: string; rating: number; preview: string; fullText: string; isAdult?: boolean; createdAt: string; createdAtValue?: string };
-export type UserExcerpt = { id: number; bookId?: number; bookTitle: string; previewText: string; bodyHtml: string; text: string; link: string; isAdult?: boolean; createdAt: string; createdAtValue?: string };
+export type UserReview = { id: number; bookId?: number; bookTitle: string; bookAuthor: string; rating: number; preview: string; fullText: string; bodyHtml?: string; isAdult?: boolean; createdAt: string; createdAtValue?: string };
+export type UserExcerpt = { id: number; bookId?: number; bookIds?: number[]; bookTitle: string; previewText: string; bodyHtml: string; text: string; link: string; isAdult?: boolean; createdAt: string; createdAtValue?: string };
 export type PublisherVerificationStatus = "not_required" | "draft" | "pending" | "needs_changes" | "rejected" | "approved";
 export type PublisherSaleLink = { id: number; label: string; url: string };
 export type PublisherNews = { id: number; ownerId: number; title: string; previewText: string; bodyHtml: string; body: string; isAdult?: boolean; createdAt: string; createdAtValue?: string };
@@ -128,6 +134,7 @@ export type UserProfileData = {
   age?: number;
   showBirthDateToFriends?: boolean;
   tabOrder?: ProfileTab[];
+  homeView?: "classic" | "feed";
   bio: string;
   authorInfluences: string;
   writingThemes: string;

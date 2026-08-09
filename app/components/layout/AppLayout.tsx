@@ -59,6 +59,7 @@ export function WorkspaceScreen({
   friends,
   selectedId,
   adminMode,
+  contentHub = false,
   expandedChat,
   children,
   onFindFriends,
@@ -68,6 +69,7 @@ export function WorkspaceScreen({
   friends: Friend[];
   selectedId: number | null;
   adminMode: boolean;
+  contentHub?: boolean;
   expandedChat?: ReactNode;
   children: ReactNode;
   onFindFriends: () => void;
@@ -75,9 +77,11 @@ export function WorkspaceScreen({
   onSelectFriend: (friend: Friend) => void;
 }) {
   return (
-    <div className="workspace">
+    <div className={`workspace ${friends.length ? "" : "workspace-without-friends"} ${contentHub ? "workspace-content-hub" : ""}`}>
       <FriendsPanel friends={friends} selectedId={selectedId} adminMode={adminMode} onFindFriends={onFindFriends} onCreateOccasion={onCreateOccasion} onSelect={onSelectFriend} />
-      {expandedChat ?? children}
+      <section className="workspace-main">
+        {expandedChat ?? children}
+      </section>
     </div>
   );
 }

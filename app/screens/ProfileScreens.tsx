@@ -1,4 +1,5 @@
 import React, { FormEvent, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import * as XLSX from "xlsx";
 import { CustomSelect } from "../components/common/CustomSelect";
 import { ModalIconActions } from "../components/modals/ModalIconActions";
 import { AdminSafetySection } from "../components/safety/AdminSafety";
@@ -52,6 +53,60 @@ function ageFromDateInput(value?: string) {
   let age = now.getFullYear() - year;
   if (now.getMonth() + 1 < month || now.getMonth() + 1 === month && now.getDate() < day) age -= 1;
   return Number.isFinite(age) && age >= 0 ? age : undefined;
+}
+
+type AdminImportBook = { author: string; title: string; isbn?: string; publisher?: string; annotation?: string; genres?: string[]; coverUrl?: string; url?: string; sourceUrl?: string; isAdult?: boolean };
+type AdminImportConflict = { key: string; existing: AdminImportBook & { id: number; coverTone?: string }; incoming: AdminImportBook };
+
+function AdminBookImport({ onComplete }: { onComplete: () => void }) {
+  const inputRef = useRef<HTMLInputElement>(null);
+  const [busy, setBusy] = useState(false);
+  const [createdCount, setCreatedCount] = useState(0);
+  const [conflicts, setConflicts] = useState<AdminImportConflict[]>([]);
+  const [details, setDetails] = useState<AdminImportBook | null>(null);
+  const read = (row: Record<string, unknown>, aliases: string[]) => {
+    const entry = Object.entries(row).find(([key]) => aliases.includes(key.trim().toLocaleLowerCase("ru")));
+    return String(entry?.[1] ?? "").trim();
+  };
+  async function upload(file?: File) {
+    if (!file) return;
+    setBusy(true);
+    try {
+      const workbook = XLSX.read(await file.arrayBuffer(), { type: "array" });
+      const sourceRows = XLSX.utils.sheet_to_json<Record<string, unknown>>(workbook.Sheets[workbook.SheetNames[0]], { defval: "" });
+      const rows = sourceRows.map((row) => ({
+        author: read(row, ["автор", "author"]),
+        title: read(row, ["название", "название книги", "title", "book"]),
+        isbn: read(row, ["isbn", "isbn-13", "isbn13"]),
+        publisher: read(row, ["издательство", "publisher"]),
+        annotation: read(row, ["аннотация", "описание", "annotation", "description"]),
+        genres: read(row, ["жанры", "жанр", "genres", "genre"]),
+        coverUrl: read(row, ["обложка", "ссылка на обложку", "cover", "coverurl"]),
+        sourceUrl: read(row, ["ссылка", "url", "source", "источник"]),
+      })).filter((row) => row.author || row.title || row.sourceUrl);
+      const response = await fetch("/api/admin/books/import/preview", { method: "POST", credentials: "same-origin", headers: { "content-type": "application/json" }, body: JSON.stringify({ rows }) });
+      const data = await response.json() as { createdCount?: number; conflicts?: AdminImportConflict[]; error?: string };
+      if (!response.ok) throw new Error(data.error || "Не удалось импортировать каталог");
+      setCreatedCount(data.createdCount ?? 0);
+      setConflicts(data.conflicts ?? []);
+      if (!(data.conflicts?.length)) onComplete();
+    } catch (error) {
+      window.alert(error instanceof Error ? error.message : "Не удалось прочитать файл");
+    } finally { setBusy(false); }
+  }
+  async function resolve(conflict: AdminImportConflict, action: "replace" | "supplement" | "duplicate") {
+    setBusy(true);
+    try {
+      const response = await fetch("/api/admin/books/import/resolve", { method: "POST", credentials: "same-origin", headers: { "content-type": "application/json" }, body: JSON.stringify({ existingId: conflict.existing.id, incoming: conflict.incoming, action }) });
+      const data = await response.json() as { error?: string };
+      if (!response.ok) throw new Error(data.error || "Не удалось применить решение");
+      setConflicts((current) => current.filter((item) => item.key !== conflict.key));
+      if (conflicts.length === 1) onComplete();
+    } catch (error) { window.alert(error instanceof Error ? error.message : "Не удалось применить решение"); }
+    finally { setBusy(false); }
+  }
+  const card = (book: AdminImportBook, label: string) => <button className="admin-import-book-card" type="button" onClick={() => setDetails(book)}><span>{label}</span><strong>{book.title || "Без названия"}</strong><small>{book.author || "Автор не указан"}</small>{book.isbn && <em>ISBN {book.isbn}</em>}</button>;
+  return <section className="admin-book-import"><div><h2>Импорт каталога книг</h2><p>CSV, XLS или XLSX. Система использует знакомые поля карточки и проверяет ISBN, автора и название.</p></div><button className="outline-button" type="button" disabled={busy} onClick={() => inputRef.current?.click()}>{busy ? "Обрабатываем…" : "Загрузить файл"}</button><input ref={inputRef} hidden type="file" accept=".csv,.xls,.xlsx" onChange={(event) => { void upload(event.target.files?.[0]); event.currentTarget.value = ""; }} />{createdCount > 0 && <p className="admin-import-result">Добавлено новых книг: {createdCount}</p>}{conflicts.map((conflict) => <article className="admin-import-conflict" key={conflict.key}><div className="admin-import-comparison">{card(conflict.existing, "Уже есть")}{card(conflict.incoming, "Из файла")}</div><div className="admin-import-actions"><button type="button" onClick={() => void resolve(conflict, "replace")}>Заменить</button><button type="button" onClick={() => void resolve(conflict, "supplement")}>Дополнить</button><button type="button" onClick={() => void resolve(conflict, "duplicate")}>Дублировать</button></div></article>)}{details && <div className="nested-modal-backdrop" onMouseDown={() => setDetails(null)}><section className="admin-import-details" onMouseDown={(event) => event.stopPropagation()}><button className="modal-close" type="button" onClick={() => setDetails(null)}>×</button><h2>{details.title}</h2><p><strong>{details.author}</strong></p>{details.publisher && <p>Издательство: {details.publisher}</p>}{details.isbn && <p>ISBN: {details.isbn}</p>}{details.annotation && <p>{details.annotation}</p>}</section></div>}</section>;
 }
 
 export function AdminTab({ events, occasions, users, reports, onModerate, onModerateOccasion, onModeratePublisher, onOpenChat, onOpenUser, onRefresh, onDeleteMaterial }: { events: BookEvent[]; occasions: Occasion[]; users: DemoUser[]; reports: SafetyReport[]; onModerate: (id: number, action: "accept" | "revision" | "reject" | "edit", note?: string, event?: typeof emptyEvent, pinned?: boolean) => Promise<void>; onModerateOccasion: (id: number, action: "accept" | "revision" | "reject" | "edit", note?: string, occasion?: typeof emptyOccasion) => Promise<void>; onModeratePublisher: (id: number, action: "accept" | "revision" | "reject", note?: string) => Promise<void>; onOpenChat: (userId: number) => void; onOpenUser: (userId: number) => void; onRefresh: () => void; onDeleteMaterial: (kind: AdminMaterialKind, id: number) => Promise<void> }) {
@@ -121,7 +176,7 @@ export function AdminTab({ events, occasions, users, reports, onModerate, onMode
   if (section !== "moderation") {
     const catalogSection = section as AdminMaterialKind;
     const items = catalogItems[catalogSection].filter((item) => `${item.title} ${item.subtitle}`.toLocaleLowerCase("ru").includes(search.trim().toLocaleLowerCase("ru"))).sort((a, b) => b.id - a.id);
-    return <div className="admin-tab admin-catalog-page"><div className="admin-catalog-heading"><button className="back-button" type="button" onClick={() => { setSection("dashboard"); setSelectedCatalogItem(null); }}>← В админку</button><div><span className="section-subtitle">Все материалы</span><h1>{labels[catalogSection]}</h1><p>{catalogItems[catalogSection].length} материалов · сначала новые</p></div><label className="admin-search"><span>⌕</span><input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Поиск по названию" /></label></div><div className={`admin-catalog-grid ${catalogSection === "book" ? "admin-books-grid" : ""}`}>{items.map((item) => <AdminCatalogCard key={`${item.kind}-${item.id}`} item={item} onOpen={() => setSelectedCatalogItem(item)} />)}</div>{!items.length && <div className="profile-tab-placeholder">По вашему запросу ничего не найдено.</div>}{selectedCatalogItem && <AdminCatalogOverlay item={selectedCatalogItem} users={users} onClose={() => setSelectedCatalogItem(null)} onEdit={() => startCatalogEdit(selectedCatalogItem)} onDelete={async () => { await remove(selectedCatalogItem.kind, selectedCatalogItem.id, selectedCatalogItem.title); setSelectedCatalogItem(null); }} />}{editingCatalogItem && <AdminCatalogEditor item={editingCatalogItem} users={users} onClose={() => setEditingCatalogItem(null)} onSave={(payload) => void saveCatalogItem(editingCatalogItem, payload)} />}{editing && <div className="modal-backdrop" onMouseDown={() => setEditing(null)}><section className="event-editor-modal" onMouseDown={(event) => event.stopPropagation()}><EventForm initial={editing} submitLabel="Сохранить изменения" onCancel={() => setEditing(null)} onSave={async (value) => { await onModerate(editing.id, "edit", "", value); setEditing(null); }} /></section></div>}{editingOccasion && <div className="modal-backdrop" onMouseDown={() => setEditingOccasion(null)}><section className="event-editor-modal" onMouseDown={(event) => event.stopPropagation()}><OccasionForm initial={editingOccasion} submitLabel="Сохранить изменения" onCancel={() => setEditingOccasion(null)} onSave={async (value) => { await onModerateOccasion(editingOccasion.id, "edit", "", value); setEditingOccasion(null); }} /></section></div>}</div>;
+    return <div className="admin-tab admin-catalog-page"><div className="admin-catalog-heading"><button className="back-button" type="button" onClick={() => { setSection("dashboard"); setSelectedCatalogItem(null); }}>← В админку</button><div><span className="section-subtitle">Все материалы</span><h1>{labels[catalogSection]}</h1><p>{catalogItems[catalogSection].length} материалов · сначала новые</p></div><label className="admin-search"><span>⌕</span><input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Поиск по названию" /></label></div>{catalogSection === "book" && <AdminBookImport onComplete={onRefresh} />}<div className={`admin-catalog-grid ${catalogSection === "book" ? "admin-books-grid" : ""}`}>{items.map((item) => <AdminCatalogCard key={`${item.kind}-${item.id}`} item={item} onOpen={() => setSelectedCatalogItem(item)} />)}</div>{!items.length && <div className="profile-tab-placeholder">По вашему запросу ничего не найдено.</div>}{selectedCatalogItem && <AdminCatalogOverlay item={selectedCatalogItem} users={users} onClose={() => setSelectedCatalogItem(null)} onEdit={() => startCatalogEdit(selectedCatalogItem)} onDelete={async () => { await remove(selectedCatalogItem.kind, selectedCatalogItem.id, selectedCatalogItem.title); setSelectedCatalogItem(null); }} />}{editingCatalogItem && <AdminCatalogEditor item={editingCatalogItem} users={users} onClose={() => setEditingCatalogItem(null)} onSave={(payload) => void saveCatalogItem(editingCatalogItem, payload)} />}{editing && <div className="modal-backdrop" onMouseDown={() => setEditing(null)}><section className="event-editor-modal" onMouseDown={(event) => event.stopPropagation()}><EventForm initial={editing} submitLabel="Сохранить изменения" onCancel={() => setEditing(null)} onSave={async (value) => { await onModerate(editing.id, "edit", "", value); setEditing(null); }} /></section></div>}{editingOccasion && <div className="modal-backdrop" onMouseDown={() => setEditingOccasion(null)}><section className="event-editor-modal" onMouseDown={(event) => event.stopPropagation()}><OccasionForm initial={editingOccasion} submitLabel="Сохранить изменения" onCancel={() => setEditingOccasion(null)} onSave={async (value) => { await onModerateOccasion(editingOccasion.id, "edit", "", value); setEditingOccasion(null); }} /></section></div>}</div>;
   }
   if (section === "moderation") return <div className="admin-tab admin-moderation-page">
     <button className="back-button" type="button" onClick={() => setSection("dashboard")}>← В админку</button>
@@ -293,7 +348,7 @@ export function AdminProfile({ onBack, onLogout, events, occasions, users, repor
   return <main className="my-profile-page admin-profile-page"><div className="profile-page-topbar"><button type="button" className="back-button" onClick={onBack}>← На главную</button><div className="admin-profile-top-actions">{!securityOpen && <button type="button" className="outline-button" onClick={() => setSecurityOpen(true)}>Безопасность</button>}<button type="button" className="back-button" onClick={onLogout}>Выйти</button></div></div><section className="admin-profile-card">{securityOpen ? <AdminSecurityPanel onBack={() => setSecurityOpen(false)} /> : <AdminTab events={events} occasions={occasions} users={users} reports={reports} onModerate={onModerateEvent} onModerateOccasion={onModerateOccasion} onModeratePublisher={onModeratePublisher} onOpenChat={onOpenChat} onOpenUser={onOpenUser} onRefresh={onRefresh} onDeleteMaterial={onDeleteMaterial} />}</section></main>;
 }
 
-export function MyProfile({ onBack, user, users, friends, friendRequests, follows, events, occasions, likes, initialAction, initialEditId, initialEditing = false, onProfileCompleted, onToggleLike, onComment, onEditEvent, onDeleteEvent, onModerateEvent, onModerateOccasion, onLogout, onUserChange, onOpenUser, onOpenChat }: { onBack: () => void; user: DemoUser; users: DemoUser[]; friends: DemoUser[]; friendRequests: FriendRequest[]; follows: Follow[]; events: BookEvent[]; occasions: Occasion[]; likes: Record<string, number[]>; initialAction?: "review" | "excerpt" | "book" | null; initialEditId?: number | null; initialEditing?: boolean; onProfileCompleted?: () => void; onToggleLike: (item: ReadingItem) => void; onComment: (item: ReadingItem, text: string) => Promise<MaterialComment | null>; onEditEvent: (item: BookEvent) => void; onDeleteEvent: (id: number) => void; onModerateEvent: (id: number, action: "accept" | "revision" | "reject" | "edit", note?: string, event?: typeof emptyEvent, pinned?: boolean) => Promise<void>; onModerateOccasion: (id: number, action: "accept" | "revision" | "reject" | "edit", note?: string, occasion?: typeof emptyOccasion) => Promise<void>; onLogout: () => void; onUserChange: (user: DemoUser) => Promise<void>; onOpenUser: (userId: number) => void; onOpenChat: (userId: number) => void }) {
+export function MyProfile({ onBack, user, users, friends, friendRequests, follows, events, occasions, likes, initialAction, initialEditId, initialEditing = false, onProfileCompleted, onToggleLike, onComment, onEditEvent, onDeleteEvent, onModerateEvent, onModerateOccasion, onLogout, onUserChange, onHomeViewChange, onOpenUser, onOpenChat }: { onBack: () => void; user: DemoUser; users: DemoUser[]; friends: DemoUser[]; friendRequests: FriendRequest[]; follows: Follow[]; events: BookEvent[]; occasions: Occasion[]; likes: Record<string, number[]>; initialAction?: "review" | "excerpt" | "book" | null; initialEditId?: number | null; initialEditing?: boolean; onProfileCompleted?: () => void; onToggleLike: (item: ReadingItem) => void; onComment: (item: ReadingItem, text: string) => Promise<MaterialComment | null>; onEditEvent: (item: BookEvent) => void; onDeleteEvent: (id: number) => void; onModerateEvent: (id: number, action: "accept" | "revision" | "reject" | "edit", note?: string, event?: typeof emptyEvent, pinned?: boolean) => Promise<void>; onModerateOccasion: (id: number, action: "accept" | "revision" | "reject" | "edit", note?: string, occasion?: typeof emptyOccasion) => Promise<void>; onLogout: () => void; onUserChange: (user: DemoUser) => Promise<void>; onHomeViewChange: (homeView: "classic" | "feed") => Promise<void>; onOpenUser: (userId: number) => void; onOpenChat: (userId: number) => void }) {
   const [activeTab, setActiveTab] = useState<ProfileTab>(initialAction === "review" ? "reviews" : initialAction === "excerpt" ? "excerpts" : initialAction === "book" ? "library" : profileTabFromPathname(window.location.pathname));
   const [editing, setEditing] = useState(initialEditing);
   const [saved, setSaved] = useState(false);
@@ -313,12 +368,13 @@ export function MyProfile({ onBack, user, users, friends, friendRequests, follow
   const [unsavedNotice, setUnsavedNotice] = useState(false);
   const [publisherTypeNotice, setPublisherTypeNotice] = useState(false);
   const [deleteProfileConfirm, setDeleteProfileConfirm] = useState(false);
-  const [homeView, setHomeView] = useState<"classic" | "feed">(() => (window.localStorage.getItem(`bookmeet:home-view:${user.id}`) as "classic" | "feed" | null) ?? "feed");
+  const [homeView, setHomeView] = useState<"classic" | "feed">(user.profile.homeView ?? "feed");
   const avatarInputRef = useRef<HTMLInputElement>(null);
   const tabRowRefs = useRef(new Map<ProfileTab, HTMLDivElement>());
   const previousTabPositions = useRef(new Map<ProfileTab, number>());
   const savedProfileRef = useRef(user.profile);
   const savedAvatarUrlRef = useRef(user.avatarUrl);
+  const savedMaterialStateRef = useRef(JSON.stringify([user.books, user.reviews, user.authorBooks ?? [], user.excerpts ?? [], user.publisherNews ?? [], user.wishBooks ?? []]));
   const pendingExitRef = useRef<null | (() => void)>(null);
   const hasUnsavedChanges = editing && (
     JSON.stringify(profile) !== JSON.stringify(savedProfileRef.current)
@@ -326,6 +382,9 @@ export function MyProfile({ onBack, user, users, friends, friendRequests, follow
   );
 
   useEffect(() => {
+    const materialState = JSON.stringify([books, reviews, authorBooks, userExcerpts, publisherNews, wishBooks]);
+    if (materialState === savedMaterialStateRef.current) return;
+    savedMaterialStateRef.current = materialState;
     void onUserChange({ ...user, profile, books, reviews, authorBooks, excerpts: userExcerpts, publisherNews, wishBooks }).catch((error) => console.warn(error));
   }, [books, reviews, authorBooks, userExcerpts, publisherNews, wishBooks]);
 
@@ -352,6 +411,19 @@ export function MyProfile({ onBack, user, users, friends, friendRequests, follow
     }
     pendingExitRef.current = action;
     setUnsavedNotice(true);
+  }
+
+  async function chooseHomeView(nextHomeView: "classic" | "feed") {
+    const previousHomeView = homeView;
+    setHomeView(nextHomeView);
+    setProfile((current) => ({ ...current, homeView: nextHomeView }));
+    try {
+      await onHomeViewChange(nextHomeView);
+    } catch (error) {
+      setHomeView(previousHomeView);
+      setProfile((current) => ({ ...current, homeView: previousHomeView }));
+      window.alert(error instanceof Error ? error.message : "Не удалось сохранить вид главной страницы");
+    }
   }
 
   function discardChangesAndLeave() {
@@ -511,7 +583,7 @@ export function MyProfile({ onBack, user, users, friends, friendRequests, follow
           <div className={`avatar avatar-xl avatar-user ${avatarUrl ? "has-photo" : ""}`} style={avatarUrl ? { backgroundImage: `url(${avatarUrl})` } : undefined}>{!avatarUrl && user.initials}<span className="online-dot" /></div>
           <input ref={avatarInputRef} className="visually-hidden" type="file" accept="image/jpeg,image/png,image/webp" onChange={(event) => void changeAvatar(event.target.files?.[0])} />
           <button type="button" className="change-photo" onClick={() => avatarInputRef.current?.click()}>Сменить фото</button>
-          <nav aria-label="Разделы профиля">
+          <nav className="profile-nav" aria-label="Разделы профиля">
             {orderedProfileTabs.map((item) => <div ref={(element) => { if (element) tabRowRefs.current.set(item.key, element); else tabRowRefs.current.delete(item.key); }} className={`profile-nav-row ${reorderingTabs ? "is-reordering" : ""}`} key={item.key} onDragOver={(event) => { if (reorderingTabs) event.preventDefault(); }} onDragEnter={() => moveDraggedTab(item.key)} onDrop={() => setDraggedTab(null)}>
               {reorderingTabs && <span className="profile-tab-drag-handle" draggable onDragStart={() => { for (const [tab, element] of tabRowRefs.current) previousTabPositions.current.set(tab, element.getBoundingClientRect().top); setDraggedTab(item.key); }} onDragEnd={() => setDraggedTab(null)} aria-label={`Переместить вкладку ${item.label}`} title="Перетащите вкладку">☰</span>}
               <button className={activeTab === item.key ? "active" : ""} type="button" onClick={() => openTab(item.key)}>{item.label}</button>
@@ -591,7 +663,7 @@ export function MyProfile({ onBack, user, users, friends, friendRequests, follow
           {activeTab === "events" && <MyEventsTab createdEvents={events.filter((item) => item.creatorId === user.id)} participatingEvents={events.filter((item) => item.creatorId !== user.id && item.reminderSet)} users={users} currentUserId={user.id} onOpenUser={onOpenUser} onEdit={onEditEvent} onDeleted={onDeleteEvent} />}
           {activeTab === "friends" && <ProfileFriendsTab friends={friends} outgoing={friendRequests.filter((request) => request.status === "pending" && request.fromId === user.id).map((request) => users.find((item) => item.id === request.toId)).filter(Boolean) as DemoUser[]} incoming={friendRequests.filter((request) => request.status === "pending" && request.toId === user.id).map((request) => users.find((item) => item.id === request.fromId)).filter(Boolean) as DemoUser[]} subscriptions={follows.filter((follow) => follow.followerId === user.id).map((follow) => users.find((item) => item.id === follow.targetId)).filter((item): item is DemoUser => Boolean(item) && !item!.isAdmin)} followers={follows.filter((follow) => follow.targetId === user.id).map((follow) => users.find((item) => item.id === follow.followerId)).filter((item): item is DemoUser => Boolean(item) && !item!.isAdmin)} onOpenUser={onOpenUser} />}
           {activeTab === "settings" && <div className="simple-profile-tab"><div className="profile-title-row"><div><h1>Настройки</h1><p>Управление профилем Book Meet</p></div></div><section className="profile-menu-order-settings"><h2>Изменить порядок пунктов меню профиля</h2><div className="profile-menu-order-actions"><button className="outline-button" type="button" onClick={() => { setTabOrderDraft(profile.tabOrder ?? defaultTabOrder); setReorderingTabs(true); }}>Изменить</button>{reorderingTabs && <button className="primary-button" type="button" onClick={() => void applyTabOrder()}>Применить</button>}</div></section><section className="blocked-users-settings"><h2>Заблокированные пользователи</h2>{users.some((item) => item.blockedByMe) ? <div className="blocked-user-grid">{users.filter((item) => item.blockedByMe).map((item) => <button type="button" key={item.id} className="blocked-user-card" onClick={() => onOpenUser(item.id)}><span className={`avatar avatar-sm avatar-${item.color} ${item.avatarUrl ? "has-photo" : ""}`} style={item.avatarUrl ? { backgroundImage: `url(${item.avatarUrl})` } : undefined}>{!item.avatarUrl && item.initials}</span><span><strong>{item.profile.name}</strong><small>{item.profile.type} · {item.profile.city}</small></span></button>)}</div> : <p>Заблокированных пользователей нет.</p>}</section></div>}
-          {activeTab === "settings" && <section className="profile-home-view-settings"><h2>Вид главной страницы по умолчанию</h2><div className="profile-home-view-options"><button className={homeView === "classic" ? "active" : ""} type="button" onClick={() => { setHomeView("classic"); window.localStorage.setItem(`bookmeet:home-view:${user.id}`, "classic"); }}>Классическая главная страница</button><button className={homeView === "feed" ? "active" : ""} type="button" onClick={() => { setHomeView("feed"); window.localStorage.setItem(`bookmeet:home-view:${user.id}`, "feed"); }}>Лента</button></div></section>}
+          {activeTab === "settings" && <section className="profile-home-view-settings"><h2>Вид главной страницы по умолчанию</h2><div className="profile-home-view-options"><button className={homeView === "classic" ? "active" : ""} type="button" onClick={() => void chooseHomeView("classic")}>Классическая главная страница</button><button className={homeView === "feed" ? "active" : ""} type="button" onClick={() => void chooseHomeView("feed")}>Лента</button></div></section>}
           {activeTab === "settings" && <section className="profile-delete-settings"><h2>Удаление профиля</h2><p>Профиль можно восстановить в течение года. Материалы и комментарии сохранятся, сообщения и аватар будут удалены.</p><button className="quiet-danger-button" type="button" onClick={() => setDeleteProfileConfirm(true)}>Удалить профиль</button></section>}
         </div>
       </section>

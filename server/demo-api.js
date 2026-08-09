@@ -44,8 +44,8 @@ const users = [
     },
     books: [],
     authorBooks: [],
-    reviews: [],
-    excerpts: [],
+    reviews: [{ id: 51, bookId: 21, bookTitle: "Город между строк", bookAuthor: "Айдана Сарсен", rating: 4.5, preview: "Тёплый городской роман о памяти, случайных встречах и внимании к деталям.", fullText: "Книга легко читается и оставляет после себя желание внимательнее смотреть на знакомые улицы.", bodyHtml: "<p>Книга <strong>легко читается</strong> и оставляет после себя желание внимательнее смотреть на знакомые улицы.</p>", isAdult: false, createdAt: "сегодня", createdAtValue: new Date().toISOString() }],
+    excerpts: [{ id: 52, bookId: 21, bookIds: [21, 22], bookTitle: "Город между строк", previewText: "Две новые книги казахстанских авторов, которые стоит добавить в планы на осень.", bodyHtml: "<p>Собрал две разные по настроению книги: городской роман и тёплый сборник рассказов.</p>", text: "Собрал две разные по настроению книги: городской роман и тёплый сборник рассказов.", link: "", isAdult: false, createdAt: "сегодня", createdAtValue: new Date().toISOString() }],
     wishBooks: [],
   },
   {
@@ -59,8 +59,11 @@ const users = [
     joinedAt: new Date(Date.now() - 30_000).toISOString(),
     profile: {
       name: "Издательство «Тест»",
-      city: "",
+      city: "Астана",
+      cityId: 1,
+      country: "Казахстан",
       type: "Издатель",
+      homeView: "classic",
       gender: "Не указан",
       bio: "Независимое казахстанское издательство современной прозы, нон-фикшна и красивых книг для вдумчивого чтения.",
       authorInfluences: "",
@@ -115,6 +118,7 @@ const state = {
     date: "2026-12-12", time: "18:30", city: "Астана", cityId: 1, country: "Казахстан",
     address: "проспект Республики, 1", mapUrl: "", detailsUrl: "",
     status: "published", moderationNote: "", pinned: false, reminderUserIds: [], reminderCount: 0, createdAt: new Date().toISOString(),
+    linkedBookId: 21, linkedBookIds: [21], linkedBooks: [{ id: 21, title: "Город между строк", author: "Айдана Сарсен", annotation: "Роман о городе, памяти и встречах, которые меняют привычный маршрут.", coverTone: "blue" }], bookTitle: "Город между строк", bookAuthor: "Айдана Сарсен",
   }],
   occasions: [],
 };
@@ -186,6 +190,15 @@ router.get("/health", (_request, response) => {
 
 router.get("/auth/providers", (_request, response) => response.json({ google: false }));
 
+// Local visual QA helper. This router is only mounted when DEMO_MODE=1 and is
+// never part of the production API.
+router.get("/auth/demo-login", (request, response) => {
+  const token = randomBytes(24).toString("hex");
+  sessions.set(token, Number(request.query.user) === 2 ? 2 : 1);
+  response.setHeader("Set-Cookie", `book_meet_demo=${token}; Path=/; HttpOnly; SameSite=Lax`);
+  response.redirect("/");
+});
+
 router.post("/auth/login", (request, response) => {
   const email = String(request.body?.email ?? "").trim().toLocaleLowerCase("en");
   const password = String(request.body?.password ?? "");
@@ -207,10 +220,12 @@ router.post("/auth/login", (request, response) => {
 });
 
 const demoCities = [
-  ["Астана", "Казахстан"], ["Алматы", "Казахстан"], ["Шымкент", "Казахстан"], ["Караганда", "Казахстан"], ["Қарағанды", "Казахстан"],
-  ["Актобе", "Казахстан"], ["Ақтөбе", "Казахстан"], ["Жезказган", "Казахстан"], ["Жезқазған", "Казахстан"], ["Атырау", "Казахстан"],
-  ["Павлодар", "Казахстан"], ["Костанай", "Казахстан"], ["Қостанай", "Казахстан"], ["Тараз", "Казахстан"], ["Түркістан", "Казахстан"],
-  ["Бишкек", "Кыргызстан"], ["Ташкент", "Узбекистан"], ["Минск", "Беларусь"], ["Москва", "Россия"], ["Тюмень", "Россия"], ["Ереван", "Армения"], ["Баку", "Азербайджан"],
+  ["Астана", "Казахстан"], ["Алматы", "Казахстан"], ["Шымкент", "Казахстан"], ["Караганда", "Казахстан"],
+  ["Актобе", "Казахстан"], ["Жезказган", "Казахстан"], ["Атырау", "Казахстан"], ["Павлодар", "Казахстан"],
+  ["Костанай", "Казахстан"], ["Тараз", "Казахстан"], ["Туркестан", "Казахстан"], ["Уральск", "Казахстан"],
+  ["Петропавловск", "Казахстан"], ["Усть-Каменогорск", "Казахстан"], ["Семей", "Казахстан"], ["Кызылорда", "Казахстан"],
+  ["Кокшетау", "Казахстан"], ["Талдыкорган", "Казахстан"], ["Экибастуз", "Казахстан"], ["Темиртау", "Казахстан"],
+  ["Рудный", "Казахстан"], ["Актау", "Казахстан"], ["Балхаш", "Казахстан"], ["Конаев", "Казахстан"],
 ];
 router.get("/cities", (request, response) => {
   const query = String(request.query.q ?? "").trim().toLocaleLowerCase("ru");
@@ -293,6 +308,7 @@ router.use(requireUser);
 router.use((request, response, next) => {
   if (["GET", "HEAD", "OPTIONS"].includes(request.method)
     || request.path === "/users/me/state"
+    || request.path === "/users/me/home-view"
     || request.path === "/users/me/profile-complete"
     || request.path === "/auth/logout") return next();
   const user = users.find((item) => item.id === request.demoUserId);
@@ -529,6 +545,15 @@ router.put("/users/me/state", (request, response) => {
   if ((profile.type === "Писатель" || profile.type === "Блогер") && Array.isArray(request.body?.excerpts)) user.excerpts = structuredClone(request.body.excerpts);
   if (profile.type === "Издатель" && profile.publisherStatus === "approved" && Array.isArray(request.body?.publisherNews)) user.publisherNews = structuredClone(request.body.publisherNews);
   response.json({ ok: true });
+});
+
+router.patch("/users/me/home-view", (request, response) => {
+  const user = users.find((item) => item.id === request.demoUserId);
+  const homeView = request.body?.homeView === "classic" ? "classic" : request.body?.homeView === "feed" ? "feed" : null;
+  if (!user) return response.status(404).json({ error: "Пользователь не найден" });
+  if (!homeView) return response.status(400).json({ error: "Некорректный вид главной страницы" });
+  user.profile.homeView = homeView;
+  response.json({ ok: true, homeView });
 });
 
 router.patch("/users/me/profile-complete", (request, response) => {
@@ -918,7 +943,10 @@ router.patch("/social/messages/:targetId/read", (request, response) => {
 
 router.post("/events", (request, response) => {
   const creator = users.find((user) => user.id === request.demoUserId);
-  const event = { id: nextId++, creatorId: request.demoUserId, title: String(request.body.title), summary: String(request.body.summary), description: String(request.body.description), isAdult: Boolean(request.body.isAdult), date: String(request.body.date), time: String(request.body.time), city: String(request.body.city), address: String(request.body.address), mapUrl: String(request.body.mapUrl ?? ""), detailsUrl: String(request.body.detailsUrl ?? ""), status: "pending", moderationNote: "", organizerName: creator?.isAdmin ? "" : creator?.profile.name, createdAt: new Date().toISOString() };
+  const linkedBookIds = Array.from(new Set((request.body.linkedBookIds ?? []).map(Number).filter(Boolean)));
+  const catalog = users.flatMap((user) => [...user.books, ...(user.authorBooks ?? [])]);
+  const linkedBooks = linkedBookIds.map((id) => catalog.find((book) => book.id === id)).filter(Boolean).map((book) => ({ id: book.id, title: book.title, author: book.author, annotation: book.annotation, coverUrl: book.coverUrl, coverTone: book.coverTone }));
+  const event = { id: nextId++, creatorId: request.demoUserId, title: String(request.body.title), summary: String(request.body.summary), description: String(request.body.description), isAdult: Boolean(request.body.isAdult), date: String(request.body.date), time: String(request.body.time), city: String(request.body.city), address: String(request.body.address), mapUrl: String(request.body.mapUrl ?? ""), detailsUrl: String(request.body.detailsUrl ?? ""), linkedBookIds, linkedBooks, linkedBookId: linkedBookIds[0], bookTitle: linkedBooks[0]?.title, bookAuthor: linkedBooks[0]?.author, bookAnnotation: linkedBooks[0]?.annotation, bookCoverUrl: linkedBooks[0]?.coverUrl, bookCoverTone: linkedBooks[0]?.coverTone, status: "pending", moderationNote: "", organizerName: creator?.isAdmin ? "" : creator?.profile.name, createdAt: new Date().toISOString() };
   state.events.push(event);
   notification(request.demoUserId, request.demoUserId, "event_submitted", "Событие на модерации", `Событие «${event.title}» отправлено на модерацию.`, { materialKind: "event", materialId: event.id });
   response.status(201).json({ event });
@@ -975,10 +1003,14 @@ router.patch("/admin/events/:id", (request, response) => {
 router.post("/occasions", (request, response) => {
   const creator = users.find((user) => user.id === request.demoUserId);
   if (creator?.profile.type === "Издатель") return response.status(403).json({ error: "Издательства не могут создавать поводы познакомиться" });
-  const occasion = { id: nextId++, creatorId: request.demoUserId, type: request.body.type, primaryText: String(request.body.primaryText ?? ""), audienceText: String(request.body.audienceText ?? ""), isAdult: Boolean(request.body.isAdult), targetGender: request.body.targetGender, targetCities: structuredClone(request.body.targetCities ?? []), targetProfileType: request.body.targetProfileType, meetingDate: request.body.type === "invite" ? String(request.body.meetingDate ?? "") : undefined, meetingStartTime: request.body.type === "invite" ? String(request.body.meetingStartTime ?? "") || undefined : undefined, meetingEndTime: request.body.type === "invite" ? String(request.body.meetingEndTime ?? "") || undefined : undefined, status: "pending", moderationNote: "", creatorName: creator?.profile.name ?? "", createdAt: new Date().toISOString() };
+  const catalog = users.flatMap((user) => [...user.books, ...(user.authorBooks ?? [])]);
+  const linkedBook = catalog.find((book) => book.id === Number(request.body.linkedBookId));
+  const occasion = { id: nextId++, creatorId: request.demoUserId, type: request.body.type, primaryText: String(request.body.primaryText ?? ""), audienceText: String(request.body.audienceText ?? ""), isAdult: Boolean(request.body.isAdult), targetGender: request.body.targetGender, targetCities: structuredClone(request.body.targetCities ?? []), targetProfileType: request.body.targetProfileType, meetingDate: request.body.type === "invite" ? String(request.body.meetingDate ?? "") : undefined, meetingStartTime: request.body.type === "invite" ? String(request.body.meetingStartTime ?? "") || undefined : undefined, meetingEndTime: request.body.type === "invite" ? String(request.body.meetingEndTime ?? "") || undefined : undefined, meetingCity: request.body.type === "invite" ? String(request.body.meetingCity ?? request.body.targetCities?.[0] ?? "") : undefined, meetingCityId: Number(request.body.meetingCityId) || undefined, meetingAddress: request.body.type === "invite" ? String(request.body.meetingAddress ?? "") : undefined, meetingMapUrl: request.body.type === "invite" ? String(request.body.meetingMapUrl ?? "") : undefined, linkedBookId: linkedBook?.id, linkedBooks: linkedBook ? [{ id: linkedBook.id, title: linkedBook.title, author: linkedBook.author, annotation: linkedBook.annotation, coverUrl: linkedBook.coverUrl, coverTone: linkedBook.coverTone }] : [], status: "pending", moderationNote: "", creatorName: creator?.profile.name ?? "", createdAt: new Date().toISOString() };
   if (!occasion.type || !occasion.primaryText || !occasion.audienceText || !occasion.targetCities.length) return response.status(400).json({ error: "Заполните все поля повода для знакомства" });
   if (occasion.type === "invite" && (!/^\d{4}-\d{2}-\d{2}$/.test(occasion.meetingDate) || occasion.meetingDate <= new Date().toISOString().slice(0, 10))) return response.status(400).json({ error: "Выберите будущую дату встречи" });
-  if (occasion.type === "invite" && Boolean(occasion.meetingStartTime) !== Boolean(occasion.meetingEndTime)) return response.status(400).json({ error: "Укажите и начало, и окончание встречи либо оставьте время пустым" });
+  if (occasion.type === "invite" && occasion.meetingEndTime && !occasion.meetingStartTime) return response.status(400).json({ error: "Время завершения можно указать только после времени начала" });
+  if (occasion.type === "invite" && (!occasion.meetingCity || !occasion.meetingAddress)) return response.status(400).json({ error: "Укажите место встречи" });
+  if (occasion.type === "discuss" && !occasion.linkedBookId) return response.status(400).json({ error: "Выберите книгу для обсуждения" });
   state.occasions.push(occasion);
   notification(request.demoUserId, request.demoUserId, "event_submitted", "Повод на модерации", "Повод для знакомства отправлен на модерацию.", { materialKind: "occasion", materialId: occasion.id });
   response.status(201).json({ occasion });

@@ -157,17 +157,21 @@ test("Google-вход переживает холодный запуск и вр
   assert.match(page, /Google отвечает дольше обычного/);
 });
 
-test("главная страница ограничивает события и использует единые действия", async () => {
+test("главная страница поддерживает ленту, классический вид и единое меню создания", async () => {
   const page = await readFrontendSource();
+  const api = await readFile(path.join(root, "server", "api.js"), "utf8");
   const css = await readFile(path.join(root, "app", "globals.css"), "utf8");
   assert.match(page, /scopedEvents\.slice\(0, 2\)/);
   assert.match(page, /eventTimestamp\(item\) > eventClock/);
-  assert.match(page, />Написать рецензию</);
-  assert.match(page, />Создать публикацию</);
-  assert.match(page, /className="secondary-action-button"[^\n]*Смотреть всё/);
+  assert.match(page, /profile\.homeView \?\? "feed"/);
+  assert.match(page, /ContentHubControls/);
+  assert.match(page, /showSwitch=\{\(currentUser\.profile\.homeView \?\? "feed"\) === "feed"\}/);
+  assert.match(api, /router\.patch\("\/users\/me\/home-view"/);
+  assert.match(page, /home-mode-\$\{homeMode\}/);
+  assert.doesNotMatch(page, /className="secondary-action-button"[^\n]*Смотреть всё/);
   assert.match(page, /HomeScopeSwitch city=\{currentCity\}/);
   assert.match(css, /\.home-content > \.content-section \+ \.content-section/);
-  assert.match(css, /\.creation-action-button/);
+  assert.match(css, /\.floating-create/);
 });
 
 test("каталоги Book Meet имеют постоянные SPA-маршруты", async () => {
@@ -233,18 +237,44 @@ test("presence, linked event books and pinned moderation are persisted", async (
   assert.match(data, /ORDER BY e\.is_pinned DESC, e\.event_date/);
 });
 
-test("event books, strict cities and private event management are wired into the UI", async () => {
+test("несколько книг, строгие города и управление событиями подключены к интерфейсу", async () => {
   const page = await readFrontendSource();
   const controllerUtils = await readFile(path.join(root, "app", "hooks", "controller-utils.ts"), "utf8");
   const content = await readFile(path.join(root, "app", "components", "content", "ContentComponents.tsx"), "utf8");
   const header = await readFile(path.join(root, "app", "components", "layout", "AppLayout.tsx"), "utf8");
   assert.match(controllerUtils, /const MIN_LOADING_MS = 3_000/);
-  assert.match(content, />Событие связано с книгой</);
+  assert.match(content, /linkedBookIds: number\[\]/);
+  assert.match(content, />＋ Добавить ещё книгу</);
+  assert.match(content, /className="material-books-field"/);
   assert.match(content, />Сначала создать книгу</);
   assert.match(content, /function PublicProfileDetails/);
   assert.match(content, /className="my-events-tab"/);
   assert.match(header, /Твоё книжное пространство/);
   assert.match(header, />Новинки издательств</);
+});
+
+test("импорт, редакторы, поводы и адаптивный интерфейс закреплены production-контрактами", async () => {
+  const migration = await readFile(path.join(root, "mysql", "migrations", "023_material_books_occasions_home_view.sql"), "utf8");
+  const api = await readFile(path.join(root, "server", "api.js"), "utf8");
+  const content = await readFile(path.join(root, "app", "components", "content", "ContentComponents.tsx"), "utf8");
+  const profile = await readFile(path.join(root, "app", "screens", "ProfileScreens.tsx"), "utf8");
+  const css = await readFile(path.join(root, "app", "globals.css"), "utf8");
+  const packageJson = await readFile(path.join(root, "package.json"), "utf8");
+  assert.match(migration, /CREATE TABLE IF NOT EXISTS material_books/);
+  assert.match(migration, /ADD COLUMN home_view/);
+  assert.match(migration, /meeting_address/);
+  assert.match(api, /\/admin\/books\/import\/preview/);
+  assert.match(api, /\/admin\/books\/import\/resolve/);
+  assert.match(api, /syncMaterialBooks/);
+  assert.match(content, /Вставить изображение/);
+  assert.match(content, /Вставить книгу/);
+  assert.match(content, /Обсудить книгу/);
+  assert.match(content, /comments\?kind=occasion/);
+  assert.match(profile, /Импорт каталога книг/);
+  assert.match(profile, /className="profile-nav"/);
+  assert.match(css, /Mobile is a dedicated layout layer/);
+  assert.match(css, /\.excerpt-card\.review-preview-card/);
+  assert.match(packageJson, /xlsx-0\.20\.3/);
 });
 
 test("профиль, фотографии и вложения сообщений сохраняются как production-данные", async () => {
