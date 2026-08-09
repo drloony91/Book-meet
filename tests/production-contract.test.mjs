@@ -13,6 +13,16 @@ const readFrontendSource = async () => (await Promise.all([
   ["app", "components", "content", "ContentComponents.tsx"],
 ].map((segments) => readFile(path.join(root, ...segments), "utf8")))).join("\n");
 
+test("legacy production domain redirects to the canonical origin without losing the path", async () => {
+  const server = await readFile(path.join(root, "server", "index.js"), "utf8");
+  const environment = await readFile(path.join(root, ".env.example"), "utf8");
+  assert.match(server, /configuredOrigin\(process\.env\.LEGACY_ORIGIN\)/);
+  assert.match(server, /request\.hostname\.toLowerCase\(\) !== legacyHostname/);
+  assert.match(server, /response\.redirect\(301, `\$\{canonicalOrigin\}\$\{requestPath\}`\)/);
+  assert.match(environment, /APP_ORIGIN=https:\/\/bookmeet\.club/);
+  assert.match(environment, /LEGACY_ORIGIN=https:\/\/bot\.oqyastana\.kz/);
+});
+
 test("production SPA собрана", async () => {
   await access(path.join(root, "dist", "client", "index.html"));
   const html = await readFile(path.join(root, "dist", "client", "index.html"), "utf8");
