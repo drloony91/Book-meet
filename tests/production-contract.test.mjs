@@ -283,7 +283,7 @@ test("импорт, редакторы, поводы и адаптивный и�
   assert.match(content, /Вставить книгу/);
   assert.match(content, /rich-media-tool-button/);
   assert.match(content, /Обсудить книгу/);
-  assert.match(content, /comments\?kind=occasion/);
+  assert.match(content, /MaterialEngagement kind="occasion"/);
   assert.match(profile, /Импорт каталога книг/);
   assert.match(profile, /Мои поводы/);
   assert.match(profile, /activeTab === "occasions"/);
@@ -291,6 +291,35 @@ test("импорт, редакторы, поводы и адаптивный и�
   assert.match(css, /Mobile is a dedicated layout layer/);
   assert.match(css, /\.excerpt-card\.review-preview-card/);
   assert.match(packageJson, /xlsx-0\.20\.3/);
+});
+
+test("полный каталог админки, издательские материалы, реакции и обновлённая авторизация закреплены контрактами", async () => {
+  const api = await readFile(path.join(root, "server", "api.js"), "utf8");
+  const content = await readFile(path.join(root, "app", "components", "content", "ContentComponents.tsx"), "utf8");
+  const screens = await readFile(path.join(root, "app", "screens", "ContentScreens.tsx"), "utf8");
+  const profile = await readFile(path.join(root, "app", "screens", "ProfileScreens.tsx"), "utf8");
+  const auth = await readFile(path.join(root, "app", "screens", "AuthScreens.tsx"), "utf8");
+  const css = await readFile(path.join(root, "app", "globals.css"), "utf8");
+  assert.match(profile, /fetch\("\/api\/books\/catalog"/);
+  assert.match(profile, /kind: "publisher_news" as const/);
+  assert.match(profile, /Событие издательства/);
+  assert.match(api, /\["book", "review", "excerpt", "publisher_news"\]/);
+  assert.match(api, /publisher_news: "publisher_news"/);
+  assert.match(content, /MaterialEngagement kind="event"/);
+  assert.match(content, /MaterialEngagement kind="occasion"/);
+  assert.match(content, /MaterialEngagement kind="publisher_news"/);
+  assert.match(content, /export function PublisherNewsEditor/);
+  assert.doesNotMatch(screens, /Каталог Book Meet/);
+  assert.match(screens, /<EmptyContentState \/>/);
+  assert.match(auth, /book-meet-header-logo-v3\.png/);
+  assert.match(auth, /setMode\(nextMode\)/);
+  assert.match(auth, /login-turning-back">\{invitation/);
+  assert.match(auth, /className="mobile-auth-invitation"/);
+  assert.match(auth, /formMode === "login" \? "Вы у нас впервые\?" : "Уже есть профиль\?"/);
+  assert.doesNotMatch(auth, /className="auth-invitation-mark"/);
+  assert.doesNotMatch(auth, /className="outline-button mobile-auth-mode-switch"/);
+  assert.doesNotMatch(css, /workspace\.workspace-content-hub > \.friends-panel \{ display: none/);
+  assert.match(css, /\.content-hub-switch \{ position: sticky; z-index: 22; top: 158px/);
 });
 
 test("профиль, фотографии и вложения сообщений сохраняются как production-данные", async () => {

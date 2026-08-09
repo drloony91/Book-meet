@@ -184,10 +184,11 @@ export type BootstrapData = { activeUserId: number; profileCompleted?: boolean; 
 export type AuthResult = { error?: string; requiresTotp?: boolean; deletedProfile?: boolean; daysRemaining?: number };
 
 export type AdminMaterialKind = "book" | "review" | "excerpt" | "event" | "occasion";
+export type AdminCatalogKind = AdminMaterialKind | "publisher_news";
 export type AdminSection = "dashboard" | "moderation" | "reports-new" | "reports-reviewed" | "users-active" | "users-blocked" | "users-deleted" | AdminMaterialKind;
 export type AdminCatalogItem = {
   id: number;
-  kind: AdminMaterialKind;
+  kind: AdminCatalogKind;
   title: string;
   subtitle: string;
   text: string;

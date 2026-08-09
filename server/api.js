@@ -1744,8 +1744,10 @@ router.put("/users/me/state", asyncRoute(async (request, response) => {
           await connection.query("UPDATE publisher_news SET title = ?, preview_text = ?, body_html = ?, body = ?, is_adult = ? WHERE id = ? AND user_id = ?", [title, previewText, bodyHtml, body, item.isAdult ? 1 : 0, desiredId, userId]);
           newsIds.push(desiredId);
         } else if (publisherStatus === "approved") {
-          const [created] = await connection.query("INSERT INTO publisher_news (user_id, title, preview_text, body_html, body, is_adult) VALUES (?, ?, ?, ?, ?, ?)", [userId, title, previewText, bodyHtml, body, item.isAdult ? 1 : 0]);
-          newsIds.push(Number(created.insertId));
+          const [created] = desiredId
+            ? await connection.query("INSERT INTO publisher_news (id, user_id, title, preview_text, body_html, body, is_adult) VALUES (?, ?, ?, ?, ?, ?, ?)", [desiredId, userId, title, previewText, bodyHtml, body, item.isAdult ? 1 : 0])
+            : await connection.query("INSERT INTO publisher_news (user_id, title, preview_text, body_html, body, is_adult) VALUES (?, ?, ?, ?, ?, ?)", [userId, title, previewText, bodyHtml, body, item.isAdult ? 1 : 0]);
+          newsIds.push(desiredId || Number(created.insertId));
         }
       }
       if (newsIds.length) await connection.query(`DELETE FROM publisher_news WHERE user_id = ? AND id NOT IN (${newsIds.map(() => "?").join(",")})`, [userId, ...newsIds]);
@@ -2135,7 +2137,7 @@ router.patch("/admin/materials/:kind/:id", asyncRoute(async (request, response) 
   const payload = request.body ?? {};
   const title = String(payload.title ?? payload.bookTitle ?? (kind === "excerpt" ? "Публикация" : "")).trim();
   const text = String(payload.text ?? payload.preview ?? payload.previewText ?? "").trim();
-  if (!["book", "review", "excerpt"].includes(kind) || !materialId || !title) return response.status(400).json({ error: "Некорректные данные материала" });
+  if (!["book", "review", "excerpt", "publisher_news"].includes(kind) || !materialId || !title) return response.status(400).json({ error: "Некорректные данные материала" });
   await withTransaction(async (connection) => {
     if (!(await isAdmin(connection, adminId))) throw Object.assign(new Error("Доступно только администратору"), { statusCode: 403 });
     let updated;
@@ -2165,13 +2167,19 @@ router.patch("/admin/materials/:kind/:id", asyncRoute(async (request, response) 
       const bodyHtml = validateRichHtml(payload.bodyHtml ?? payload.fullText ?? payload.body ?? "");
       [updated] = await connection.query("UPDATE reviews SET book_id = ?, rating = ?, preview = ?, body = ?, is_adult = ? WHERE id = ?", [book.id, Number(payload.rating) || 0, String(payload.preview ?? text).trim(), bodyHtml, payload.isAdult ? 1 : 0, materialId]);
       await syncMaterialBooks(connection, "review", materialId, [book.id]);
-    } else {
+    } else if (kind === "excerpt") {
       const linkedBookIds = [...new Set((Array.isArray(payload.bookIds) ? payload.bookIds : [payload.bookId]).map(Number).filter(Number.isInteger))].slice(0, 50);
       const linkedBooks = await linkedBookPreviews(connection, linkedBookIds);
       const linkedBookId = linkedBooks[0]?.id ?? null;
       const bodyHtml = validateRichHtml(payload.bodyHtml);
       [updated] = await connection.query("UPDATE excerpts SET book_id = ?, book_title = ?, preview_text = ?, body_html = ?, body = ?, is_adult = ? WHERE id = ?", [linkedBookId, linkedBooks[0]?.title ?? (title === "Публикация" ? "" : title), String(payload.previewText ?? text).trim(), bodyHtml, plainTextFromHtml(bodyHtml) || String(payload.body ?? payload.text ?? text).trim(), payload.isAdult ? 1 : 0, materialId]);
       await syncMaterialBooks(connection, "excerpt", materialId, linkedBooks.map((book) => book.id));
+    } else {
+      const bodyHtml = validateRichHtml(payload.bodyHtml ?? payload.body ?? "");
+      [updated] = await connection.query(
+        "UPDATE publisher_news SET title = ?, preview_text = ?, body_html = ?, body = ?, is_adult = ? WHERE id = ?",
+        [title, String(payload.previewText ?? text).trim(), bodyHtml, plainTextFromHtml(bodyHtml) || String(payload.body ?? text).trim(), payload.isAdult ? 1 : 0, materialId],
+      );
     }
     if (!updated.affectedRows) throw Object.assign(new Error("Материал не найден"), { statusCode: 404 });
   });
@@ -2182,7 +2190,7 @@ router.delete("/admin/materials/:kind/:id", asyncRoute(async (request, response)
   const adminId = request.bookMeetUser.id;
   const kind = String(request.params.kind ?? "");
   const materialId = Number(request.params.id);
-  const tables = { book: "books", review: "reviews", excerpt: "excerpts", event: "events", occasion: "occasions" };
+  const tables = { book: "books", review: "reviews", excerpt: "excerpts", event: "events", occasion: "occasions", publisher_news: "publisher_news" };
   const table = tables[kind];
   if (!table || !materialId) return response.status(400).json({ error: "Некорректный материал" });
   await withTransaction(async (connection) => {

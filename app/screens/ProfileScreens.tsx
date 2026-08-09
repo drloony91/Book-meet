@@ -32,6 +32,7 @@ import { catalogFromUsers } from "../lib/domain";
 import { normalizedPathname, profileTabFromPathname, profileTabPaths } from "../navigation/routes";
 import type {
   AdminCatalogItem,
+  AdminCatalogKind,
   AdminMaterialKind,
   AdminSection,
   AdminStatistics,
@@ -39,6 +40,7 @@ import type {
   DemoUser,
   FriendRequest,
   Follow,
+  LibraryBook,
   MaterialComment,
   Occasion,
   ProfileTab,
@@ -112,7 +114,7 @@ function AdminBookImport({ onComplete }: { onComplete: () => void }) {
   return <section className="admin-book-import"><div><h2>Импорт каталога книг</h2><p>CSV, XLS или XLSX. Система использует знакомые поля карточки и проверяет ISBN, автора и название.</p></div><button className="outline-button" type="button" disabled={busy} onClick={() => inputRef.current?.click()}>{busy ? "Обрабатываем…" : "Загрузить файл"}</button><input ref={inputRef} hidden type="file" accept=".csv,.xls,.xlsx" onChange={(event) => { void upload(event.target.files?.[0]); event.currentTarget.value = ""; }} />{createdCount > 0 && <p className="admin-import-result">Добавлено новых книг: {createdCount}</p>}{conflicts.map((conflict) => <article className="admin-import-conflict" key={conflict.key}><div className="admin-import-comparison">{card(conflict.existing, "Уже есть")}{card(conflict.incoming, "Из файла")}</div><div className="admin-import-actions"><button type="button" onClick={() => void resolve(conflict, "replace")}>Заменить</button><button type="button" onClick={() => void resolve(conflict, "supplement")}>Дополнить</button><button type="button" onClick={() => void resolve(conflict, "duplicate")}>Дублировать</button></div></article>)}{details && <div className="nested-modal-backdrop" onMouseDown={() => setDetails(null)}><section className="admin-import-details" onMouseDown={(event) => event.stopPropagation()}><button className="modal-close" type="button" onClick={() => setDetails(null)}>×</button><h2>{details.title}</h2><p><strong>{details.author}</strong></p>{details.publisher && <p>Издательство: {details.publisher}</p>}{details.isbn && <p>ISBN: {details.isbn}</p>}{details.annotation && <p>{details.annotation}</p>}</section></div>}</section>;
 }
 
-export function AdminTab({ events, occasions, users, reports, onModerate, onModerateOccasion, onModeratePublisher, onOpenChat, onOpenUser, onRefresh, onDeleteMaterial }: { events: BookEvent[]; occasions: Occasion[]; users: DemoUser[]; reports: SafetyReport[]; onModerate: (id: number, action: "accept" | "revision" | "reject" | "edit", note?: string, event?: typeof emptyEvent, pinned?: boolean) => Promise<void>; onModerateOccasion: (id: number, action: "accept" | "revision" | "reject" | "edit", note?: string, occasion?: typeof emptyOccasion) => Promise<void>; onModeratePublisher: (id: number, action: "accept" | "revision" | "reject", note?: string) => Promise<void>; onOpenChat: (userId: number) => void; onOpenUser: (userId: number) => void; onRefresh: () => void; onDeleteMaterial: (kind: AdminMaterialKind, id: number) => Promise<void> }) {
+export function AdminTab({ events, occasions, users, reports, onModerate, onModerateOccasion, onModeratePublisher, onOpenChat, onOpenUser, onRefresh, onDeleteMaterial }: { events: BookEvent[]; occasions: Occasion[]; users: DemoUser[]; reports: SafetyReport[]; onModerate: (id: number, action: "accept" | "revision" | "reject" | "edit", note?: string, event?: typeof emptyEvent, pinned?: boolean) => Promise<void>; onModerateOccasion: (id: number, action: "accept" | "revision" | "reject" | "edit", note?: string, occasion?: typeof emptyOccasion) => Promise<void>; onModeratePublisher: (id: number, action: "accept" | "revision" | "reject", note?: string) => Promise<void>; onOpenChat: (userId: number) => void; onOpenUser: (userId: number) => void; onRefresh: () => void; onDeleteMaterial: (kind: AdminCatalogKind, id: number) => Promise<void> }) {
   const moderationEvents = events.filter((item) => item.status === "pending" || item.status === "needs_changes");
   const moderationOccasions = occasions.filter((item) => item.status === "pending" || item.status === "needs_changes");
   const [opened, setOpened] = useState<BookEvent | null>(null);
@@ -127,6 +129,7 @@ export function AdminTab({ events, occasions, users, reports, onModerate, onMode
   const [selectedCatalogItem, setSelectedCatalogItem] = useState<AdminCatalogItem | null>(null);
   const [editingCatalogItem, setEditingCatalogItem] = useState<AdminCatalogItem | null>(null);
   const [statistics, setStatistics] = useState<AdminStatistics | null>(null);
+  const [catalogBooks, setCatalogBooks] = useState<LibraryBook[] | null>(null);
   useEffect(() => {
     let active = true;
     fetch("/api/admin/statistics", { credentials: "same-origin", cache: "no-store" })
@@ -138,18 +141,36 @@ export function AdminTab({ events, occasions, users, reports, onModerate, onMode
       .catch((error) => console.warn(error));
     return () => { active = false; };
   }, []);
+  useEffect(() => {
+    let active = true;
+    fetch("/api/books/catalog", { credentials: "same-origin", cache: "no-store" })
+      .then(async (response) => {
+        if (!response.ok) throw new Error("Не удалось загрузить полный каталог книг");
+        return response.json() as Promise<{ books?: Partial<LibraryBook>[] }>;
+      })
+      .then((data) => {
+        if (!active) return;
+        setCatalogBooks((data.books ?? []).map((book) => ({ events: 0, genres: [], pages: "", format: "Бумажная", durationHours: "", durationMinutes: "", rating: 0, review: "", coverTone: "blue", annotation: "", author: "", title: "", ...book } as LibraryBook)));
+      })
+      .catch((error) => console.warn(error));
+    return () => { active = false; };
+  }, []);
   const creator = users.find((user) => user.id === (opened?.creatorId ?? openedOccasion?.creatorId));
   const moderationPublishers = users.filter((user) => user.profile.type === "Издатель" && ["pending", "needs_changes"].includes(user.profile.publisherStatus ?? ""));
   const total = moderationEvents.length + moderationOccasions.length + moderationPublishers.length;
-  const books = catalogFromUsers(users);
+  const books = catalogBooks ?? catalogFromUsers(users);
   const reviews = users.flatMap((user) => user.reviews.map((item) => ({ ...item, ownerId: user.id, ownerName: user.profile.name })));
   const publications = users.flatMap((user) => (user.excerpts ?? []).map((item) => ({ ...item, ownerId: user.id, ownerName: user.profile.name })));
-  const remove = async (kind: AdminMaterialKind, id: number, title: string) => { if (window.confirm(`Удалить «${title}» без возможности восстановления?`)) await onDeleteMaterial(kind, id); };
+  const publisherNews = users.flatMap((user) => (user.publisherNews ?? []).map((item) => ({ ...item, ownerId: user.id, ownerName: user.profile.name })));
+  const remove = async (kind: AdminCatalogKind, id: number, title: string) => { if (window.confirm(`Удалить «${title}» без возможности восстановления?`)) await onDeleteMaterial(kind, id); };
   const catalogItems: Record<AdminMaterialKind, AdminCatalogItem[]> = {
     book: books.map((item) => ({ id: item.id, kind: "book", title: item.title, subtitle: item.author, text: item.annotation, coverUrl: item.coverUrl, coverTone: item.coverTone, source: item })),
     review: reviews.map((item) => ({ id: item.id, kind: "review", title: item.bookTitle, subtitle: `${item.ownerName} · ★ ${item.rating}`, text: item.preview, source: item })),
-    excerpt: publications.map((item) => ({ id: item.id, kind: "excerpt", title: item.bookTitle || "Публикация", subtitle: item.ownerName, text: item.previewText || item.text, source: item })),
-    event: events.map((item) => ({ id: item.id, kind: "event", title: item.title, subtitle: `${item.city} · ${item.date}`, text: item.summary, source: item })),
+    excerpt: [
+      ...publications.map((item) => ({ id: item.id, kind: "excerpt" as const, title: item.bookTitle || "Публикация", subtitle: item.ownerName, text: item.previewText || item.text, source: item })),
+      ...publisherNews.map((item) => ({ id: item.id, kind: "publisher_news" as const, title: item.title, subtitle: `Новость издательства · ${item.ownerName}`, text: item.previewText, source: item })),
+    ],
+    event: events.map((item) => ({ id: item.id, kind: "event", title: item.title, subtitle: `${users.find((user) => user.id === item.creatorId)?.profile.type === "Издатель" ? "Событие издательства · " : ""}${item.city} · ${item.date}`, text: item.summary, source: item })),
     occasion: occasions.map((item) => ({ id: item.id, kind: "occasion", title: item.primaryText, subtitle: occasionLabels[item.type], text: item.audienceText, source: item })),
   };
   const labels: Record<AdminMaterialKind, string> = { book: "Книги", review: "Рецензии", excerpt: "Публикации", event: "События", occasion: "Поводы" };
@@ -346,7 +367,7 @@ export function AdminSecurityPanel({ onBack }: { onBack: () => void }) {
   </div>;
 }
 
-export function AdminProfile({ onBack, onLogout, events, occasions, users, reports, onModerateEvent, onModerateOccasion, onModeratePublisher, onOpenChat, onOpenUser, onRefresh, onDeleteMaterial }: { onBack: () => void; onLogout: () => void; events: BookEvent[]; occasions: Occasion[]; users: DemoUser[]; reports: SafetyReport[]; onModerateEvent: (id: number, action: "accept" | "revision" | "reject" | "edit", note?: string, event?: typeof emptyEvent, pinned?: boolean) => Promise<void>; onModerateOccasion: (id: number, action: "accept" | "revision" | "reject" | "edit", note?: string, occasion?: typeof emptyOccasion) => Promise<void>; onModeratePublisher: (id: number, action: "accept" | "revision" | "reject", note?: string) => Promise<void>; onOpenChat: (userId: number) => void; onOpenUser: (userId: number) => void; onRefresh: () => void; onDeleteMaterial: (kind: AdminMaterialKind, id: number) => Promise<void> }) {
+export function AdminProfile({ onBack, onLogout, events, occasions, users, reports, onModerateEvent, onModerateOccasion, onModeratePublisher, onOpenChat, onOpenUser, onRefresh, onDeleteMaterial }: { onBack: () => void; onLogout: () => void; events: BookEvent[]; occasions: Occasion[]; users: DemoUser[]; reports: SafetyReport[]; onModerateEvent: (id: number, action: "accept" | "revision" | "reject" | "edit", note?: string, event?: typeof emptyEvent, pinned?: boolean) => Promise<void>; onModerateOccasion: (id: number, action: "accept" | "revision" | "reject" | "edit", note?: string, occasion?: typeof emptyOccasion) => Promise<void>; onModeratePublisher: (id: number, action: "accept" | "revision" | "reject", note?: string) => Promise<void>; onOpenChat: (userId: number) => void; onOpenUser: (userId: number) => void; onRefresh: () => void; onDeleteMaterial: (kind: AdminCatalogKind, id: number) => Promise<void> }) {
   const [securityOpen, setSecurityOpen] = useState(false);
   return <main className="my-profile-page admin-profile-page"><div className="profile-page-topbar"><button type="button" className="back-button" onClick={onBack}>← На главную</button><div className="admin-profile-top-actions">{!securityOpen && <button type="button" className="outline-button" onClick={() => setSecurityOpen(true)}>Безопасность</button>}<button type="button" className="back-button" onClick={onLogout}>Выйти</button></div></div><section className="admin-profile-card">{securityOpen ? <AdminSecurityPanel onBack={() => setSecurityOpen(false)} /> : <AdminTab events={events} occasions={occasions} users={users} reports={reports} onModerate={onModerateEvent} onModerateOccasion={onModerateOccasion} onModeratePublisher={onModeratePublisher} onOpenChat={onOpenChat} onOpenUser={onOpenUser} onRefresh={onRefresh} onDeleteMaterial={onDeleteMaterial} />}</section></main>;
 }
@@ -663,7 +684,7 @@ export function MyProfile({ onBack, user, users, friends, friendRequests, follow
           </>}
           {activeTab === "author-books" && (profile.type === "Писатель" || profile.type === "Издатель") && <AuthorBooksTab books={authorBooks} setBooks={setAuthorBooks} userId={user.id} author={profile.name} users={users} publisherMode={profile.type === "Издатель"} canCreate={profile.type !== "Издатель" || profile.publisherStatus === "approved"} />}
           {activeTab === "excerpts" && (profile.type === "Писатель" || profile.type === "Блогер") && <ExcerptsTab excerpts={userExcerpts} setExcerpts={setUserExcerpts} owner={{ ...user, profile, excerpts: userExcerpts }} users={users} likes={likes} onToggleLike={onToggleLike} onComment={onComment} onOpenUser={onOpenUser} initialAdd={initialAction === "excerpt" && !initialEditId} initialEditId={initialAction === "excerpt" ? initialEditId : null} />}
-          {activeTab === "publisher-news" && profile.type === "Издатель" && <PublisherNewsTab news={publisherNews} setNews={setPublisherNews} owner={{ ...user, profile, publisherNews }} canCreate={profile.publisherStatus === "approved"} />}
+          {activeTab === "publisher-news" && profile.type === "Издатель" && <PublisherNewsTab news={publisherNews} setNews={setPublisherNews} owner={{ ...user, profile, publisherNews }} users={users} canCreate={profile.publisherStatus === "approved"} />}
           {activeTab === "library" && profile.type !== "Издатель" && <LibraryTab books={books} setBooks={setBooks} userId={user.id} users={users} initialAdd={initialAction === "book"} />}
           {activeTab === "wishlist" && (profile.type === "Читатель" || profile.type === "Блогер") && <WishlistTab books={wishBooks} setBooks={setWishBooks} owner={{ ...user, profile, wishBooks }} viewer={{ ...user, profile, wishBooks }} users={users} />}
           {activeTab === "reviews" && (profile.type === "Читатель" || profile.type === "Блогер") && <ReviewsTab reviews={reviews} setReviews={setReviews} owner={{ ...user, profile, books, reviews }} users={users} likes={likes} onToggleLike={onToggleLike} onComment={onComment} onOpenUser={onOpenUser} initialAdd={initialAction === "review" && !initialEditId} initialEditId={initialAction === "review" ? initialEditId : null} />}

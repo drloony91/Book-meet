@@ -136,9 +136,62 @@ function formatCommentDate(value: string) {
   return `${new Intl.DateTimeFormat("ru-RU", { day: "2-digit", month: "2-digit", year: "numeric" }).format(date)} в ${time}`;
 }
 
+type EngagementKind = "event" | "occasion" | "publisher_news";
+
+function MaterialEngagement({ kind, materialId, ownerId, currentUser, users, onOpenUser }: { kind: EngagementKind; materialId: number; ownerId: number; currentUser?: DemoUser; users: DemoUser[]; onOpenUser?: (userId: number) => void }) {
+  const [likedUserIds, setLikedUserIds] = useState<number[]>([]);
+  const [comments, setComments] = useState<MaterialComment[]>([]);
+  const [comment, setComment] = useState("");
+  const [busy, setBusy] = useState(false);
+  useEffect(() => {
+    let active = true;
+    Promise.all([
+      fetch(`/api/reactions?kind=${kind}&id=${materialId}`, { credentials: "same-origin", cache: "no-store" }).then((response) => response.json() as Promise<{ userIds?: number[] }>),
+      fetch(`/api/comments?kind=${kind}&id=${materialId}`, { credentials: "same-origin", cache: "no-store" }).then((response) => response.json() as Promise<{ comments?: MaterialComment[] }>),
+    ]).then(([reactions, materialComments]) => {
+      if (!active) return;
+      setLikedUserIds(reactions.userIds ?? []);
+      setComments(materialComments.comments ?? []);
+    }).catch((error) => console.warn(error));
+    return () => { active = false; };
+  }, [kind, materialId]);
+  const liked = Boolean(currentUser && likedUserIds.includes(currentUser.id));
+  async function toggleLike() {
+    if (!currentUser || busy || currentUser.id === ownerId) return;
+    setBusy(true);
+    try {
+      const response = await fetch("/api/reactions", { method: liked ? "DELETE" : "POST", credentials: "same-origin", headers: { "content-type": "application/json" }, body: JSON.stringify({ materialKind: kind, materialId }) });
+      if (!response.ok) throw new Error((await response.json() as { error?: string }).error || "Не удалось сохранить отметку");
+      setLikedUserIds((current) => liked ? current.filter((id) => id !== currentUser.id) : [...new Set([...current, currentUser.id])]);
+    } catch (error) {
+      window.alert(error instanceof Error ? error.message : "Не удалось сохранить отметку");
+    } finally { setBusy(false); }
+  }
+  async function submitComment(event: FormEvent) {
+    event.preventDefault();
+    if (!currentUser || busy || !comment.trim()) return;
+    setBusy(true);
+    try {
+      const response = await fetch("/api/comments", { method: "POST", credentials: "same-origin", headers: { "content-type": "application/json" }, body: JSON.stringify({ materialKind: kind, materialId, body: comment.trim() }) });
+      const data = await response.json() as { comment?: MaterialComment; error?: string };
+      if (!response.ok || !data.comment) throw new Error(data.error || "Не удалось отправить комментарий");
+      setComments((current) => [...current, data.comment!]);
+      setComment("");
+    } catch (error) {
+      window.alert(error instanceof Error ? error.message : "Не удалось отправить комментарий");
+    } finally { setBusy(false); }
+  }
+  async function deleteComment(entry: MaterialComment) {
+    if (!currentUser || !(currentUser.isAdmin || currentUser.id === entry.userId)) return;
+    const response = await fetch(`/api/comments/${entry.id}`, { method: "DELETE", credentials: "same-origin" });
+    if (response.ok) setComments((current) => current.filter((item) => item.id !== entry.id));
+  }
+  return <section className="material-engagement"><div className="reading-social-row"><button className={liked ? "outline-button liked" : "outline-button"} type="button" disabled={!currentUser || busy || currentUser.id === ownerId} title={currentUser?.id === ownerId ? "Нельзя поставить отметку своему материалу" : undefined} onClick={() => void toggleLike()}>{liked ? "♥" : "♡"} Нравится · {likedUserIds.length}</button></div><section className="comments-block"><h3>Комментарии · {comments.length}</h3>{currentUser && <form onSubmit={submitComment}><SpoilerTextarea rows={3} value={comment} onChange={setComment} placeholder="Написать комментарий" /><button className="primary-button" type="submit" disabled={busy || !comment.trim()}>Отправить</button></form>}{comments.map((entry) => { const author = users.find((user) => user.id === entry.userId); const canDelete = Boolean(currentUser && (currentUser.isAdmin || currentUser.id === entry.userId)); const canReport = Boolean(currentUser && !currentUser.isAdmin && currentUser.id !== entry.userId); return <article key={entry.id}><div className="comment-actions">{canReport && <button className="comment-report-button" type="button" onClick={() => openReportDialog({ kind: "comment", id: entry.id })} aria-label="Пожаловаться на комментарий" title="Пожаловаться"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3 2.8 20h18.4L12 3Z" /><path d="M12 8v6" /><circle cx="12" cy="17" r="1" /></svg></button>}{canDelete && <button className="comment-delete-button" type="button" onClick={() => void deleteComment(entry)} aria-label="Удалить комментарий" title="Удалить комментарий">×</button>}</div><button type="button" onClick={() => onOpenUser?.(entry.userId)}>{author?.profile.name ?? "Пользователь"}</button><small>{formatCommentDate(entry.createdAt)}</small><p><SpoilerText text={entry.text} /></p></article>; })}</section></section>;
+}
+
 type EventAttendee = { id: number; name: string; type: string; city: string; initials: string; color: string; avatarUrl?: string };
 
-export function EventModal({ item, users = [], currentUserId, onClose, onOpenBook, onOpenUser, onEdit, onDelete, onReport }: { item: BookEvent; users?: DemoUser[]; currentUserId?: number; onClose: () => void; onOpenBook?: (bookId?: number) => void; onOpenUser?: (userId: number) => void; onEdit?: () => void; onDelete?: () => void; onReport?: () => void }) {
+export function EventModal({ item, users = [], currentUserId, currentUser, onClose, onOpenBook, onOpenUser, onEdit, onDelete, onReport }: { item: BookEvent; users?: DemoUser[]; currentUserId?: number; currentUser?: DemoUser; onClose: () => void; onOpenBook?: (bookId?: number) => void; onOpenUser?: (userId: number) => void; onEdit?: () => void; onDelete?: () => void; onReport?: () => void }) {
   const routedPopup = useRoutedPopup(`/events/${item.id}`, "/events", onClose, `${item.title} — Book Meet`);
   const routedClose = routedPopup.close;
   const [reminderSet, setReminderSet] = useState(Boolean(item.reminderSet));
@@ -152,6 +205,7 @@ export function EventModal({ item, users = [], currentUserId, onClose, onOpenBoo
   const [pagedAttendees, setPagedAttendees] = useState<EventAttendee[]>([]);
   const [attendeesLoading, setAttendeesLoading] = useState(false);
   const [bookPopup, setBookPopup] = useState<LibraryBook | AuthorBook | null>(null);
+  const viewer = currentUser ?? users.find((user) => user.id === currentUserId);
   async function setReminder() {
     if (reminderSet || reminderBusy) return;
     setReminderBusy(true);
@@ -219,6 +273,7 @@ export function EventModal({ item, users = [], currentUserId, onClose, onOpenBoo
     {item.moderationNote && item.status !== "published" && <div className="moderation-note"><strong>Комментарий модератора</strong><p>{item.moderationNote}</p></div>}
     <div className="event-links">{item.detailsUrl && <a className="primary-button" href={item.detailsUrl} target="_blank" rel="noreferrer">Регистрация</a>}{item.mapUrl && <a className="outline-button" href={item.mapUrl} target="_blank" rel="noreferrer">Смотреть в 2ГИС</a>}{item.status === "published" && <button className="outline-button" type="button" disabled={reminderBusy} onClick={() => reminderSet ? setReminderDialog("cancel") : void setReminder()}>{reminderSet ? "Иду! Напоминание установлено" : "Иду! Установить напоминание"}</button>}</div>
     {attendeeCount > 0 && <section className="event-attendees"><h3>Идут · {attendeeCount}</h3><div>{previewAttendees.slice(0, 4).map(attendeeCard)}</div>{attendeeCount > 4 && <button className="outline-button event-attendees-all" type="button" onClick={() => { setAttendeesPage(1); setAttendeesOpen(true); }}>Показать всех</button>}</section>}
+    <MaterialEngagement kind="event" materialId={item.id} ownerId={item.creatorId} currentUser={viewer} users={users} onOpenUser={onOpenUser} />
     {attendeesOpen && <div className="nested-modal-backdrop" onMouseDown={() => setAttendeesOpen(false)}><section className="event-attendees-modal" role="dialog" aria-modal="true" aria-label="Участники мероприятия" onMouseDown={(event) => event.stopPropagation()}><button className="modal-close" type="button" aria-label="Закрыть список участников" onClick={() => setAttendeesOpen(false)}>×</button><h2>Идут на мероприятие · {attendeeCount}</h2>{attendeesLoading ? <p className="event-attendees-loading">Загружаем участников…</p> : <div className="event-attendees-list">{pagedAttendees.map(attendeeCard)}</div>}{attendeesPageCount > 1 && <div className="event-attendees-pagination"><button type="button" disabled={attendeesLoading || attendeesPage === 1} onClick={() => setAttendeesPage((page) => Math.max(1, page - 1))}>Назад</button><span>{attendeesPage} из {attendeesPageCount}</span><button type="button" disabled={attendeesLoading || attendeesPage === attendeesPageCount} onClick={() => setAttendeesPage((page) => Math.min(attendeesPageCount, page + 1))}>Далее</button></div>}</section></div>}
     {reminderDialog && <div className="nested-modal-backdrop" onMouseDown={() => setReminderDialog(null)}><section className="event-reminder-notice" role="alertdialog" aria-modal="true" onMouseDown={(event) => event.stopPropagation()}>{reminderDialog === "created" ? <><h2>Напоминание установлено</h2><p>Вы установили напоминание, за 24 часа до мероприятия вы получите уведомление с напоминанием. Мероприятие сохранено в раздел «Мои мероприятия» в вашем профиле. Не забудьте зарегистрироваться на мероприятие у организатора, если это требуется.</p><div className="form-actions"><button className="outline-button" type="button" onClick={() => setReminderDialog(null)}>Ок</button><button className="outline-button" type="button" onClick={openOwnProfile}>Перейти в профиль</button></div></> : <><h2>Отменить напоминание?</h2><div className="form-actions"><button className="outline-button" type="button" disabled={reminderBusy} onClick={() => void cancelReminder()}>Да</button><button className="outline-button" type="button" autoFocus onClick={() => setReminderDialog(null)}>Нет</button></div></>}</section></div>}
     {bookPopup && <UnifiedBookModal book={bookPopup} users={users} nested onClose={() => setBookPopup(null)} onOpenUser={onOpenUser} />}
@@ -305,13 +360,21 @@ export function OccasionCard({ item, own, onOpen, onEdit }: { item: Occasion; ow
 export function OccasionModal({ item, currentUser, users = [], onClose, onOpenUser, onOpenBook, onEdit, onDelete, onReport }: { item: Occasion; currentUser?: DemoUser; users?: DemoUser[]; onClose: () => void; onOpenUser?: (id: number) => void; onOpenBook?: (id: number) => void; onEdit?: () => void; onDelete?: () => void; onReport?: () => void }) {
   const routedPopup = useRoutedPopup(`/meet/${item.id}`, "/meet", onClose, "Повод познакомиться — Book Meet");
   const routedClose = routedPopup.close;
-  const [comments, setComments] = useState<MaterialComment[]>([]);
-  const [comment, setComment] = useState("");
-  useEffect(() => { let active = true; const refresh = () => fetch(`/api/comments?kind=occasion&id=${item.id}`, { cache: "no-store" }).then((response) => response.json()).then((data: { comments?: MaterialComment[] }) => { if (active) setComments(data.comments ?? []); }).catch(console.warn); void refresh(); const timer = window.setInterval(refresh, 4000); return () => { active = false; window.clearInterval(timer); }; }, [item.id]);
   if (!routedPopup.active) return null;
   const schedule = occasionDateLabel(item);
   const labels = occasionFieldLabels[item.type];
-  return <div className="modal-backdrop" onMouseDown={routedClose}><section className="event-modal occasion-modal" onMouseDown={(event) => event.stopPropagation()}><ModalIconActions onEdit={onEdit} onDelete={onDelete} onReport={onReport} onClose={routedClose} /><EventStatusLabel status={item.status} /><span className="section-subtitle">{occasionLabels[item.type]}{schedule && <><i className="occasion-blue-dot" aria-hidden="true" />{schedule}</>}</span><h2>{labels.primary}: {item.primaryText}</h2><p><strong>{labels.audience}:</strong> {item.audienceText}</p>{item.type === "invite" && <div className="occasion-place"><strong>{item.meetingCity}{item.meetingAddress ? ` · ${item.meetingAddress}` : ""}</strong>{item.meetingMapUrl && <a className="outline-button" href={item.meetingMapUrl} target="_blank" rel="noreferrer">Посмотреть в 2ГИС</a>}</div>}{item.linkedBooks?.map((book) => <button className="event-modal-book" type="button" key={book.id} onClick={() => onOpenBook?.(book.id)}><div className={`event-modal-book-cover library-cover-${book.coverTone ?? "blue"}`} style={book.coverUrl ? { backgroundImage: `url(${book.coverUrl})` } : undefined}>{!book.coverUrl && book.title.slice(0, 1)}</div><span><strong>{book.title}</strong><small>{book.author}</small><p>{book.annotation || "Аннотация пока не добавлена."}</p></span></button>)}<p>Автор: <button className="inline-user-link" type="button" onClick={() => onOpenUser?.(item.creatorId)}>{item.creatorName}</button></p>{item.moderationNote && item.status !== "published" && <div className="moderation-note"><strong>Комментарий модератора</strong><p>{item.moderationNote}</p></div>}<section className="comments-block"><h3>Комментарии · {comments.length}</h3>{currentUser && <form onSubmit={async (event) => { event.preventDefault(); const text = comment.trim(); if (!text) return; const response = await fetch("/api/comments", { method: "POST", credentials: "same-origin", headers: { "content-type": "application/json" }, body: JSON.stringify({ kind: "occasion", id: item.id, text }) }); const data = await response.json() as { comment?: MaterialComment; error?: string }; if (!response.ok) { window.alert(data.error || "Не удалось отправить комментарий"); return; } if (data.comment) setComments((current) => [...current, data.comment!]); setComment(""); }}><SpoilerTextarea rows={3} value={comment} onChange={setComment} placeholder="Написать комментарий" /><button className="primary-button" type="submit">Отправить</button></form>}{comments.map((entry) => { const author = users.find((user) => user.id === entry.userId); return <article key={entry.id}><button type="button" onClick={() => onOpenUser?.(entry.userId)}>{author?.profile.name ?? "Пользователь"}</button><small>{formatCommentDate(entry.createdAt)}</small><p><SpoilerText text={entry.text} /></p></article>; })}</section></section></div>;
+  return <div className="modal-backdrop" onMouseDown={routedClose}><section className="event-modal occasion-modal" onMouseDown={(event) => event.stopPropagation()}>
+    <ModalIconActions onEdit={onEdit} onDelete={onDelete} onReport={onReport} onClose={routedClose} />
+    <EventStatusLabel status={item.status} />
+    <span className="section-subtitle">{occasionLabels[item.type]}{schedule && <><i className="occasion-blue-dot" aria-hidden="true" />{schedule}</>}</span>
+    <h2>{labels.primary}: {item.primaryText}</h2>
+    <p><strong>{labels.audience}:</strong> {item.audienceText}</p>
+    {item.type === "invite" && <div className="occasion-place"><strong>{item.meetingCity}{item.meetingAddress ? ` · ${item.meetingAddress}` : ""}</strong>{item.meetingMapUrl && <a className="outline-button" href={item.meetingMapUrl} target="_blank" rel="noreferrer">Посмотреть в 2ГИС</a>}</div>}
+    {item.linkedBooks?.map((book) => <button className="event-modal-book" type="button" key={book.id} onClick={() => onOpenBook?.(book.id)}><div className={`event-modal-book-cover library-cover-${book.coverTone ?? "blue"}`} style={book.coverUrl ? { backgroundImage: `url(${book.coverUrl})` } : undefined}>{!book.coverUrl && book.title.slice(0, 1)}</div><span><strong>{book.title}</strong><small>{book.author}</small><p>{book.annotation || "Аннотация пока не добавлена."}</p></span></button>)}
+    <p>Автор: <button className="inline-user-link" type="button" onClick={() => onOpenUser?.(item.creatorId)}>{item.creatorName}</button></p>
+    {item.moderationNote && item.status !== "published" && <div className="moderation-note"><strong>Комментарий модератора</strong><p>{item.moderationNote}</p></div>}
+    <MaterialEngagement kind="occasion" materialId={item.id} ownerId={item.creatorId} currentUser={currentUser} users={users} onOpenUser={onOpenUser} />
+  </section></div>;
 }
 
 export function MaterialPreviewCard({ item, index = 0, owner, book, likesCount, commentsCount, onOpen, onOpenUser, onOpenBook }: { item: ReadingItem; index?: number; owner?: DemoUser; book?: LibraryBook | AuthorBook; likesCount?: number; commentsCount?: number; onOpen: () => void; onOpenUser: (id: number) => void; onOpenBook?: () => void }) {
@@ -323,8 +386,8 @@ export function PublisherNewsCard({ item, owner, onOpen, onOpenUser }: { item: P
   return <article className="excerpt-card material-preview-card publisher-news-card material-clickable-card" role="button" tabIndex={0} onClick={onOpen} onKeyDown={(event) => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); onOpen(); } }}><span className="quote-mark">“</span><p>{item.previewText}</p><div className="excerpt-footer"><div className={`author-dot ${owner?.avatarUrl ? "has-photo" : ""}`} style={owner?.avatarUrl ? { backgroundImage: `url(${owner.avatarUrl})` } : undefined}>{!owner?.avatarUrl && (owner?.profile.name ?? "И").slice(0, 1)}</div><div><h3>Новость издательства{item.isAdult ? " · 18+" : ""}</h3><span><button className="inline-user-link" type="button" onClick={(event) => { event.stopPropagation(); onOpenUser(item.ownerId); }}>{owner?.profile.name ?? "Издательство"}</button> · {item.title}</span></div></div></article>;
 }
 
-export function PublisherNewsModal({ item, owner, onClose, onOpenUser, onReport }: { item: PublisherNews; owner?: DemoUser; onClose: () => void; onOpenUser: (id: number) => void; onReport?: () => void }) {
-  return <div className="modal-backdrop" onMouseDown={onClose}><section className="reading-modal publisher-news-modal" onMouseDown={(event) => event.stopPropagation()}><ModalIconActions onReport={onReport} onClose={onClose} /><span className="section-subtitle">Новости издательства · {item.createdAt}</span><h2>{item.title}</h2><p className="reading-preview">{item.previewText}</p><div className="reading-text rich-reading-text" dangerouslySetInnerHTML={{ __html: sanitizeRichHtml(item.bodyHtml) }} /><p>Издательство: <button className="inline-user-link" type="button" onClick={() => onOpenUser(item.ownerId)}>{owner?.profile.name ?? "Издательство"}</button></p></section></div>;
+export function PublisherNewsModal({ item, owner, currentUser, users = [], onClose, onOpenUser, onEdit, onDelete, onReport }: { item: PublisherNews; owner?: DemoUser; currentUser?: DemoUser; users?: DemoUser[]; onClose: () => void; onOpenUser: (id: number) => void; onEdit?: () => void; onDelete?: () => void; onReport?: () => void }) {
+  return <div className="modal-backdrop" onMouseDown={onClose}><section className="reading-modal publisher-news-modal" onMouseDown={(event) => event.stopPropagation()}><ModalIconActions onEdit={onEdit} onDelete={onDelete} onReport={onReport} onClose={onClose} /><span className="section-subtitle">Новости издательства · {item.createdAt}</span><h2>{item.title}</h2><p className="reading-preview">{item.previewText}</p><div className="reading-text rich-reading-text" dangerouslySetInnerHTML={{ __html: sanitizeRichHtml(item.bodyHtml) }} /><p>Издательство: <button className="inline-user-link" type="button" onClick={() => onOpenUser(item.ownerId)}>{owner?.profile.name ?? "Издательство"}</button></p><MaterialEngagement kind="publisher_news" materialId={item.id} ownerId={item.ownerId} currentUser={currentUser} users={users.length ? users : owner ? [owner] : []} onOpenUser={onOpenUser} /></section></div>;
 }
 
 export function HomeScopeSwitch({ city, country, value, onChange }: { city: string; country?: string; value: "country" | "city"; onChange: (value: "country" | "city") => void }) {
@@ -537,7 +600,7 @@ export function UserProfileModal({ user, viewer, users, events = [], occasions =
         {openedReadingItem && <ReadingModal item={openedReadingItem} currentUser={viewer} users={users} likedUserIds={likes[`${openedReadingItem.kind}-${openedReadingItem.id}`] ?? []} onToggleLike={() => onToggleLike(openedReadingItem)} onComment={(text) => onComment(openedReadingItem, text)} onClose={() => setOpenedReview(null)} onReport={!viewer.isAdmin ? () => openReportDialog({ kind: openedReadingItem.kind, id: openedReadingItem.id }) : undefined} onOpenUser={onOpenUser} relationship={relationship} isFollowing={isFollowing} onAddFriend={onAddFriend} onFollow={onFollow} onEdit={viewer.isAdmin ? () => void editReadingMaterial(openedReadingItem, viewer) : undefined} onDelete={viewer.isAdmin ? () => void deleteReadingMaterial(openedReadingItem, viewer) : undefined} />}
         {openedAuthorBook && <UnifiedBookModal book={openedAuthorBook} users={users} nested onClose={() => setOpenedAuthorBook(null)} onOpenUser={onOpenUser} onReport={!viewer.isAdmin ? () => openReportDialog({ kind: "book", id: openedAuthorBook.id }) : undefined} />}
         {openedPublisherEvent && <EventModal item={openedPublisherEvent} users={users} currentUserId={viewer.id} onOpenUser={onOpenUser} onClose={() => setOpenedPublisherEvent(null)} onReport={!viewer.isAdmin ? () => openReportDialog({ kind: "event", id: openedPublisherEvent.id }) : undefined} />}
-        {openedPublisherNews && <div className="nested-modal-backdrop" onMouseDown={() => setOpenedPublisherNews(null)}><section className="reading-modal publisher-news-modal" onMouseDown={(event) => event.stopPropagation()}><ModalIconActions onReport={!viewer.isAdmin ? () => openReportDialog({ kind: "publisher_news", id: openedPublisherNews.id }) : undefined} onClose={() => setOpenedPublisherNews(null)} /><span className="section-subtitle">Новости издательства · {openedPublisherNews.createdAt}</span><h2>{openedPublisherNews.title}</h2><p className="reading-preview">{openedPublisherNews.previewText}</p><div dangerouslySetInnerHTML={{ __html: sanitizeRichHtml(openedPublisherNews.bodyHtml) }} /></section></div>}
+        {openedPublisherNews && <PublisherNewsModal item={openedPublisherNews} owner={user} currentUser={viewer} users={users} onOpenUser={onOpenUser} onReport={!viewer.isAdmin ? () => openReportDialog({ kind: "publisher_news", id: openedPublisherNews.id }) : undefined} onClose={() => setOpenedPublisherNews(null)} />}
         {openedOccasion && <OccasionModal item={openedOccasion} currentUser={viewer} users={users} onOpenUser={onOpenUser} onOpenBook={(bookId) => setOpenedBook(catalogFromUsers(users).find((book) => book.id === bookId) ?? null)} onClose={() => setOpenedOccasion(null)} onReport={!viewer.isAdmin ? () => openReportDialog({ kind: "occasion", id: openedOccasion.id }) : undefined} />}
       </section>
     </div>
@@ -1353,29 +1416,38 @@ export function RichTextEditor({ value, onChange, catalog = [] }: { value: strin
   </div>;
 }
 
-export function PublisherNewsTab({ news, setNews, owner, canCreate = true }: {
+export function PublisherNewsEditor({ item, catalog = [], onClose, onSave }: { item: PublisherNews; catalog?: (LibraryBook | AuthorBook)[]; onClose: () => void; onSave: (item: PublisherNews) => void }) {
+  const [form, setForm] = useState(item);
+  return <div className="modal-backdrop" onMouseDown={onClose}><section className="review-editor blog-editor-modal publisher-news-editor" onMouseDown={(event) => event.stopPropagation()}><button className="modal-close" type="button" onClick={onClose}>×</button><h2>{item.id ? "Редактировать новость издательства" : "Добавить новость издательства"}</h2><form className="book-fields" onSubmit={(event) => { event.preventDefault(); const bodyHtml = sanitizeRichHtml(form.bodyHtml ?? ""); onSave({ ...form, title: form.title.trim(), previewText: form.previewText.trim().slice(0, 500), bodyHtml, body: bodyHtml.replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim() }); }}>
+    <label>Заголовок<input required value={form.title} onChange={(event) => setForm({ ...form, title: event.target.value })} /></label>
+    <div className="blog-composer"><span className="field-label blog-composer-title">Что нового?</span><label className="blog-text-block blog-preview-field"><span className="blog-block-title">Эта часть текста будет видна на главной странице и внутри новости</span><textarea required rows={7} maxLength={500} placeholder="Напишите то, что привлечет читателей" value={form.previewText} onChange={(event) => setForm({ ...form, previewText: event.target.value })} /><small className={form.previewText.length >= 500 ? "limit-reached" : ""}>{form.previewText.length}/500</small></label><div className="blog-text-block blog-rich-block"><span className="blog-block-title">Эта часть текста будет видна только внутри новости</span><RichTextEditor value={form.bodyHtml ?? ""} onChange={(bodyHtml) => setForm({ ...form, bodyHtml })} catalog={catalog} /></div></div>
+    <label className="adult-material-checkbox"><input type="checkbox" checked={Boolean(form.isAdult)} onChange={(event) => setForm({ ...form, isAdult: event.target.checked })} />Новость не предназначена для лиц младше 18 лет</label>
+    <div className="form-actions"><button type="button" onClick={onClose}>Отмена</button><button className="primary-button" type="submit">Сохранить</button></div>
+  </form></section></div>;
+}
+
+export function PublisherNewsTab({ news, setNews, owner, users = [owner], canCreate = true }: {
   news: PublisherNews[];
   setNews: React.Dispatch<React.SetStateAction<PublisherNews[]>>;
   owner: DemoUser;
+  users?: DemoUser[];
   canCreate?: boolean;
 }) {
   const [editing, setEditing] = useState<PublisherNews | null | undefined>(undefined);
   const [opened, setOpened] = useState<PublisherNews | null>(null);
   const empty = { id: 0, ownerId: owner.id, title: "", previewText: "", bodyHtml: "", body: "", isAdult: false, createdAt: new Date().toLocaleDateString("ru-RU") };
   const [form, setForm] = useState<PublisherNews>(empty);
-  const begin = (item: PublisherNews | null) => { setForm(item ? { ...item } : { ...empty, id: Date.now() }); setEditing(item); };
-  const save = (event: FormEvent) => {
-    event.preventDefault();
-    const body = form.bodyHtml.replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim();
-    const value = { ...form, title: form.title.trim(), previewText: form.previewText.trim().slice(0, 500), body };
+  const begin = (item: PublisherNews | null) => { setForm(item ? { ...item } : { ...empty }); setEditing(item); };
+  const save = (value: PublisherNews) => {
+    if (!value.id) value = { ...value, id: Date.now() };
     setNews((current) => current.some((item) => item.id === value.id) ? current.map((item) => item.id === value.id ? value : item) : [value, ...current]);
     setEditing(undefined);
   };
   return <div className="publisher-news-tab">
     <div className="profile-title-row"><div><h1>Новости издательства</h1><p>{news.length} публикаций</p></div>{canCreate && <button className="primary-button" type="button" onClick={() => begin(null)}>＋ Добавить новость</button>}</div>
     {news.length ? <div className="publisher-news-grid">{news.map((item) => <article className="material-clickable-card" role="button" tabIndex={0} key={item.id} onClick={() => setOpened(item)} onKeyDown={(event) => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); setOpened(item); } }}><span className="section-subtitle">{item.createdAt}{item.isAdult ? " · 18+" : ""}</span><h3>{item.title}</h3><p>{item.previewText}</p></article>)}</div> : <div className="profile-tab-placeholder">Новости пока не опубликованы.</div>}
-    {opened && <div className="modal-backdrop" onMouseDown={() => setOpened(null)}><section className="reading-modal publisher-news-modal" onMouseDown={(event) => event.stopPropagation()}><ModalIconActions onEdit={canCreate ? () => { begin(opened); setOpened(null); } : undefined} onDelete={canCreate ? () => { if (window.confirm(`Удалить новость «${opened.title}»?`)) { setNews((current) => current.filter((item) => item.id !== opened.id)); setOpened(null); } } : undefined} onClose={() => setOpened(null)} /><span className="section-subtitle">Новости издательства · {opened.createdAt}</span><h2>{opened.title}</h2><p className="reading-preview">{opened.previewText}</p><div dangerouslySetInnerHTML={{ __html: sanitizeRichHtml(opened.bodyHtml) }} /></section></div>}
-    {editing !== undefined && <div className="modal-backdrop" onMouseDown={() => setEditing(undefined)}><section className="review-editor publisher-news-editor" onMouseDown={(event) => event.stopPropagation()}><button className="modal-close" type="button" onClick={() => setEditing(undefined)}>×</button><h2>{editing ? "Редактировать новость" : "Добавить новость"}</h2><form onSubmit={save}><label>Заголовок<input required value={form.title} onChange={(event) => setForm({ ...form, title: event.target.value })} /></label><label>Краткий текст<textarea required maxLength={500} rows={5} value={form.previewText} onChange={(event) => setForm({ ...form, previewText: event.target.value })} /></label><small>{form.previewText.length}/500</small><label>Полный текст<RichTextEditor value={form.bodyHtml} onChange={(bodyHtml) => setForm({ ...form, bodyHtml })} /></label><label className="adult-material-checkbox"><input type="checkbox" checked={Boolean(form.isAdult)} onChange={(event) => setForm({ ...form, isAdult: event.target.checked })} />Новость не предназначена для лиц младше 18 лет</label><div className="form-actions"><button type="button" onClick={() => setEditing(undefined)}>Отмена</button><button className="primary-button" type="submit">Сохранить новость</button></div></form></section></div>}
+    {opened && <PublisherNewsModal item={opened} owner={owner} currentUser={owner} users={users} onOpenUser={() => undefined} onEdit={canCreate ? () => { begin(opened); setOpened(null); } : undefined} onDelete={canCreate ? () => { if (window.confirm(`Удалить новость «${opened.title}»?`)) { setNews((current) => current.filter((item) => item.id !== opened.id)); setOpened(null); } } : undefined} onClose={() => setOpened(null)} />}
+    {editing !== undefined && <PublisherNewsEditor item={form} catalog={catalogFromUsers(users)} onClose={() => setEditing(undefined)} onSave={save} />}
   </div>;
 }
 
@@ -1425,8 +1497,9 @@ export function AdminExcerptEditor({ excerpt, writerBooks, onClose, onSave }: { 
 export function AdminCatalogOverlay({ item, users, onClose, onEdit, onDelete }: { item: AdminCatalogItem; users: DemoUser[]; onClose: () => void; onEdit: () => void; onDelete: () => void }) {
   const admin = users.find((user) => user.isAdmin);
   if (item.kind === "book") return <UnifiedBookModal book={item.source} users={users} onClose={onClose} onEdit={onEdit} onDelete={onDelete} />;
-  if (item.kind === "event") return <EventModal item={item.source} onClose={onClose} onEdit={onEdit} onDelete={onDelete} />;
-  if (item.kind === "occasion") return <OccasionModal item={item.source} onClose={onClose} onEdit={onEdit} onDelete={onDelete} />;
+  if (item.kind === "event") return <EventModal item={item.source} users={users} currentUser={admin} onClose={onClose} onEdit={onEdit} onDelete={onDelete} />;
+  if (item.kind === "occasion") return <OccasionModal item={item.source} users={users} currentUser={admin} onClose={onClose} onEdit={onEdit} onDelete={onDelete} />;
+  if (item.kind === "publisher_news") return <PublisherNewsModal item={item.source} owner={users.find((user) => user.id === item.source.ownerId)} currentUser={admin} users={users} onOpenUser={() => undefined} onClose={onClose} onEdit={onEdit} onDelete={onDelete} />;
   const source = item.source as (UserReview | UserExcerpt) & { ownerId: number; ownerName: string };
   const readingItem: ReadingItem = item.kind === "review"
     ? { id: item.id, kind: "review", title: (source as UserReview).bookTitle, bookAuthor: (source as UserReview).bookAuthor, author: source.ownerName, ownerId: source.ownerId, text: (source as UserReview).fullText, bodyHtml: (source as UserReview).bodyHtml, linkedBookId: (source as UserReview).bookId, preview: (source as UserReview).preview, rating: (source as UserReview).rating, createdAt: (source as UserReview).createdAt, isAdult: (source as UserReview).isAdult }
@@ -1444,5 +1517,6 @@ export function AdminCatalogEditor({ item, users, onClose, onSave }: { item: Adm
   if (item.kind === "excerpt") {
     return <PublicationEditor excerpt={item.source} catalog={catalogFromUsers(users)} onClose={onClose} onSave={(excerpt) => onSave(excerpt)} />;
   }
+  if (item.kind === "publisher_news") return <PublisherNewsEditor item={item.source} catalog={catalogFromUsers(users)} onClose={onClose} onSave={onSave} />;
   return null;
 }

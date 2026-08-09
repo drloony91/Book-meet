@@ -865,7 +865,6 @@ select option {
 }
 
 @media (max-width: 800px) {
-  .workspace.workspace-content-hub > .friends-panel { display: none !important; }
   .workspace.workspace-content-hub { display: block !important; grid-template-columns: none !important; }
   .workspace-content-hub .workspace-main { width: 100%; min-width: 0; }
   .workspace-content-hub .content-scroll { width: 100%; max-width: 100%; }
@@ -1521,6 +1520,7 @@ select option {
 .library-cover-charcoal { background-color: #393c42; }
 .library-cover-plum { background-color: #68435f; }
 .library-cover-blue { background-color: #245b91; }
+.library-cover-mint { color: #183c3a; background-color: #b9ddd4; }
 .library-cover-terracotta { background-color: #b76546; }
 .library-book-copy { padding-top: 13px; }
 .book-format { display: inline-block; margin-bottom: 7px; color: var(--blue); font-size: 8px; font-weight: 800; letter-spacing: .6px; text-transform: uppercase; }
@@ -1704,7 +1704,8 @@ select option {
 .login-book-page-right::after { right: 7px; border-width: 0 1px 0 0; border-radius: 0 16px 16px 0; box-shadow: 3px 0 #f5f1ec, 6px 0 #e3ddd5; }
 .login-book-gutter { position: absolute; z-index: 5; top: 1px; bottom: 1px; left: 50%; width: 22px; pointer-events: none; transform: translateX(-50%); background: linear-gradient(90deg, transparent, rgba(60, 43, 29, .12) 42%, rgba(255,255,255,.7) 50%, rgba(60, 43, 29, .1) 58%, transparent); }
 .auth-form-page { width: 100%; margin: auto 0; backface-visibility: hidden; }
-.login-brand { margin-bottom: 31px; }
+.login-brand-logo { display: block; width: 100%; max-height: 105px; margin: 0 0 24px; object-fit: contain; }
+.mobile-auth-invitation { display: none; }
 .auth-form-page h1 { margin: 0 0 8px; white-space: nowrap; font: 700 29px/1.08 Georgia, serif; }
 .auth-form-page > p { min-height: 34px; margin: 0 0 22px; color: var(--muted); font-size: 12px; line-height: 1.45; }
 .auth-form-page form { display: flex; flex-direction: column; gap: 15px; }
@@ -1880,7 +1881,6 @@ select option {
   .notification-button { width: 38px; height: 38px; }
   .notifications-menu { position: fixed; top: 62px; right: 8px; }
   .workspace { display: block; }
-  .workspace.workspace-content-hub > .friends-panel { display: none; }
   .workspace-main { min-height: 0; }
   .friends-panel { position: static; height: auto; border-right: 0; border-bottom: 1px solid var(--line); }
   .friends-panel.is-empty { display: none; }
@@ -1930,8 +1930,7 @@ select option {
   .login-book { width: calc(100vw - 20px); height: min(520px, calc(100vh - 20px)); min-height: 490px; }
   .login-book-cover { inset: 5px -4px -7px; }
   .login-book-page, .login-turning-face { padding: 24px 15px 20px; }
-  .login-brand { margin-bottom: 23px; font-size: 18px; }
-  .login-brand .brand-mark { width: 28px; height: 33px; font-size: 17px; }
+  .login-brand-logo { max-height: 82px; margin-bottom: 18px; }
   .auth-form-page h1 { font-size: 19px; }
   .auth-form-page > p { min-height: 42px; margin-bottom: 14px; font-size: 10px; }
   .auth-form-page form { gap: 11px; }
@@ -2389,8 +2388,7 @@ select option {
   .avatar-user { width: 38px; height: 38px; }
   .workspace, .workspace.workspace-without-friends { display: block; min-height: calc(100vh - 62px); }
   .workspace-main { width: 100%; }
-  .workspace.workspace-content-hub > .friends-panel { display: none !important; }
-  .content-hub-switch { position: sticky; z-index: 22; top: 66px; width: calc(100% - 16px); margin: 8px auto 0; border-radius: 12px; }
+  .content-hub-switch { position: sticky; z-index: 22; top: 158px; width: calc(100% - 16px); margin: 8px auto 0; border-radius: 12px; }
   .content-hub-switch button { min-height: 38px; padding: 7px 2px; font-size: clamp(8px,2.7vw,10px); }
   .content-scroll, .directory-page { width: 100%; padding: 18px 12px 92px; overflow: visible; }
   .home-content { padding-top: 16px; }
@@ -2455,8 +2453,13 @@ select option {
   .login-book { width: min(430px,calc(100vw - 20px)); height: auto; min-height: min(680px,calc(100dvh - 20px)); }
   .login-book-spread { display: block; }
   .login-book-page { min-height: min(680px,calc(100dvh - 20px)); padding: 34px 24px 26px; }
-  .login-book-page-right, .login-book-gutter { display: none; }
-  .mobile-auth-mode-switch { display: inline-flex; align-self: center; justify-content: center; margin-top: 14px; }
+  .login-book-page-left, .login-book-page-right, .login-book-gutter, .login-turning-page { display: none; }
+  .login-book.mode-login .login-book-page-left, .login-book.mode-register .login-book-page-right { display: flex; width: 100%; border-radius: 17px; box-shadow: none; }
+  .mobile-auth-invitation { display: grid; justify-items: center; gap: 8px; margin-top: 18px; text-align: center; }
+  .mobile-auth-invitation h2 { margin: 0; color: #302a25; font: 700 18px/1.2 Georgia,serif; }
+  .mobile-auth-invitation .auth-switch-button { width: min(230px,100%); margin-top: 0; }
+  .login-book.is-turning.to-register .login-book-page-right { animation: mobile-auth-page-in .58s cubic-bezier(.22,.8,.3,1) both; transform-origin: left center; }
+  .login-book.is-turning.to-login .login-book-page-left { animation: mobile-auth-page-in-reverse .58s cubic-bezier(.22,.8,.3,1) both; transform-origin: right center; }
   .login-book-page-left { width: 100%; border-radius: 17px; box-shadow: none; }
   .auth-form-page h1 { font-size: 25px; }
   .auth-form-page > p { min-height: 0; font-size: 12px; }
@@ -2465,6 +2468,8 @@ select option {
   .login-turning-page { width: 100%; }
   .login-turning-face { padding: 34px 24px 26px; border-radius: 17px !important; }
 }
+@keyframes mobile-auth-page-in { from { opacity: .35; transform: perspective(900px) rotateY(24deg); } to { opacity: 1; transform: perspective(900px) rotateY(0); } }
+@keyframes mobile-auth-page-in-reverse { from { opacity: .35; transform: perspective(900px) rotateY(-24deg); } to { opacity: 1; transform: perspective(900px) rotateY(0); } }
 .occasion-filter-summary span:not(:first-child) { display: none; }
 .profile-home-view-settings { border: 1px solid var(--line); border-radius: 12px; padding: 18px; background: #fff; }
 .profile-home-view-options { display: flex; gap: 8px; flex-wrap: wrap; }
@@ -2574,7 +2579,7 @@ select option {
 
 @media (max-height: 620px) {
   .login-card { height: calc(100vh - 24px); min-height: 0; padding-top: 24px; padding-bottom: 24px; }
-  .login-brand { margin-bottom: 18px; }
+  .login-brand-logo { max-height: 74px; margin-bottom: 14px; }
   .login-mode-switch { margin-bottom: 17px; }
   .auth-form-page > p { margin-bottom: 15px; }
 }

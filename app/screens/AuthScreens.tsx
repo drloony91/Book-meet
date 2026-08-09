@@ -114,11 +114,11 @@ export function LoginScreen({ onLogin, onRegister, initialError = "" }: { onLogi
   function changeMode(nextMode: "login" | "register") {
     if (nextMode === mode || turning) return;
     setTurning(nextMode === "register" ? "to-register" : "to-login");
+    setMode(nextMode);
     setError("");
     setTotp("");
     setTotpRequired(false);
     turnTimer.current = setTimeout(() => {
-      setMode(nextMode);
       setTurning(null);
       turnTimer.current = null;
     }, 1150);
@@ -138,7 +138,7 @@ export function LoginScreen({ onLogin, onRegister, initialError = "" }: { onLogi
 
   function authForm(formMode: "login" | "register") {
     return <div className="auth-form-page">
-      <button className="brand login-brand" type="button" tabIndex={-1}><span className="brand-mark">B</span><span>Book <b>Meet</b></span></button>
+      <img className="login-brand-logo" src="/book-meet-header-logo-v3.png" alt="Book Meet" />
       <h1>{formMode === "login" ? "С возвращением" : "Добро пожаловать"}</h1>
       <p>{formMode === "login" ? "Войдите в свой профиль." : "Начните с e-mail и пароля — анкету заполним дальше."}</p>
       <form onSubmit={submit}>
@@ -151,15 +151,15 @@ export function LoginScreen({ onLogin, onRegister, initialError = "" }: { onLogi
       <div className="auth-provider-actions">
         {providers.google ? <div className="google-provider-button" ref={googleButtonRef} /> : <span>Google-вход будет доступен после добавления ключей сервиса.</span>}
       </div>
-      <button className="outline-button mobile-auth-mode-switch" type="button" onClick={() => changeMode(formMode === "login" ? "register" : "login")}>
-        {formMode === "login" ? "Создать профиль" : "Вернуться ко входу"}
-      </button>
+      <div className="mobile-auth-invitation">
+        <h2>{formMode === "login" ? "Вы у нас впервые?" : "Уже есть профиль?"}</h2>
+        <button className="outline-button auth-switch-button" type="button" onClick={() => changeMode(formMode === "login" ? "register" : "login")}>{formMode === "login" ? "Регистрация" : "Войти"}</button>
+      </div>
     </div>;
   }
 
   function invitation(kind: "new" | "returning", decorative = false) {
     return <div className="auth-book-invitation">
-      <span className="auth-invitation-mark" aria-hidden="true">B</span>
       <h2>{kind === "new" ? "Вы у нас впервые?" : "Уже есть профиль?"}</h2>
       {decorative
         ? <span className="outline-button auth-switch-button auth-switch-placeholder">{kind === "new" ? "Создать профиль" : "Войти в профиль"}</span>
@@ -169,7 +169,7 @@ export function LoginScreen({ onLogin, onRegister, initialError = "" }: { onLogi
 
   return (
     <main className="login-page">
-      <section className={`login-book ${turning ? `is-turning ${turning}` : ""}`} aria-label={visibleMode === "login" ? "Вход в Book Meet" : "Регистрация в Book Meet"}>
+      <section className={`login-book mode-${visibleMode} ${turning ? `is-turning ${turning}` : ""}`} aria-label={visibleMode === "login" ? "Вход в Book Meet" : "Регистрация в Book Meet"}>
         <div className="login-book-cover" aria-hidden="true" />
         <div className="login-book-spread">
           <article className="login-book-page login-book-page-left">{visibleMode === "login" ? authForm("login") : invitation("returning")}</article>

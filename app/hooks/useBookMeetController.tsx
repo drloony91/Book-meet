@@ -59,7 +59,7 @@ import { BootstrapRequestError, loadApplicationData } from "../services/bootstra
 import { conversationKey, finishMinimumLoading } from "./controller-utils";
 import type {
   AdminCatalogItem,
-  AdminMaterialKind,
+  AdminCatalogKind,
   AdminSection,
   AuthResult,
   AuthorBook,
@@ -784,7 +784,7 @@ export function useBookMeetController() {
     setUsers((current) => current.map((user) => user.id === id ? { ...user, profile: { ...user.profile, publisherStatus, publisherModerationNote: note } } : user));
   }
 
-  async function deleteMaterial(kind: AdminMaterialKind, id: number) {
+  async function deleteMaterial(kind: AdminCatalogKind, id: number) {
     const response = await apiFetch(`/api/admin/materials/${kind}/${id}`, { method: "DELETE", credentials: "same-origin" });
     const data = await response.json().catch(() => ({})) as { error?: string };
     if (!response.ok) { window.alert(data.error ?? "Не удалось удалить материал"); return; }
