@@ -55,7 +55,7 @@ export function occasionPayload(body = {}) {
   const meetingAddress = type === "invite" ? String(body.meetingAddress ?? "").trim().slice(0, 255) : "";
   const meetingMapUrl = type === "invite" ? cleanUrl(body.meetingMapUrl) : "";
   const linkedBookId = type === "discuss" ? Number(body.linkedBookId) || undefined : undefined;
-  if (!OCCASION_TYPES.has(type) || !primaryText || !audienceText || !TARGET_GENDERS.has(targetGender) || !TARGET_PROFILE_TYPES.has(targetProfileType) || type !== "invite" && !targetCities.length) {
+  if (!OCCASION_TYPES.has(type) || !primaryText || !audienceText || !TARGET_GENDERS.has(targetGender) || !TARGET_PROFILE_TYPES.has(targetProfileType)) {
     throw Object.assign(new Error("Заполните все поля повода для знакомства"), { statusCode: 400 });
   }
   if (targetCities.some((city) => !CYRILLIC_CITY_PATTERN.test(city))) throw Object.assign(new Error("Выберите города из списка на кириллице"), { statusCode: 400 });

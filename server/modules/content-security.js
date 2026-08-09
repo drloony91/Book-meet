@@ -1,6 +1,6 @@
 import sanitizeHtml from "sanitize-html";
 
-const allowedTags = ["p", "div", "br", "span", "strong", "b", "em", "i", "u", "s", "strike", "ul", "ol", "li", "blockquote", "img"];
+const allowedTags = ["p", "div", "br", "h2", "span", "strong", "b", "em", "i", "u", "s", "strike", "ul", "ol", "li", "blockquote", "img"];
 
 export function validateRichHtml(value) {
   const source = String(value ?? "");

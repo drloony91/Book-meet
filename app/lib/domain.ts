@@ -4,7 +4,7 @@ export function sanitizeRichHtml(value: string) {
   if (typeof document === "undefined" || !value) return "";
   const template = document.createElement("template");
   template.innerHTML = value;
-  const allowed = new Set(["P", "DIV", "BR", "STRONG", "B", "EM", "I", "U", "S", "STRIKE", "UL", "OL", "LI", "SPAN", "IMG"]);
+  const allowed = new Set(["P", "DIV", "BR", "H2", "STRONG", "B", "EM", "I", "U", "S", "STRIKE", "UL", "OL", "LI", "SPAN", "IMG"]);
   const clean = (node: Node) => {
     for (const child of Array.from(node.childNodes)) {
       if (child.nodeType === Node.COMMENT_NODE) { child.remove(); continue; }
@@ -41,6 +41,33 @@ export function sanitizeRichHtml(value: string) {
     }
   };
   clean(template.content);
+  return template.innerHTML;
+}
+
+export function renderRichHtml(value: string, books: Array<LibraryBook | AuthorBook> = []) {
+  const clean = sanitizeRichHtml(value);
+  if (typeof document === "undefined" || !clean || !books.length) return clean;
+  const template = document.createElement("template");
+  template.innerHTML = clean;
+  template.content.querySelectorAll<HTMLElement>(".rich-inline-book[data-book-id]").forEach((card) => {
+    const book = books.find((item) => item.id === Number(card.dataset.bookId));
+    if (!book) return;
+    card.replaceChildren();
+    const cover = document.createElement("span");
+    cover.className = `event-modal-book-cover rich-inline-book-cover library-cover-${book.coverTone || "blue"}`;
+    if (book.coverUrl) cover.style.backgroundImage = `url(${JSON.stringify(book.coverUrl)})`;
+    else cover.textContent = book.title.slice(0, 1);
+    const copy = document.createElement("span");
+    copy.className = "rich-inline-book-copy";
+    const title = document.createElement("strong");
+    title.textContent = book.title;
+    const author = document.createElement("small");
+    author.textContent = book.author;
+    const annotation = document.createElement("p");
+    annotation.textContent = book.annotation || "Аннотация пока не добавлена.";
+    copy.append(title, author, annotation);
+    card.append(cover, copy);
+  });
   return template.innerHTML;
 }
 

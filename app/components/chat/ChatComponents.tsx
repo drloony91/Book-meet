@@ -17,6 +17,8 @@ export function FriendsPanel({
   onSelect,
   onFindFriends,
   onCreateOccasion,
+  collapsed = false,
+  onToggleCollapsed,
   adminMode = false,
 }: {
   friends: Friend[];
@@ -24,6 +26,8 @@ export function FriendsPanel({
   onSelect: (friend: Friend) => void;
   onFindFriends: () => void;
   onCreateOccasion: () => void;
+  collapsed?: boolean;
+  onToggleCollapsed?: () => void;
   adminMode?: boolean;
 }) {
   const [query, setQuery] = useState("");
@@ -35,12 +39,14 @@ export function FriendsPanel({
   const hasSearchablePeople = adminMode ? friends.length > 0 : realFriendCount > 0;
 
   return (
-    <aside className={`friends-panel ${!hasSearchablePeople ? "is-empty" : ""}`} aria-label="Список друзей">
+    <aside className={`friends-panel ${!hasSearchablePeople ? "is-empty" : ""} ${collapsed ? "is-collapsed" : ""}`} aria-label="Список друзей">
       <div className="friends-heading">
         <div>
           <h2>{adminMode ? "Запросы" : "Друзья"} <span>{adminMode ? friends.length : realFriendCount}</span></h2>
         </div>
+        {!adminMode && <button className="friends-find-button" type="button" onClick={onFindFriends}>Найти друзей</button>}
       </div>
+      {!adminMode && <button className="friends-collapse-toggle" type="button" onClick={onToggleCollapsed} aria-label={collapsed ? "Развернуть друзей" : "Свернуть друзей"} title={collapsed ? "Развернуть друзей" : "Свернуть друзей"}><span aria-hidden="true">&lt;</span><span aria-hidden="true">&gt;</span></button>}
       {hasSearchablePeople && (
         <label className="friend-search">
           <span aria-hidden="true">⌕</span>

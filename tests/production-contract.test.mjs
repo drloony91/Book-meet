@@ -249,7 +249,10 @@ test("несколько книг, строгие города и управле
   assert.match(content, />Сначала создать книгу</);
   assert.match(content, /function PublicProfileDetails/);
   assert.match(content, /className="my-events-tab"/);
-  assert.match(header, /Твоё книжное пространство/);
+  assert.doesNotMatch(header, /Твоё книжное пространство/);
+  assert.match(header, />Все книги</);
+  assert.match(header, />Книжные сообщества</);
+  assert.match(header, />Наши партнеры</);
   assert.match(header, />Новинки издательств</);
 });
 
@@ -268,9 +271,12 @@ test("импорт, редакторы, поводы и адаптивный и�
   assert.match(api, /syncMaterialBooks/);
   assert.match(content, /Вставить изображение/);
   assert.match(content, /Вставить книгу/);
+  assert.match(content, /rich-media-tool-button/);
   assert.match(content, /Обсудить книгу/);
   assert.match(content, /comments\?kind=occasion/);
   assert.match(profile, /Импорт каталога книг/);
+  assert.match(profile, /Мои поводы/);
+  assert.match(profile, /activeTab === "occasions"/);
   assert.match(profile, /className="profile-nav"/);
   assert.match(css, /Mobile is a dedicated layout layer/);
   assert.match(css, /\.excerpt-card\.review-preview-card/);

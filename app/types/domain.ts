@@ -79,7 +79,7 @@ export type Excerpt = {
 export type ReadingItem = { id: number; kind: "review" | "excerpt"; title: string; author: string; text: string; ownerId?: number; createdAt?: string; preview?: string; bookAuthor?: string; rating?: number; bodyHtml?: string; linkedBookId?: number; linkedBookIds?: number[]; isAdult?: boolean };
 export type MaterialComment = { id: number; userId: number; text: string; createdAt: string };
 
-export type ProfileTab = "main" | "author-books" | "excerpts" | "publisher-news" | "library" | "wishlist" | "reviews" | "events" | "friends" | "admin" | "settings";
+export type ProfileTab = "main" | "author-books" | "excerpts" | "publisher-news" | "library" | "wishlist" | "reviews" | "events" | "occasions" | "friends" | "admin" | "settings";
 export type LibraryView = "grid" | "list";
 export type ReadingStatus = "want" | "reading" | "read";
 export type BookFormat = "Бумажная" | "Электронная" | "Аудио";

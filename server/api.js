@@ -1839,6 +1839,23 @@ router.patch("/users/me/profile-complete", asyncRoute(async (request, response) 
   response.json({ ok: true });
 }));
 
+router.get("/books/catalog", asyncRoute(async (request, response) => {
+  const [[viewer]] = await getPool().query("SELECT u.role, p.birth_date FROM users u JOIN profiles p ON p.user_id = u.id WHERE u.id = ?", [request.bookMeetUser.id]);
+  const adultViewer = viewer?.role === "admin" || Number(ageFromBirthDate(viewer?.birth_date) ?? -1) >= 18;
+  const [rows] = await getPool().query(
+    `SELECT b.id, b.creator_user_id AS creatorUserId, b.author, b.title, b.isbn, b.publisher, b.genres, b.annotation,
+            b.is_adult AS isAdult, b.cover_path AS coverUrl, b.cover_tone AS coverTone, b.flip_url AS flipUrl,
+            b.created_at AS addedAt, COUNT(DISTINCT CASE WHEN ub.is_author = 0 THEN ub.user_id END) AS popularity
+       FROM books b
+       LEFT JOIN user_books ub ON ub.book_id = b.id
+      WHERE (? = 1 OR b.is_adult = 0)
+      GROUP BY b.id
+      ORDER BY b.title_key, b.author_key`,
+    [adultViewer ? 1 : 0],
+  );
+  response.json({ books: rows.map((row) => ({ ...row, id: Number(row.id), creatorUserId: row.creatorUserId ? Number(row.creatorUserId) : undefined, isAdult: Boolean(row.isAdult), genres: JSON.parse(row.genres || "[]"), popularity: Number(row.popularity || 0), addedAt: new Date(row.addedAt).toISOString() })) });
+}));
+
 router.get("/books", asyncRoute(async (request, response) => {
   const query = String(request.query.q ?? "").trim();
   if (!query) return response.json({ books: [] });

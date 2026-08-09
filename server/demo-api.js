@@ -562,6 +562,21 @@ router.patch("/users/me/profile-complete", (request, response) => {
   response.json({ ok: true });
 });
 
+router.get("/books/catalog", (request, response) => {
+  const viewer = users.find((user) => user.id === request.demoUserId);
+  const adultViewer = Boolean(viewer?.isAdmin || Number(viewer?.profile.age ?? -1) >= 18);
+  const entries = users.flatMap((owner) => [...owner.books, ...(owner.authorBooks ?? [])].map((book) => ({ book, owner })));
+  const unique = new Map();
+  for (const { book, owner } of entries) {
+    if (book.isAdult && !adultViewer) continue;
+    const key = book.catalogBookId ?? book.isbn ?? `${book.author}|${book.title}`.toLocaleLowerCase("ru");
+    const current = unique.get(key);
+    const popularity = users.filter((user) => user.books.some((item) => (item.catalogBookId ?? item.id) === (book.catalogBookId ?? book.id))).length;
+    if (!current || popularity > current.popularity) unique.set(key, { ...book, addedAt: book.addedAt ?? owner.joinedAt ?? new Date().toISOString(), popularity });
+  }
+  response.json({ books: [...unique.values()] });
+});
+
 router.get("/books", (request, response) => {
   const query = String(request.query.q ?? "").trim().toLocaleLowerCase("ru");
   const books = users.flatMap((user) => [...user.books, ...(user.authorBooks ?? [])]);
@@ -1006,7 +1021,7 @@ router.post("/occasions", (request, response) => {
   const catalog = users.flatMap((user) => [...user.books, ...(user.authorBooks ?? [])]);
   const linkedBook = catalog.find((book) => book.id === Number(request.body.linkedBookId));
   const occasion = { id: nextId++, creatorId: request.demoUserId, type: request.body.type, primaryText: String(request.body.primaryText ?? ""), audienceText: String(request.body.audienceText ?? ""), isAdult: Boolean(request.body.isAdult), targetGender: request.body.targetGender, targetCities: structuredClone(request.body.targetCities ?? []), targetProfileType: request.body.targetProfileType, meetingDate: request.body.type === "invite" ? String(request.body.meetingDate ?? "") : undefined, meetingStartTime: request.body.type === "invite" ? String(request.body.meetingStartTime ?? "") || undefined : undefined, meetingEndTime: request.body.type === "invite" ? String(request.body.meetingEndTime ?? "") || undefined : undefined, meetingCity: request.body.type === "invite" ? String(request.body.meetingCity ?? request.body.targetCities?.[0] ?? "") : undefined, meetingCityId: Number(request.body.meetingCityId) || undefined, meetingAddress: request.body.type === "invite" ? String(request.body.meetingAddress ?? "") : undefined, meetingMapUrl: request.body.type === "invite" ? String(request.body.meetingMapUrl ?? "") : undefined, linkedBookId: linkedBook?.id, linkedBooks: linkedBook ? [{ id: linkedBook.id, title: linkedBook.title, author: linkedBook.author, annotation: linkedBook.annotation, coverUrl: linkedBook.coverUrl, coverTone: linkedBook.coverTone }] : [], status: "pending", moderationNote: "", creatorName: creator?.profile.name ?? "", createdAt: new Date().toISOString() };
-  if (!occasion.type || !occasion.primaryText || !occasion.audienceText || !occasion.targetCities.length) return response.status(400).json({ error: "Заполните все поля повода для знакомства" });
+  if (!occasion.type || !occasion.primaryText || !occasion.audienceText) return response.status(400).json({ error: "Заполните все поля повода для знакомства" });
   if (occasion.type === "invite" && (!/^\d{4}-\d{2}-\d{2}$/.test(occasion.meetingDate) || occasion.meetingDate <= new Date().toISOString().slice(0, 10))) return response.status(400).json({ error: "Выберите будущую дату встречи" });
   if (occasion.type === "invite" && occasion.meetingEndTime && !occasion.meetingStartTime) return response.status(400).json({ error: "Время завершения можно указать только после времени начала" });
   if (occasion.type === "invite" && (!occasion.meetingCity || !occasion.meetingAddress)) return response.status(400).json({ error: "Укажите место встречи" });

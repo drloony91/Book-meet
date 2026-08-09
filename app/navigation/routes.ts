@@ -8,6 +8,9 @@ export type MainView =
   | "occasions"
   | "users"
   | "publishing"
+  | "books"
+  | "communities"
+  | "partners"
   | "chat"
   | "profile";
 
@@ -31,6 +34,9 @@ export const mainViewPaths: Record<RoutableMainView, string> = {
   home: "/",
   users: "/users",
   publishing: "/publishing",
+  books: "/books",
+  communities: "/communities",
+  partners: "/partners",
   events: "/events",
   reviews: "/reviews",
   publications: "/blog",
@@ -42,6 +48,9 @@ export const mainViewTitles: Record<RoutableMainView, string> = {
   home: "Book Meet — встречаемся благодаря книгам",
   users: "Пользователи — Book Meet",
   publishing: "Новинки издательств — Book Meet",
+  books: "Все книги — Book Meet",
+  communities: "Книжные сообщества — Book Meet",
+  partners: "Наши партнёры — Book Meet",
   events: "Книжные события — Book Meet",
   reviews: "Рецензии — Book Meet",
   publications: "Публикации — Book Meet",
@@ -58,6 +67,7 @@ export const profileTabPaths = {
   wishlist: "/profile/wishlist",
   reviews: "/profile/reviews",
   events: "/profile/events",
+  occasions: "/profile/occasions",
   friends: "/profile/friends",
   settings: "/profile/settings",
   admin: "/profile/admin",
