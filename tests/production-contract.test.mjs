@@ -271,9 +271,9 @@ test("адаптивный редактор, обложки и мобильна�
   assert.match(controls, /data-material-action="event"/);
   assert.match(controls, /data-material-action="review"/);
   assert.match(styles, /all-books-grid \{ grid-template-columns: repeat\(6,minmax\(0,1fr\)\); grid-auto-rows: 1fr/);
-  assert.match(styles, /all-books-grid \.library-book \{ display: grid; grid-template-rows: auto minmax\(0,1fr\); align-items: start/);
+  assert.match(styles, /all-books-grid \.library-book \{ display: flex; flex-direction: column; align-items: stretch/);
   assert.match(screens, /className="all-books-cover-frame"/);
-  assert.match(styles, /all-books-cover-frame \{ position: relative; width: 100%; height: 0; overflow: hidden; padding-top: 150%/);
+  assert.match(styles, /all-books-cover-frame \{ position: relative; flex: 0 0 auto; width: auto; min-width: 0; max-width: 100%; height: 0; overflow: hidden; padding-top: 150%/);
   assert.match(styles, /all-books-grid \.all-books-cover-frame > \.library-book-cover \{ background-size: cover/);
   assert.match(styles, /organization-directory-filters\.has-community-type \{ grid-template-columns:/);
   assert.match(styles, /reading-stats-mobile-row/);
