@@ -267,6 +267,7 @@ test("адаптивный редактор, обложки и мобильна�
   assert.match(content, /window\.addEventListener\("keydown", close\)/);
   assert.match(content, /reading-stats-mobile-chart/);
   assert.match(controls, /const reader = normalizedProfileType === "Читатель"/);
+  assert.match(controls, /data-material-action="event"/);
   assert.match(controls, /data-material-action="review"/);
   assert.match(styles, /all-books-grid \{ grid-template-columns: repeat\(6,minmax\(0,1fr\)\); grid-auto-rows: 1fr/);
   assert.match(styles, /all-books-grid \.library-book \{ display: grid; grid-template-rows: auto minmax\(0,1fr\); align-items: start/);
