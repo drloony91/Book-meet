@@ -137,6 +137,7 @@ export type UserProfileData = {
   age?: number;
   showBirthDateToFriends?: boolean;
   tabOrder?: ProfileTab[];
+  hiddenProfileTabs?: ProfileTab[];
   homeView?: "classic" | "feed";
   bio: string;
   authorInfluences: string;
@@ -158,6 +159,8 @@ export type UserProfileData = {
   publisherLegalAddress?: string;
   publisherPostalAddress?: string;
   publisherModerationNote?: string;
+  communityType?: string;
+  communityRules?: string;
 };
 export type UserSuspension = { permanent: boolean; until?: string; reason: string };
 export type UserBlock = { blockerId: number; blockedId: number; createdAt?: string };

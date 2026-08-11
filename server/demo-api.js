@@ -2,6 +2,7 @@ import { Router } from "express";
 import { randomBytes } from "node:crypto";
 import QRCode from "qrcode";
 import { generateRecoveryCodes, generateTotpSecret, hashRecoveryCode, recoveryCodeIndex, verifyTotp } from "./security.js";
+import { canCreateFriendRequest, canMessagePair } from "./modules/social-permissions.js";
 
 const router = Router();
 const sessions = new Map();
@@ -523,6 +524,10 @@ router.put("/users/me/state", (request, response) => {
   const user = users.find((item) => item.id === request.demoUserId);
   if (!user) return response.status(404).json({ error: "Пользователь не найден" });
   const profile = request.body?.profile;
+  if (!profile) return response.status(400).json({ error: "Профиль не передан" });
+  const allowedProfileTabs = new Set(["main", "author-books", "excerpts", "publisher-news", "library", "wishlist", "reviews", "events", "occasions", "friends", "admin", "settings"]);
+  const switchingToPublisher = user.profile.type !== "Издатель" && profile?.type === "Издатель";
+  profile.hiddenProfileTabs = Array.isArray(profile?.hiddenProfileTabs) ? [...new Set(profile.hiddenProfileTabs.filter((tab) => allowedProfileTabs.has(tab) && tab !== "main" && tab !== "settings"))] : [];
   const changesCommunitySemantics = user.profile.type !== profile?.type
     && (user.profile.type === "Сообщество" || profile?.type === "Сообщество");
   if (changesCommunitySemantics) {
@@ -543,13 +548,20 @@ router.put("/users/me/state", (request, response) => {
     profile.age = age;
   }
   if (publisher) {
-    const required = [profile.publisherWebsite, profile.bio, profile.publisherLegalName, profile.publisherBin, profile.publisherAccount, profile.publisherBik, profile.publisherBank, profile.publisherLegalAddress, profile.publisherPostalAddress];
-    if (required.some((value) => !String(value ?? "").trim())) return response.status(400).json({ error: "Заполните обязательные поля издательства" });
+    const required = profile.type === "Сообщество"
+      ? [profile.communityType, profile.bio, profile.communityRules]
+      : [profile.publisherWebsite, profile.bio, profile.publisherLegalName, profile.publisherBin, profile.publisherAccount, profile.publisherBik, profile.publisherBank, profile.publisherLegalAddress, profile.publisherPostalAddress];
+    if (required.some((value) => !String(value ?? "").trim())) return response.status(400).json({ error: `Заполните обязательные поля ${profile.type === "Сообщество" ? "сообщества" : "издательства"}` });
     const currentApproved = user.profile.type === profile.type && user.profile.publisherStatus === "approved";
     profile.publisherStatus = currentApproved ? "approved" : "pending";
-    profile.publisherBin = String(profile.publisherBin).replace(/\D/g, "").slice(0, 12);
+    if (profile.type === "Издатель") profile.publisherBin = String(profile.publisherBin).replace(/\D/g, "").slice(0, 12);
+    else Object.assign(profile, { communityType: String(profile.communityType).trim().slice(0, 255), communityRules: String(profile.communityRules).trim(), publisherWebsite: "", publisherSalesLinks: [], publisherLegalName: "", publisherBin: "", publisherAccount: "", publisherBik: "", publisherBank: "", publisherLegalAddress: "", publisherPostalAddress: "" });
   } else {
     profile.publisherStatus = "not_required";
+  }
+  if (switchingToPublisher) {
+    state.friendRequests = state.friendRequests.filter((item) => !((item.fromId === user.id || item.toId === user.id) && !(item.fromId === user.id && users.find((entry) => entry.id === item.toId)?.profile.type === "Сообщество")));
+    state.notifications = state.notifications.filter((item) => !(item.type === "friend_request" && (item.userId === user.id || item.actorId === user.id) && users.find((entry) => entry.id === item.userId)?.profile.type !== "Сообщество"));
   }
   if (profile) user.profile = structuredClone(profile);
   if (request.body?.avatarUrl !== undefined) user.avatarUrl = request.body.avatarUrl || undefined;
@@ -891,6 +903,7 @@ router.post("/social/friend-requests", (request, response) => {
   const target = users.find((user) => user.id === targetId);
   if (!target) return response.status(404).json({ error: "Пользователь не найден" });
   if (target.isAdmin) return response.status(403).json({ error: "Службу поддержки нельзя добавить в друзья" });
+  if (!canCreateFriendRequest(source?.profile.type, target.profile.type, { communityMembership: target.profile.type === "Сообщество" })) return response.status(403).json({ error: "Издательствам недоступны запросы дружбы" });
   if (source?.profile.type === "Сообщество") return response.status(403).json({ error: "Сообщество не может отправлять запросы дружбы" });
   const entry = { id: nextId++, fromId: request.demoUserId, toId: targetId, status: "pending", message: String(request.body.message ?? "") };
   state.friendRequests.push(entry);
@@ -912,6 +925,9 @@ router.post("/social/friends/:targetId/accept", (request, response) => {
   const targetId = Number(request.params.targetId);
   const pending = state.friendRequests.find((item) => item.status === "pending" && item.fromId === targetId && item.toId === request.demoUserId);
   if (!pending) return response.status(404).json({ error: "Предложение дружбы не найдено" });
+  const acceptor = users.find((user) => user.id === request.demoUserId);
+  const requester = users.find((user) => user.id === targetId);
+  if (!canCreateFriendRequest(acceptor?.profile.type, requester?.profile.type, { communityMembership: acceptor?.profile.type === "Сообщество" })) return response.status(403).json({ error: "Издательствам недоступны запросы дружбы" });
   pending.status = "accepted";
   const isCommunity = users.find((user) => user.id === request.demoUserId)?.profile.type === "Сообщество";
   if (isCommunity) {
@@ -962,9 +978,12 @@ router.post("/social/messages", (request, response) => {
   const targetId = Number(request.body.targetId);
   const sender = users.find((user) => user.id === request.demoUserId);
   const target = users.find((user) => user.id === targetId);
+  if (!target) return response.status(404).json({ error: "Пользователь не найден" });
+  const blockedPair = state.blocks.some((item) => [item.blockerId, item.blockedId].includes(request.demoUserId) && [item.blockerId, item.blockedId].includes(targetId));
+  if (blockedPair) return response.status(403).json({ error: "Взаимодействие с пользователем недоступно" });
   const friends = state.friendships.some((item) => [item.userA, item.userB].includes(request.demoUserId) && [item.userA, item.userB].includes(targetId));
   const membership = state.communityMemberships.some((item) => (item.communityId === request.demoUserId && item.memberId === targetId) || (item.communityId === targetId && item.memberId === request.demoUserId));
-  if (!friends && !membership && !sender?.isAdmin && !target?.isAdmin) return response.status(403).json({ error: "Переписка доступна только друзьям, участникам сообщества и службе поддержки" });
+  if (!canMessagePair({ friends, communityMembers: membership, hasAdmin: Boolean(sender?.isAdmin || target?.isAdmin), firstProfileType: sender?.profile.type, secondProfileType: target?.profile.type })) return response.status(403).json({ error: "Переписка доступна только друзьям, участникам сообщества, издательствам и службе поддержки" });
   const body = String(request.body.body ?? "").trim();
   const attachment = request.body.attachment && Number(request.body.attachment.id) ? { kind: String(request.body.attachment.kind), id: Number(request.body.attachment.id) } : undefined;
   if (!body && !attachment) return response.status(400).json({ error: "Сообщение пусто" });

@@ -217,17 +217,61 @@ test("профили и единые карточки материалов им�
   assert.match(page, /useRoutedPopup\(`\/books\/\$\{book\.id\}`/);
 });
 
-test("диалоги маршрутизируются и сохраняют размер при переключении собеседника", async () => {
+test("диалоги маршрутизируются, а выбор из блока друзей открывает компактный поп-ап", async () => {
   const page = await readFrontendSource();
   const routes = await readFile(path.join(root, "app", "navigation", "routes.ts"), "utf8");
   const chat = await readFile(path.join(root, "app", "components", "chat", "ChatComponents.tsx"), "utf8");
   assert.match(routes, /\^\\\/chat\\\/\(\\d\+\)\$/);
   assert.match(routes, /chatMode\?: "compact" \| "expanded"/);
-  assert.match(page, /const expanded = selectedFriend \? chatExpanded : false/);
+  assert.match(page, /chatMode: "compact"/);
+  assert.match(page, /setChatExpanded\(false\)/);
+  assert.match(page, /closest\("\.chat-popup, \.friends-panel"\)/);
   assert.match(page, /window\.history\[isSwitchingChat \? "replaceState" : "pushState"\]/);
   assert.match(page, /chatMode: nextExpanded \? "expanded" : "compact"/);
   assert.match(page, /view === "chat" \? <ChatScreen \/>/);
   assert.match(chat, /expanded \? "chat-expanded" : "chat-compact"/);
+});
+
+test("профили сообществ, видимость меню и издательские разрешения имеют сквозной контракт", async () => {
+  const migration = await readFile(path.join(root, "mysql", "migrations", "025_community_profile_settings.sql"), "utf8");
+  const api = await readFile(path.join(root, "server", "api.js"), "utf8");
+  const demo = await readFile(path.join(root, "server", "demo-api.js"), "utf8");
+  const data = await readFile(path.join(root, "server", "data.js"), "utf8");
+  const profile = await readFile(path.join(root, "app", "screens", "ProfileScreens.tsx"), "utf8");
+  const directory = await readFile(path.join(root, "app", "screens", "UsersDirectoryScreen.tsx"), "utf8");
+  const content = await readFile(path.join(root, "app", "components", "content", "ContentComponents.tsx"), "utf8");
+  assert.match(migration, /community_type VARCHAR\(255\)/);
+  assert.match(migration, /community_rules TEXT/);
+  assert.match(migration, /hidden_profile_tabs LONGTEXT/);
+  assert.match(migration, /DELETE fr[\s\S]+target_profile\.profile_type <> 'Сообщество'/);
+  assert.match(data, /hiddenProfileTabs: parseJson\(row\.hidden_profile_tabs\)/);
+  assert.match(data, /communityType: row\.community_type/);
+  assert.match(api, /tab !== "main" && tab !== "settings"/);
+  assert.match(api, /communityMembership: target\.profile_type === "Сообщество"/);
+  assert.match(api, /canMessagePair\(\{ friends: Boolean\(friendship\)/);
+  assert.match(demo, /canMessagePair\(\{ friends, communityMembers: membership/);
+  assert.match(demo, /const blockedPair = state\.blocks\.some/);
+  assert.match(profile, /placeholder="Например: Книжный клуб"/);
+  assert.match(profile, /Показывать пункты меню профиля/);
+  assert.match(profile, /draggedTab === "main" \|\| target === "main"/);
+  assert.match(directory, /Тип сообщества/);
+  assert.match(content, /const publisherPair =/);
+  assert.match(content, /publisherMode \? \[/);
+});
+
+test("адаптивный редактор, обложки и мобильная статистика закреплены интерфейсом", async () => {
+  const content = await readFile(path.join(root, "app", "components", "content", "ContentComponents.tsx"), "utf8");
+  const styles = await readFile(path.join(root, "app", "globals.css"), "utf8");
+  const controls = await readFile(path.join(root, "app", "components", "content", "ContentHubControls.tsx"), "utf8");
+  assert.match(content, /closest\("\.rich-book-search, \.rich-book-tool"\)/);
+  assert.match(content, /window\.addEventListener\("keydown", close\)/);
+  assert.match(content, /reading-stats-mobile-chart/);
+  assert.match(controls, /profileType === "Читатель" \|\| profileType === "Блогер"/);
+  assert.match(styles, /all-books-grid \.library-book-cover \{ background-size: contain/);
+  assert.match(styles, /reading-stats-mobile-row/);
+  assert.match(styles, /publishing-card-intro > \.avatar/);
+  assert.match(styles, /chat-popup \.chat-actions button:last-child/);
+  assert.match(styles, /\.mobile-friends-backdrop \{ display: none; \}/);
 });
 
 test("Cloudflare/D1 больше не входят в production-конфигурацию", async () => {

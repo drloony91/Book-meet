@@ -5,9 +5,20 @@ import path from "node:path";
 import { plainTextFromHtml, validateRichHtml } from "../server/modules/content-security.js";
 import { imageType } from "../server/modules/image-storage.js";
 import { requestLimitPolicy } from "../server/modules/request-limits.js";
+import { canCreateFriendRequest, canMessagePair } from "../server/modules/social-permissions.js";
 import { ageFromBirthDate } from "../server/data.js";
 
 const root = path.resolve(import.meta.dirname, "..");
+
+test("издательские социальные разрешения проверяются общим предикатом", () => {
+  assert.equal(canCreateFriendRequest("Читатель", "Блогер"), true);
+  assert.equal(canCreateFriendRequest("Издатель", "Читатель"), false);
+  assert.equal(canCreateFriendRequest("Читатель", "Издатель"), false);
+  assert.equal(canCreateFriendRequest("Издатель", "Сообщество", { communityMembership: true }), true);
+  assert.equal(canMessagePair({ firstProfileType: "Читатель", secondProfileType: "Блогер" }), false);
+  assert.equal(canMessagePair({ firstProfileType: "Читатель", secondProfileType: "Издатель" }), true);
+  assert.equal(canMessagePair({ firstProfileType: "Читатель", secondProfileType: "Блогер", friends: true }), true);
+});
 
 test("сервер удаляет опасный HTML, обработчики событий и запрещенные стили", () => {
   const cleaned = validateRichHtml('<p onclick="steal()" style="text-align:center;color:red">Текст<script>alert(1)</script></p><img src=x onerror=steal()>');

@@ -48,12 +48,12 @@ export async function loadUsers(connection = getPool(), viewerId = null) {
     `SELECT u.id, u.username, u.initials, u.color, u.avatar_path, u.role, u.created_at, u.last_seen_at,
             u.deleted_at, u.deletion_expires_at, u.purged_at,
             u.suspension_reason, u.suspended_until, u.suspended_permanently,
-            p.display_name, p.city, p.city_id, c.country_name, p.profile_type, p.gender, p.birth_date, p.show_birth_date_to_friends, p.profile_tab_order, p.home_view,
+            p.display_name, p.city, p.city_id, c.country_name, p.profile_type, p.gender, p.birth_date, p.show_birth_date_to_friends, p.profile_tab_order, p.hidden_profile_tabs, p.home_view,
             p.bio, p.author_influences, p.writing_themes, p.weekend, p.joy, p.talk,
             p.stranger_message, p.favorite_genres, p.disliked_genres,
             p.publisher_status, p.publisher_website, p.publisher_sales_links, p.publisher_legal_name,
             p.publisher_bin, p.publisher_account, p.publisher_bik, p.publisher_bank,
-            p.publisher_legal_address, p.publisher_postal_address, p.publisher_moderation_note
+            p.publisher_legal_address, p.publisher_postal_address, p.publisher_moderation_note, p.community_type, p.community_rules
        FROM users u
        JOIN profiles p ON p.user_id = u.id
        LEFT JOIN cities c ON c.id = p.city_id
@@ -197,6 +197,7 @@ export async function loadUsers(connection = getPool(), viewerId = null) {
         age: Number(row.id) === Number(viewerId) || viewerIsAdmin ? ageFromBirthDate(row.birth_date) ?? undefined : undefined,
         showBirthDateToFriends: Number(row.id) === Number(viewerId) || viewerIsAdmin ? Boolean(row.show_birth_date_to_friends) : undefined,
         tabOrder: parseJson(row.profile_tab_order),
+        hiddenProfileTabs: parseJson(row.hidden_profile_tabs),
         homeView: row.home_view === "classic" ? "classic" : "feed",
         bio: row.bio ?? "",
         authorInfluences: row.author_influences ?? "",
@@ -218,6 +219,8 @@ export async function loadUsers(connection = getPool(), viewerId = null) {
         publisherLegalAddress: viewerIsAdmin || Number(row.id) === Number(viewerId) ? row.publisher_legal_address ?? "" : "",
         publisherPostalAddress: viewerIsAdmin || Number(row.id) === Number(viewerId) ? row.publisher_postal_address ?? "" : "",
         publisherModerationNote: viewerIsAdmin || Number(row.id) === Number(viewerId) ? row.publisher_moderation_note ?? "" : "",
+        communityType: row.community_type ?? "",
+        communityRules: row.community_rules ?? "",
       },
       books: library,
       authorBooks,

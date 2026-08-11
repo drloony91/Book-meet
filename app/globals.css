@@ -2947,3 +2947,46 @@ select {
   .rich-inline-book-copy p { display: none; }
   .content-hub-switch { top: 62px; }
 }
+
+/* Final cascade overrides for the profile/editor fixes. */
+.mobile-friends-backdrop { display: none; }
+.all-books-grid .library-book-cover { background-size: contain; background-position: center; background-repeat: no-repeat; background-color: #f4f1ed; }
+.rich-editor-shell { position: relative; overflow: visible; }
+.rich-editor-toolbar { flex-wrap: nowrap; overflow-x: auto; overflow-y: hidden; }
+.rich-book-search { top: 51px; left: 9px; max-height: min(320px,45vh); overflow-y: auto; }
+.community-profile-fields { display: grid; gap: 18px; }
+.organization-directory-filters { display: grid; gap: 12px; min-width: min(360px,100%); }
+.profile-settings-stack { display: grid; gap: 22px; }
+.profile-settings-stack > section { margin: 0; }
+.profile-settings-stack > section > h2 { margin: 0 0 18px; font: 700 22px/1.2 Georgia,serif; }
+.profile-menu-visibility-settings { border: 1px solid var(--line); border-radius: 12px; padding: 18px; background: #fff; }
+.profile-menu-visibility-list { display: grid; gap: 11px; }
+.profile-menu-visibility-list label { display: flex; gap: 10px; align-items: center; font-weight: 700; }
+.profile-home-view-options { margin-top: 18px; }
+.reading-stats-mobile-chart { display: none; }
+@media (max-width:800px) {
+  .mobile-friends-backdrop { display: block; }
+  .friends-heading { align-items: stretch; }
+  .friends-find-button { align-self: center; }
+  .friend-row, .friends-panel.is-collapsed .friend-row { height: 60px; min-height: 60px; }
+  .friend-row .avatar { width: 34px; height: 34px; min-width: 34px; flex: 0 0 34px; border-radius: 50%; aspect-ratio: 1; }
+  .chat-header, .chat-person, .chat-person > span:last-child { min-width: 0; }
+  .chat-person { flex: 1 1 auto; }
+  .chat-actions { display: flex; flex: 0 0 auto; min-width: 78px; justify-content: flex-end; }
+  .chat-popup .chat-actions button:last-child { display: inline-grid; place-items: center; flex: 0 0 34px; }
+  .publishing-card-intro { grid-template-columns: 52px minmax(0,1fr); gap: 12px; }
+  .publishing-card-intro > .avatar { width: 52px; height: 52px; min-width: 52px; border-radius: 50%; aspect-ratio: 1; }
+  .publishing-card-copy { min-width: 0; }
+  .publishing-card-copy h2, .publishing-card-copy p { overflow-wrap: anywhere; }
+  .rich-editor-toolbar { position: sticky; top: 62px; z-index: 20; }
+  .rich-editor-content { position: relative; z-index: 1; padding-top: 17px; }
+  .rich-book-search { position: absolute; z-index: 30; top: 51px; left: 6px; width: calc(100% - 12px); }
+  .reading-stats-chart { display: none; }
+  .reading-stats-mobile-chart { display: grid; gap: 6px; width: 100%; overflow: hidden; }
+  .reading-stats-mobile-row { display: grid; grid-template-columns: 34px minmax(0,1fr); align-items: center; gap: 7px; min-width: 0; }
+  .reading-stats-mobile-row > span { color: var(--muted); font-size: 10px; font-weight: 800; text-transform: uppercase; }
+  .reading-stats-mobile-row > i { height: 17px; min-width: 0; overflow: hidden; border-radius: 6px; background: #edf2f6; }
+  .reading-stats-mobile-row b { display: block; position: relative; height: 100%; border-radius: 6px; background: var(--blue); }
+  .reading-stats-mobile-row em { position: absolute; left: 5px; top: 1px; color: #fff; font-size: 10px; font-style: normal; }
+  .reading-chart-shell { width: 100%; overflow-x: hidden; }
+}

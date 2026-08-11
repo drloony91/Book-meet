@@ -12,6 +12,7 @@ import { plainTextFromHtml, validateRichHtml } from "./modules/content-security.
 import { previewRemoteCover, saveAvatar, saveCover, saveRemoteCover } from "./modules/image-storage.js";
 import { cleanUrl, eventPayload, knownCities, knownCity, occasionPayload } from "./modules/material-input.js";
 import { createLocationRouter } from "./modules/location-router.js";
+import { canCreateFriendRequest, canMessagePair } from "./modules/social-permissions.js";
 import { clearSessionCookie, clearTransientCookie, createSessionToken, generateRecoveryCodes, generateTotpSecret, hashPassword, hashRecoveryCode, hashSessionToken, isValidEmail, normalizeEmail, normalizeIdentity, readCookie, recoveryCodeIndex, sessionCookie, transientCookie, verifyPassword, verifyTotp } from "./security.js";
 
 const router = Router();
@@ -29,7 +30,7 @@ let googleJwksCache = { expiresAt: 0, savedAt: 0, keys: [] };
 let googleJwksRefreshPromise;
 const realtimeClients = new Set();
 const presenceTouches = new Map();
-const PROFILE_TABS = new Set(["main", "author-books", "excerpts", "publisher-news", "library", "wishlist", "reviews", "events", "friends"]);
+const PROFILE_TABS = new Set(["main", "author-books", "excerpts", "publisher-news", "library", "wishlist", "reviews", "events", "occasions", "friends"]);
 
 function deletionDaysRemaining(value) {
   if (!value) return 0;
@@ -64,10 +65,10 @@ async function purgeDeletedProfile(connection, userId) {
   await connection.query("DELETE FROM reports WHERE reporter_user_id = ? OR target_user_id = ?", [userId, userId]);
   await connection.query(
     `UPDATE profiles SET display_name = 'Удалённый пользователь', city = '', city_id = NULL, gender = 'Не указан', birth_date = NULL,
-            show_birth_date_to_friends = 0, profile_tab_order = NULL, bio = '', author_influences = '', writing_themes = '', weekend = '', joy = '', talk = '',
+            show_birth_date_to_friends = 0, profile_tab_order = NULL, hidden_profile_tabs = NULL, bio = '', author_influences = '', writing_themes = '', weekend = '', joy = '', talk = '',
             stranger_message = '', favorite_genres = '[]', disliked_genres = '[]', publisher_website = NULL, publisher_sales_links = NULL,
             publisher_legal_name = NULL, publisher_bin = NULL, publisher_account = NULL, publisher_bik = NULL, publisher_bank = NULL,
-            publisher_legal_address = NULL, publisher_postal_address = NULL, publisher_moderation_note = NULL WHERE user_id = ?`,
+            publisher_legal_address = NULL, publisher_postal_address = NULL, publisher_moderation_note = NULL, community_type = NULL, community_rules = NULL WHERE user_id = ?`,
     [userId],
   );
   await connection.query(
@@ -1721,6 +1722,9 @@ router.put("/users/me/state", asyncRoute(async (request, response) => {
   const tabOrder = Array.isArray(profile?.tabOrder)
     ? [...new Set(profile.tabOrder.filter((tab) => PROFILE_TABS.has(tab)))]
     : [];
+  const hiddenProfileTabs = Array.isArray(profile?.hiddenProfileTabs)
+    ? [...new Set(profile.hiddenProfileTabs.filter((tab) => PROFILE_TABS.has(tab) && tab !== "main" && tab !== "settings"))]
+    : [];
   await withTransaction(async (connection) => {
     const city = await knownCity(connection, profile.city, profile.cityId);
     const [[currentProfile]] = await connection.query("SELECT profile_type, publisher_status FROM profiles WHERE user_id = ? FOR UPDATE", [userId]);
@@ -1738,8 +1742,10 @@ router.put("/users/me/state", asyncRoute(async (request, response) => {
     const publisherStatus = isOrganization
       ? switchingToPublisher || currentProfile?.publisher_status !== "approved" ? "pending" : "approved"
       : "not_required";
-    const salesLinks = isOrganization ? publisherSalesLinks(profile.publisherSalesLinks) : [];
-    if (isOrganization) {
+    const isCommunity = requestedType === "Сообщество";
+    const isPublisher = requestedType === "Издатель";
+    const salesLinks = isPublisher ? publisherSalesLinks(profile.publisherSalesLinks) : [];
+    if (isPublisher) {
       const requiredPublisherFields = [
         profile.publisherWebsite, profile.bio, profile.publisherLegalName, profile.publisherBin,
         profile.publisherAccount, profile.publisherBik, profile.publisherBank,
@@ -1748,6 +1754,27 @@ router.put("/users/me/state", asyncRoute(async (request, response) => {
       if (requiredPublisherFields.some((value) => !String(value ?? "").trim())) {
         throw Object.assign(new Error(`Заполните обязательные поля ${requestedType === "Сообщество" ? "сообщества" : "издательства"}`), { statusCode: 400 });
       }
+    }
+    if (isCommunity && [profile.communityType, profile.bio, profile.communityRules].some((value) => !String(value ?? "").trim())) {
+      throw Object.assign(new Error("Заполните обязательные поля сообщества"), { statusCode: 400 });
+    }
+    if (isPublisher && currentProfile?.profile_type !== "Издатель") {
+      await connection.query(
+        `DELETE notification FROM notifications notification
+          JOIN profiles recipient_profile ON recipient_profile.user_id = notification.user_id
+         WHERE notification.notification_type = 'friend_request'
+           AND (notification.user_id = ? OR notification.actor_user_id = ?)
+           AND recipient_profile.profile_type <> 'Сообщество'`,
+        [userId, userId],
+      );
+      await connection.query(
+        `DELETE fr FROM friend_requests fr
+          JOIN profiles target_profile ON target_profile.user_id = fr.to_user_id
+         WHERE fr.status = 'pending'
+           AND (fr.from_user_id = ? OR fr.to_user_id = ?)
+           AND NOT (fr.from_user_id = ? AND target_profile.profile_type = 'Сообщество')`,
+        [userId, userId, userId],
+      );
     }
     const [[currentUser]] = await connection.query("SELECT avatar_path FROM users WHERE id = ? FOR UPDATE", [userId]);
     let avatarPath = currentUser?.avatar_path ?? null;
@@ -1760,27 +1787,29 @@ router.put("/users/me/state", asyncRoute(async (request, response) => {
     const initials = profile.name.trim().split(/\s+/).slice(0, 2).map((part) => part[0]).join("").toLocaleUpperCase("ru-RU").slice(0, 4) || "BM";
     await connection.query("UPDATE users SET initials = ?, avatar_path = ? WHERE id = ?", [initials, avatarPath, userId]);
     await connection.query(
-      `UPDATE profiles SET display_name = ?, city = ?, city_id = ?, profile_type = ?, gender = ?, birth_date = ?, show_birth_date_to_friends = ?, profile_tab_order = ?, home_view = ?, bio = ?, author_influences = ?, writing_themes = ?, weekend = ?, joy = ?, talk = ?, stranger_message = ?, favorite_genres = ?, disliked_genres = ?,
+      `UPDATE profiles SET display_name = ?, city = ?, city_id = ?, profile_type = ?, gender = ?, birth_date = ?, show_birth_date_to_friends = ?, profile_tab_order = ?, hidden_profile_tabs = ?, home_view = ?, bio = ?, author_influences = ?, writing_themes = ?, weekend = ?, joy = ?, talk = ?, stranger_message = ?, favorite_genres = ?, disliked_genres = ?,
               publisher_status = ?, publisher_website = ?, publisher_sales_links = ?, publisher_legal_name = ?, publisher_bin = ?, publisher_account = ?, publisher_bik = ?, publisher_bank = ?, publisher_legal_address = ?, publisher_postal_address = ?,
-              publisher_moderation_note = CASE WHEN ? = 'pending' THEN NULL ELSE publisher_moderation_note END
+              community_type = ?, community_rules = ?, publisher_moderation_note = CASE WHEN ? = 'pending' THEN NULL ELSE publisher_moderation_note END
         WHERE user_id = ?`,
       [
         profile.name.trim(), city?.name ?? "", city?.id ?? null, requestedType,
         isOrganization ? "Не указан" : ["Мужской", "Женский", "Не указан"].includes(profile.gender) ? profile.gender : "Не указан",
-        birthDate || null, isOrganization ? 0 : profile.showBirthDateToFriends ? 1 : 0, JSON.stringify(tabOrder), profile.homeView === "classic" ? "classic" : "feed",
+        birthDate || null, isOrganization ? 0 : profile.showBirthDateToFriends ? 1 : 0, JSON.stringify(tabOrder), JSON.stringify(hiddenProfileTabs), profile.homeView === "classic" ? "classic" : "feed",
         profile.bio ?? "", requestedType === "Писатель" ? profile.authorInfluences ?? "" : "", requestedType === "Писатель" ? profile.writingThemes ?? "" : "",
         isOrganization ? "" : profile.weekend ?? "", isOrganization ? "" : profile.joy ?? "",
         isOrganization ? "" : profile.talk ?? "", isOrganization ? "" : profile.strangerMessage ?? "",
         isOrganization ? "[]" : JSON.stringify(profile.favoriteGenres ?? []), isOrganization ? "[]" : JSON.stringify(profile.dislikedGenres ?? []),
-        publisherStatus, isOrganization ? cleanUrl(profile.publisherWebsite) : null,
-        isOrganization ? JSON.stringify(salesLinks) : null,
-        isOrganization ? String(profile.publisherLegalName).trim() : null,
-        isOrganization ? String(profile.publisherBin).replace(/\D/g, "").slice(0, 12) : null,
-        isOrganization ? String(profile.publisherAccount).trim() : null,
-        isOrganization ? String(profile.publisherBik).trim() : null,
-        isOrganization ? String(profile.publisherBank).trim() : null,
-        isOrganization ? String(profile.publisherLegalAddress).trim() : null,
-        isOrganization ? String(profile.publisherPostalAddress).trim() : null,
+        publisherStatus, isPublisher ? cleanUrl(profile.publisherWebsite) : null,
+        isPublisher ? JSON.stringify(salesLinks) : null,
+        isPublisher ? String(profile.publisherLegalName).trim() : null,
+        isPublisher ? String(profile.publisherBin).replace(/\D/g, "").slice(0, 12) : null,
+        isPublisher ? String(profile.publisherAccount).trim() : null,
+        isPublisher ? String(profile.publisherBik).trim() : null,
+        isPublisher ? String(profile.publisherBank).trim() : null,
+        isPublisher ? String(profile.publisherLegalAddress).trim() : null,
+        isPublisher ? String(profile.publisherPostalAddress).trim() : null,
+        isCommunity ? String(profile.communityType).trim().slice(0, 255) : null,
+        isCommunity ? String(profile.communityRules).trim() : null,
         publisherStatus, userId,
       ],
     );
@@ -2681,6 +2710,7 @@ router.post("/social/friend-requests", asyncRoute(async (request, response) => {
     const target = profiles.find((item) => Number(item.id) === targetId);
     if (!target) throw Object.assign(new Error("Пользователь не найден"), { statusCode: 404 });
     if (target.role === "admin") throw Object.assign(new Error("Службу поддержки нельзя добавить в друзья"), { statusCode: 403 });
+    if (!canCreateFriendRequest(source?.profile_type, target.profile_type, { communityMembership: target.profile_type === "Сообщество" })) throw Object.assign(new Error("Издательствам недоступны запросы дружбы"), { statusCode: 403 });
     if (source?.profile_type === "Сообщество") throw Object.assign(new Error("Сообщество не может отправлять запросы дружбы"), { statusCode: 403 });
     const low = Math.min(userId, targetId); const high = Math.max(userId, targetId);
     const [[relationship]] = target.profile_type === "Сообщество"
@@ -2722,6 +2752,7 @@ router.post("/social/friends/:targetId/accept", asyncRoute(async (request, respo
     const sourceProfile = profiles.find((item) => Number(item.user_id) === targetId);
     const membership = currentProfile?.profile_type === "Сообщество";
     await assertUsersCanInteract(connection, userId, targetId);
+    if (!canCreateFriendRequest(currentProfile?.profile_type, sourceProfile?.profile_type, { communityMembership: membership })) throw Object.assign(new Error("Издательствам недоступны запросы дружбы"), { statusCode: 403 });
     if (sourceProfile?.profile_type === "Сообщество") throw Object.assign(new Error("Сообщество не может отправлять запросы дружбы"), { statusCode: 403 });
     const [updated] = await connection.query("UPDATE friend_requests SET status = 'accepted' WHERE status = 'pending' AND from_user_id = ? AND to_user_id = ?", [targetId, userId]);
     if (!updated.affectedRows) throw Object.assign(new Error("Предложение дружбы не найдено"), { statusCode: 404 });
@@ -2822,9 +2853,10 @@ router.post("/social/messages", asyncRoute(async (request, response) => {
     await assertUsersCanInteract(connection, userId, targetId);
     const [[friendship]] = await connection.query("SELECT 1 FROM friendships WHERE user_low_id = ? AND user_high_id = ?", [low, high]);
     const [[membership]] = await connection.query("SELECT 1 FROM community_memberships WHERE (community_user_id = ? AND member_user_id = ?) OR (community_user_id = ? AND member_user_id = ?)", [userId, targetId, targetId, userId]);
-    const [participants] = await connection.query("SELECT id, role FROM users WHERE id IN (?, ?)", [userId, targetId]);
+    const [participants] = await connection.query("SELECT u.id, u.role, p.profile_type FROM users u JOIN profiles p ON p.user_id = u.id WHERE u.id IN (?, ?)", [userId, targetId]);
     const hasAdmin = participants.some((participant) => participant.role === "admin");
-    if (!friendship && !membership && !hasAdmin) throw Object.assign(new Error("Переписка доступна только друзьям, участникам сообщества и службе поддержки"), { statusCode: 403 });
+    const [firstParticipant, secondParticipant] = participants;
+    if (!canMessagePair({ friends: Boolean(friendship), communityMembers: Boolean(membership), hasAdmin, firstProfileType: firstParticipant?.profile_type, secondProfileType: secondParticipant?.profile_type })) throw Object.assign(new Error("Переписка доступна только друзьям, участникам сообщества, издательствам и службе поддержки"), { statusCode: 403 });
     const attachment = await validatedChatAttachment(connection, request.body?.attachment);
     const [created] = await connection.query("INSERT INTO messages (sender_user_id, recipient_user_id, body, attachment_kind, attachment_id) VALUES (?, ?, ?, ?, ?)", [userId, targetId, body, attachment?.kind ?? null, attachment?.id ?? null]);
     const [[actor]] = await connection.query("SELECT display_name FROM profiles WHERE user_id = ?", [userId]);

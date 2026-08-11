@@ -224,7 +224,7 @@ export function useBookMeetController() {
         setView(backgroundRoute?.view ?? "chat");
         setChatExpanded(expanded);
         if (viewer && chatUser) {
-          const mayChat = routeData.friendships.some((item) => (item.userA === viewer.id && item.userB === chatUser.id) || (item.userA === chatUser.id && item.userB === viewer.id)) || routeData.communityMemberships.some((item) => (item.communityId === viewer.id && item.memberId === chatUser.id) || (item.communityId === chatUser.id && item.memberId === viewer.id)) || viewer.isAdmin || chatUser.isAdmin;
+          const mayChat = routeData.friendships.some((item) => (item.userA === viewer.id && item.userB === chatUser.id) || (item.userA === chatUser.id && item.userB === viewer.id)) || routeData.communityMemberships.some((item) => (item.communityId === viewer.id && item.memberId === chatUser.id) || (item.communityId === chatUser.id && item.memberId === viewer.id)) || viewer.isAdmin || chatUser.isAdmin || viewer.profile.type === "Издатель" || chatUser.profile.type === "Издатель";
           if (mayChat) {
             setSelectedFriend({
               id: chatUser.id,
@@ -318,7 +318,8 @@ export function useBookMeetController() {
   const currentFriendUsers = users.filter((user) => friendIds.includes(user.id));
   const currentMembershipUsers = currentUser ? communityMemberships.flatMap((item) => item.communityId === currentUser.id ? [item.memberId] : item.memberId === currentUser.id ? [item.communityId] : []).map((id) => users.find((user) => user.id === id)).filter((user): user is DemoUser => Boolean(user)) : [];
   const adminUser = users.find((user) => user.isAdmin);
-  const friendRows: Friend[] = [...new Map([...currentFriendUsers, ...currentMembershipUsers].map((user) => [user.id, user])).values()].map((user) => {
+  const conversationUsers = currentUser ? users.filter((user) => user.id !== currentUser.id && Object.prototype.hasOwnProperty.call(messages, conversationKey(currentUser.id, user.id)) && (user.profile.type === "Издатель" || currentUser.profile.type === "Издатель")) : [];
+  const friendRows: Friend[] = [...new Map([...currentFriendUsers, ...currentMembershipUsers, ...conversationUsers].map((user) => [user.id, user])).values()].map((user) => {
     const conversation = currentUser ? messages[conversationKey(currentUser.id, user.id)] ?? [] : [];
     const last = [...conversation].reverse().find((message) => !message.system);
     return { id: user.id, name: user.profile.name, type: user.profile.type, city: user.profile.city, initials: user.initials, avatarUrl: user.avatarUrl, color: user.color, online: Boolean(user.online), unread: conversation.filter((message) => message.unread && !message.mine && !message.system).length || undefined, lastMessage: last?.text || (last?.attachment ? "Вложение" : user.profile.type === "Сообщество" || currentUser?.profile.type === "Сообщество" ? "Участник сообщества" : "Теперь вы друзья"), time: last?.time ?? "сейчас", bio: user.profile.bio, books: user.profile.favoriteGenres.join(", ") };
@@ -356,7 +357,7 @@ export function useBookMeetController() {
     if (!selectedFriend || chatExpanded) return;
     const closeOnOutsideInteraction = (event: PointerEvent) => {
       const target = event.target;
-      if (target instanceof Element && target.closest(".chat-popup")) return;
+      if (target instanceof Element && target.closest(".chat-popup, .friends-panel")) return;
       const state = (window.history.state ?? {}) as ChatRouteState;
       if (/^\/chat\/\d+$/.test(normalizedPathname(window.location.pathname)) && state.backgroundPath) {
         const backgroundRoute = appRouteFromPathname(state.backgroundPath);
@@ -596,17 +597,17 @@ export function useBookMeetController() {
   function openChat(userId: number) {
     if (!currentUser) return;
     const user = users.find((item) => item.id === userId);
-    if (!user || (!isFriendPair(currentUser.id, userId) && !isCommunityMemberPair(currentUser.id, userId) && !currentUser.isAdmin && !user.isAdmin)) return;
+    if (!user || (!isFriendPair(currentUser.id, userId) && !isCommunityMemberPair(currentUser.id, userId) && !currentUser.isAdmin && !user.isAdmin && currentUser.profile.type !== "Издатель" && user.profile.type !== "Издатель")) return;
     const currentPath = normalizedPathname(window.location.pathname);
     const currentChatState = (window.history.state ?? {}) as ChatRouteState;
     const isSwitchingChat = /^\/chat\/\d+$/.test(currentPath);
-    const expanded = selectedFriend ? chatExpanded : false;
     const backgroundPath = isSwitchingChat ? (currentChatState.backgroundPath ?? "/chat") : currentPath;
-    const nextState: ChatRouteState = { bookMeetChat: true, backgroundPath, chatMode: expanded ? "expanded" : "compact" };
+    const nextState: ChatRouteState = { bookMeetChat: true, backgroundPath, chatMode: "compact" };
     window.history[isSwitchingChat ? "replaceState" : "pushState"](nextState, "", `/chat/${userId}`);
     notifyAppNavigation();
     document.title = `${user.isAdmin && !currentUser.isAdmin ? "Служба поддержки" : user.profile.name} — Диалоги Book Meet`;
     setSelectedFriend({ id: user.id, name: user.isAdmin && !currentUser.isAdmin ? "Служба поддержки" : user.profile.name, type: user.profile.type, city: user.profile.city, initials: user.initials, avatarUrl: user.avatarUrl, color: user.isAdmin ? "navy" : user.color, online: Boolean(user.online), support: Boolean(user.isAdmin && !currentUser.isAdmin), lastMessage: "", time: "", bio: user.profile.bio, books: user.profile.favoriteGenres.join(", ") });
+    setChatExpanded(false);
     setMobileFriendsOpen(true);
     const key = conversationKey(currentUser.id, userId);
     setMessages((current) => ({ ...current, [key]: (current[key] ?? []).map((message) => message.mine ? message : { ...message, unread: false }) }));
@@ -628,6 +629,8 @@ export function useBookMeetController() {
 
   async function sendFriendRequest(targetId: number, message: string) {
     if (!currentUser || currentUser.id === targetId) return;
+    const target = users.find((user) => user.id === targetId);
+    if (target?.profile.type !== "Сообщество" && (currentUser.profile.type === "Издатель" || target?.profile.type === "Издатель")) return;
     if (friendRequests.some((request) => request.status === "pending" && ((request.fromId === currentUser.id && request.toId === targetId) || (request.fromId === targetId && request.toId === currentUser.id)))) return;
     const response = await apiFetch("/api/social/friend-requests", { method: "POST", credentials: "same-origin", headers: { "content-type": "application/json" }, body: JSON.stringify({ targetId, message }) });
     if (!response.ok) { alert("Не удалось отправить предложение дружбы"); return; }
@@ -1028,7 +1031,7 @@ export function useBookMeetController() {
       {editingOccasion && <div className="modal-backdrop" onMouseDown={() => setEditingOccasion(null)}><section className="event-editor-modal" onMouseDown={(event) => event.stopPropagation()}><OccasionForm initial={editingOccasion} catalog={catalogFromUsers(users)} submitLabel="Отправить повторно" onCancel={() => setEditingOccasion(null)} onSave={resubmitOccasion} /></section></div>}
       {selectedOccasion && <OccasionModal item={selectedOccasion} currentUser={currentUser} users={visibleUsers} onReport={selectedOccasion.creatorId !== currentUser.id && !currentUser.isAdmin ? () => openReportDialog({ kind: "occasion", id: selectedOccasion.id }) : undefined} onOpenUser={openUserProfile} onOpenBook={(bookId) => { setSelectedBook(catalogFromUsers(users).find((book) => book.id === bookId) ?? null); }} onClose={() => setSelectedOccasion(null)} />}
       {roleRestrictionNotice && <div className="modal-backdrop" onMouseDown={() => setRoleRestrictionNotice(null)}><section className="simple-warning-modal" role="dialog" aria-modal="true" onMouseDown={(event) => event.stopPropagation()}><h2>{roleRestrictionNotice === "review" ? "Рецензии могут писать только читатели и блогеры" : roleRestrictionNotice === "excerpt" ? "Публикации могут создавать только писатели и блогеры" : roleRestrictionNotice === "occasion" ? "Организационные профили не могут создавать поводы познакомиться" : "Профиль организации ожидает официального подтверждения"}</h2><button className="primary-button" type="button" autoFocus onClick={() => setRoleRestrictionNotice(null)}>Закрыть</button></section></div>}
-      {profileUser && profileUser.id !== currentUser.id && <UserProfileModal user={profileUser} viewer={currentUser} users={visibleUsers} profileFriends={profileFriendUsers} events={events} occasions={occasions} likes={likes} friendCount={profileFriendUsers.length} relationship={relationshipToProfile} incomingMessage={friendRequests.find((request) => request.status === "pending" && request.fromId === profileUser.id && request.toId === currentUser.id)?.message} isFollowing={isFriendPair(currentUser.id, profileUser.id) || follows.some((follow) => follow.followerId === currentUser.id && follow.targetId === profileUser.id)} canMessage={Boolean(currentUser.isAdmin || profileUser.isAdmin)} blockedByMe={Boolean(profileUser.blockedByMe || currentUser.isAdmin && profileUser.suspension)} onClose={() => setProfileUserId(null)} onAddFriend={(message) => sendFriendRequest(profileUser.id, message)} onCancelFriendRequest={() => cancelFriendRequest(profileUser.id)} onAccept={() => acceptFriend(profileUser.id)} onReject={(comment) => rejectFriend(profileUser.id, comment)} onRemoveFriend={() => removeFriend(profileUser.id)} onOpenChat={() => openChat(profileUser.id)} onFollow={() => followUser(profileUser.id)} onUnfollow={() => unfollowUser(profileUser.id)} onBlock={() => blockUser(profileUser.id)} onUnblock={() => unblockUser(profileUser.id)} onReport={currentUser.isAdmin ? undefined : () => openReportDialog({ kind: "user", id: profileUser.id })} onToggleLike={toggleLike} onComment={addComment} onOpenUser={openUserProfile} />}
+      {profileUser && profileUser.id !== currentUser.id && <UserProfileModal user={profileUser} viewer={currentUser} users={visibleUsers} profileFriends={profileFriendUsers} events={events} occasions={occasions} likes={likes} friendCount={profileFriendUsers.length} relationship={relationshipToProfile} incomingMessage={friendRequests.find((request) => request.status === "pending" && request.fromId === profileUser.id && request.toId === currentUser.id)?.message} isFollowing={(currentUser.profile.type === "Издатель" || profileUser.profile.type === "Издатель" ? false : isFriendPair(currentUser.id, profileUser.id)) || follows.some((follow) => follow.followerId === currentUser.id && follow.targetId === profileUser.id)} canMessage={Boolean(currentUser.isAdmin || profileUser.isAdmin || currentUser.profile.type === "Издатель" || profileUser.profile.type === "Издатель")} blockedByMe={Boolean(profileUser.blockedByMe || currentUser.isAdmin && profileUser.suspension)} onClose={() => setProfileUserId(null)} onAddFriend={(message) => sendFriendRequest(profileUser.id, message)} onCancelFriendRequest={() => cancelFriendRequest(profileUser.id)} onAccept={() => acceptFriend(profileUser.id)} onReject={(comment) => rejectFriend(profileUser.id, comment)} onRemoveFriend={() => removeFriend(profileUser.id)} onOpenChat={() => openChat(profileUser.id)} onFollow={() => followUser(profileUser.id)} onUnfollow={() => unfollowUser(profileUser.id)} onBlock={() => blockUser(profileUser.id)} onUnblock={() => unblockUser(profileUser.id)} onReport={currentUser.isAdmin ? undefined : () => openReportDialog({ kind: "user", id: profileUser.id })} onToggleLike={toggleLike} onComment={addComment} onOpenUser={openUserProfile} />}
       {blockedProfileNotice && <div className="nested-modal-backdrop" onMouseDown={() => setBlockedProfileNotice(false)}><section className="confirm-social-modal" role="alertdialog" aria-modal="true" onMouseDown={(event) => event.stopPropagation()}><h2>Кажется, с вами не хотят общаться</h2><button className="primary-button" type="button" autoFocus onClick={() => setBlockedProfileNotice(false)}>Ок</button></section></div>}
       {adultRestrictionNotice && <div className="nested-modal-backdrop"><section className="adult-restriction-modal" role="alertdialog" aria-modal="true" aria-labelledby="adult-restriction-title"><span className="adult-restriction-mark" aria-hidden="true">18+</span><h2 id="adult-restriction-title">Материал предназначен для лиц старше 18 лет</h2>{adultRestrictionNotice === "missing" && <p>Пожалуйста, укажите дату рождения в профиле, чтобы система могла определить ваш возраст.</p>}<div className="form-actions">{adultRestrictionNotice === "missing" ? <><button className="primary-button" type="button" onClick={() => leaveRestrictedMaterial(true)}>Перейти в профиль</button><button className="outline-button" type="button" onClick={() => leaveRestrictedMaterial(false)}>Выйти</button></> : <button className="primary-button" type="button" autoFocus onClick={() => leaveRestrictedMaterial(false)}>Ок</button>}</div></section></div>}
       <SafetyCenter onChanged={() => void refreshBootstrap()} />

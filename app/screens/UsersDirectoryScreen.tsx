@@ -50,6 +50,8 @@ export function CommunitiesDirectoryPage({ users, events, onOpenUser }: { users:
 
 function OrganizationDirectoryPage({ type, users, events, onOpenUser }: { type: "Издатель" | "Сообщество"; users: DemoUser[]; events: BookEvent[]; onOpenUser: (userId: number) => void }) {
   const [query, setQuery] = useState("");
+  const [communityType, setCommunityType] = useState("all");
+  const communityTypes = useMemo(() => Array.from(new Set(users.filter((user) => user.profile.type === "Сообщество").map((user) => user.profile.communityType?.trim()).filter((value): value is string => Boolean(value)))).sort((a, b) => a.localeCompare(b, "ru")), [users]);
   const organizations = useMemo(() => {
     const needle = query.trim().toLocaleLowerCase("ru");
     const activity = (user: DemoUser) => Math.max(
@@ -61,11 +63,12 @@ function OrganizationDirectoryPage({ type, users, events, onOpenUser }: { type: 
     return users
       .filter((user) => !user.isAdmin && user.profile.type === type && user.profile.publisherStatus === "approved")
       .filter((user) => !needle || user.profile.name.toLocaleLowerCase("ru").includes(needle))
+      .filter((user) => type !== "Сообщество" || communityType === "all" || user.profile.communityType === communityType)
       .sort((first, second) => activity(second) - activity(first) || first.profile.name.localeCompare(second.profile.name, "ru"));
-  }, [events, query, type, users]);
+  }, [communityType, events, query, type, users]);
   const community = type === "Сообщество";
   return <main className="content-scroll directory-page publishing-directory-page">
-    <div className="directory-heading"><div><h1>{community ? "Книжные сообщества" : "Новинки издательств"}</h1><p>{community ? "Книжные клубы, объединения, их книги, события и новости." : "Познакомьтесь с издательствами! Книги, события и новости издательства — в одном месте."}</p></div><label className="books-search-field"><span>Поиск по названию</span><input type="search" value={query} onChange={(event) => setQuery(event.target.value)} placeholder={community ? "Название сообщества" : "Название издательства"} /></label></div>
+    <div className="directory-heading"><div><h1>{community ? "Книжные сообщества" : "Новинки издательств"}</h1><p>{community ? "Книжные клубы, объединения, их книги, события и новости." : "Познакомьтесь с издательствами! Книги, события и новости издательства — в одном месте."}</p></div><div className="organization-directory-filters"><label className="books-search-field"><span>Поиск по названию</span><input type="search" value={query} onChange={(event) => setQuery(event.target.value)} placeholder={community ? "Название сообщества" : "Название издательства"} /></label>{community && <label className="directory-control-field"><span>Тип сообщества</span><CustomSelect ariaLabel="Тип сообщества" value={communityType} onChange={setCommunityType} options={[{ value: "all", label: "Все типы" }, ...communityTypes.map((item) => ({ value: item, label: item }))]} /></label>}</div></div>
     {organizations.length ? <div className="publishing-list">{organizations.map((publisher) => {
       const latestNews = [...(publisher.publisherNews ?? [])].sort((first, second) => Date.parse(second.createdAtValue ?? second.createdAt) - Date.parse(first.createdAtValue ?? first.createdAt))[0];
       const latestEvent = events.filter((item) => item.creatorId === publisher.id && item.status === "published").sort((first, second) => Date.parse(second.createdAt) - Date.parse(first.createdAt))[0];
