@@ -2,6 +2,8 @@ import type { Message } from "../components/chat/types";
 
 export type FriendRequest = { id: number; fromId: number; toId: number; status: "pending" | "accepted" | "rejected"; message?: string; comment?: string };
 export type Friendship = { userA: number; userB: number };
+export type CommunityMembership = { communityId: number; memberId: number };
+export type SocialRelationship = "none" | "outgoing" | "incoming" | "friends" | "community-member";
 export type Follow = { followerId: number; targetId: number };
 export type NotificationType = "friend_request" | "friendship_started" | "friend_rejected" | "new_message" | "new_follower" | "publication" | "friendship_ended" | "like" | "comment" | "event_submitted" | "event_moderation" | "event_reminder" | "author_book_activity" | "gift_reserved";
 export type SocialNotification = { id: number; userId: number; actorId: number; type: NotificationType; title: string; text: string; unread: boolean; createdAt: string; materialId?: number; materialKind?: "review" | "excerpt" | "event" | "occasion" | "publisher_news" | "book" | "wishlist" };
@@ -181,7 +183,7 @@ export type DemoUser = { id: number; username: string; initials: string; color: 
 
 export type AdultMaterialKind = "book" | "review" | "excerpt" | "event" | "occasion";
 export type AdultAccess = { status: "adult" | "minor" | "missing"; restricted: Partial<Record<AdultMaterialKind, number[]>> };
-export type BootstrapData = { activeUserId: number; profileCompleted?: boolean; adultAccess?: AdultAccess; users: DemoUser[]; messages: Record<string, Message[]>; friendRequests: FriendRequest[]; friendships: Friendship[]; follows: Follow[]; notifications: SocialNotification[]; likes: Record<string, number[]>; events?: BookEvent[]; occasions?: Occasion[]; blocks?: UserBlock[]; blockedByUserIds?: number[]; reports?: SafetyReport[] };
+export type BootstrapData = { activeUserId: number; profileCompleted?: boolean; adultAccess?: AdultAccess; users: DemoUser[]; messages: Record<string, Message[]>; friendRequests: FriendRequest[]; friendships: Friendship[]; communityMemberships?: CommunityMembership[]; follows: Follow[]; notifications: SocialNotification[]; likes: Record<string, number[]>; events?: BookEvent[]; occasions?: Occasion[]; blocks?: UserBlock[]; blockedByUserIds?: number[]; reports?: SafetyReport[] };
 export type AuthResult = { error?: string; requiresTotp?: boolean; deletedProfile?: boolean; daysRemaining?: number };
 
 export type AdminMaterialKind = "book" | "review" | "excerpt" | "event" | "occasion";

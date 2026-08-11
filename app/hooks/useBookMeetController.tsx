@@ -68,6 +68,7 @@ import type {
   BookLink,
   BootstrapData,
   CityOption,
+  CommunityMembership,
   DemoUser,
   EventStatus,
   Excerpt,
@@ -75,6 +76,7 @@ import type {
   Follow,
   FriendRequest,
   Friendship,
+  SocialRelationship,
   LibraryBook,
   LibraryView,
   MaterialComment,
@@ -111,6 +113,7 @@ export function useBookMeetController() {
   const [messages, setMessages] = useState<Record<string, Message[]>>({});
   const [friendRequests, setFriendRequests] = useState<FriendRequest[]>([]);
   const [friendships, setFriendships] = useState<Friendship[]>([]);
+  const [communityMemberships, setCommunityMemberships] = useState<CommunityMembership[]>([]);
   const [follows, setFollows] = useState<Follow[]>([]);
   const [notifications, setNotifications] = useState<SocialNotification[]>([]);
   const [notificationsOpen, setNotificationsOpen] = useState(false);
@@ -144,8 +147,8 @@ export function useBookMeetController() {
   const profileSaveQueue = useRef<Promise<void>>(Promise.resolve());
   const currentUser = users.find((user) => user.id === activeUserId) ?? null;
   const visibleUsers = users.filter((user) => currentUser?.isAdmin || user.id === activeUserId || !user.blockedByMe);
-  const routeDataRef = useRef({ users, activeUserId, friendships, notifications, events, occasions, adultAccess });
-  routeDataRef.current = { users, activeUserId, friendships, notifications, events, occasions, adultAccess };
+  const routeDataRef = useRef({ users, activeUserId, friendships, communityMemberships, notifications, events, occasions, adultAccess });
+  routeDataRef.current = { users, activeUserId, friendships, communityMemberships, notifications, events, occasions, adultAccess };
 
   useEffect(() => {
     if (profileUserId && blockedByUserIds.includes(profileUserId)) setBlockedProfileNotice(true);
@@ -170,6 +173,7 @@ export function useBookMeetController() {
         setMessages(data.messages ?? {});
         setFriendRequests(data.friendRequests ?? []);
         setFriendships(data.friendships ?? []);
+        setCommunityMemberships(data.communityMemberships ?? []);
         setFollows(data.follows ?? []);
         setNotifications(data.notifications ?? []);
         setLikes(data.likes ?? {});
@@ -220,7 +224,7 @@ export function useBookMeetController() {
         setView(backgroundRoute?.view ?? "chat");
         setChatExpanded(expanded);
         if (viewer && chatUser) {
-          const mayChat = routeData.friendships.some((item) => (item.userA === viewer.id && item.userB === chatUser.id) || (item.userA === chatUser.id && item.userB === viewer.id)) || viewer.isAdmin || chatUser.isAdmin;
+          const mayChat = routeData.friendships.some((item) => (item.userA === viewer.id && item.userB === chatUser.id) || (item.userA === chatUser.id && item.userB === viewer.id)) || routeData.communityMemberships.some((item) => (item.communityId === viewer.id && item.memberId === chatUser.id) || (item.communityId === chatUser.id && item.memberId === viewer.id)) || viewer.isAdmin || chatUser.isAdmin;
           if (mayChat) {
             setSelectedFriend({
               id: chatUser.id,
@@ -309,10 +313,12 @@ export function useBookMeetController() {
   }, [notificationsOpen]);
 
   const isFriendPair = (firstId: number, secondId: number) => friendships.some((item) => (item.userA === firstId && item.userB === secondId) || (item.userA === secondId && item.userB === firstId));
+  const isCommunityMemberPair = (firstId: number, secondId: number) => communityMemberships.some((item) => (item.communityId === firstId && item.memberId === secondId) || (item.communityId === secondId && item.memberId === firstId));
   const friendIds = currentUser ? friendships.flatMap((item) => item.userA === currentUser.id ? [item.userB] : item.userB === currentUser.id ? [item.userA] : []) : [];
   const currentFriendUsers = users.filter((user) => friendIds.includes(user.id));
+  const currentMembershipUsers = currentUser ? communityMemberships.flatMap((item) => item.communityId === currentUser.id ? [item.memberId] : item.memberId === currentUser.id ? [item.communityId] : []).map((id) => users.find((user) => user.id === id)).filter((user): user is DemoUser => Boolean(user)) : [];
   const adminUser = users.find((user) => user.isAdmin);
-  const friendRows: Friend[] = currentFriendUsers.map((user) => {
+  const friendRows: Friend[] = [...new Map([...currentFriendUsers, ...currentMembershipUsers].map((user) => [user.id, user])).values()].map((user) => {
     const conversation = currentUser ? messages[conversationKey(currentUser.id, user.id)] ?? [] : [];
     const last = [...conversation].reverse().find((message) => !message.system);
     return { id: user.id, name: user.profile.name, type: user.profile.type, city: user.profile.city, initials: user.initials, avatarUrl: user.avatarUrl, color: user.color, online: Boolean(user.online), unread: conversation.filter((message) => message.unread && !message.mine && !message.system).length || undefined, lastMessage: last?.text || (last?.attachment ? "Вложение" : user.profile.type === "Сообщество" || currentUser?.profile.type === "Сообщество" ? "Участник сообщества" : "Теперь вы друзья"), time: last?.time ?? "сейчас", bio: user.profile.bio, books: user.profile.favoriteGenres.join(", ") };
@@ -371,6 +377,7 @@ export function useBookMeetController() {
     setMessages(data.messages ?? {});
     setFriendRequests(data.friendRequests ?? []);
     setFriendships(data.friendships ?? []);
+    setCommunityMemberships(data.communityMemberships ?? []);
     setFollows(data.follows ?? []);
     setNotifications(data.notifications ?? []);
     setLikes(data.likes ?? {});
@@ -589,7 +596,7 @@ export function useBookMeetController() {
   function openChat(userId: number) {
     if (!currentUser) return;
     const user = users.find((item) => item.id === userId);
-    if (!user || (!isFriendPair(currentUser.id, userId) && !currentUser.isAdmin && !user.isAdmin)) return;
+    if (!user || (!isFriendPair(currentUser.id, userId) && !isCommunityMemberPair(currentUser.id, userId) && !currentUser.isAdmin && !user.isAdmin)) return;
     const currentPath = normalizedPathname(window.location.pathname);
     const currentChatState = (window.history.state ?? {}) as ChatRouteState;
     const isSwitchingChat = /^\/chat\/\d+$/.test(currentPath);
@@ -625,7 +632,8 @@ export function useBookMeetController() {
     const response = await apiFetch("/api/social/friend-requests", { method: "POST", credentials: "same-origin", headers: { "content-type": "application/json" }, body: JSON.stringify({ targetId, message }) });
     if (!response.ok) { alert("Не удалось отправить предложение дружбы"); return; }
     setFriendRequests((current) => [...current, { id: Date.now(), fromId: currentUser.id, toId: targetId, status: "pending", message }]);
-    addNotification({ userId: targetId, actorId: currentUser.id, type: "friend_request", title: "Новый друг", text: `${currentUser.profile.name} хочет добавить вас в друзья.${message ? ` Сообщение: ${message}` : ""}` });
+    const targetIsCommunity = users.find((user) => user.id === targetId)?.profile.type === "Сообщество";
+    addNotification({ userId: targetId, actorId: currentUser.id, type: "friend_request", title: targetIsCommunity ? "Новая заявка" : "Новый друг", text: targetIsCommunity ? `${currentUser.profile.name} хочет присоединиться к сообществу.${message ? ` Сообщение: ${message}` : ""}` : `${currentUser.profile.name} хочет добавить вас в друзья.${message ? ` Сообщение: ${message}` : ""}` });
   }
 
   async function cancelFriendRequest(targetId: number) {
@@ -641,15 +649,19 @@ export function useBookMeetController() {
     const response = await apiFetch(`/api/social/friends/${targetId}/accept`, { method: "POST", credentials: "same-origin" });
     if (!response.ok) { alert("Не удалось принять предложение дружбы"); return; }
     setFriendRequests((current) => current.map((request) => request.status === "pending" && request.fromId === targetId && request.toId === currentUser.id ? { ...request, status: "accepted" } : request));
-    setFriendships((current) => [...current, { userA: currentUser.id, userB: targetId }]);
-    setFollows((current) => {
+    const isMembership = currentUser.profile.type === "Сообщество";
+    if (isMembership) setCommunityMemberships((current) => [...current, { communityId: currentUser.id, memberId: targetId }]);
+    else setFriendships((current) => [...current, { userA: currentUser.id, userB: targetId }]);
+    if (!isMembership) setFollows((current) => {
       const pairs = [{ followerId: currentUser.id, targetId }, { followerId: targetId, targetId: currentUser.id }];
       return [...current, ...pairs.filter((pair) => !current.some((follow) => follow.followerId === pair.followerId && follow.targetId === pair.targetId))];
     });
     const key = conversationKey(currentUser.id, targetId);
-    setMessages((current) => ({ ...current, [key]: [{ id: Date.now(), mine: false, system: true, text: "Теперь вы друзья и можете начать переписку", time: "сейчас" }] }));
-    addNotification({ userId: currentUser.id, actorId: targetId, type: "friendship_started", title: "Теперь вы друзья", text: "Теперь вы друзья и можете начать переписку." });
-    addNotification({ userId: targetId, actorId: currentUser.id, type: "friendship_started", title: "Теперь вы друзья", text: "Теперь вы друзья и можете начать переписку." });
+    const systemText = isMembership ? "Заявка принята. Теперь вы участник сообщества и можете начать переписку" : "Теперь вы друзья и можете начать переписку";
+    const notificationTitle = isMembership ? "Заявка принята" : "Теперь вы друзья";
+    setMessages((current) => ({ ...current, [key]: [{ id: Date.now(), mine: false, system: true, text: systemText, time: "сейчас" }] }));
+    addNotification({ userId: currentUser.id, actorId: targetId, type: "friendship_started", title: notificationTitle, text: systemText });
+    addNotification({ userId: targetId, actorId: currentUser.id, type: "friendship_started", title: notificationTitle, text: systemText });
     setProfileUserId(null);
   }
 
@@ -658,7 +670,8 @@ export function useBookMeetController() {
     const response = await apiFetch(`/api/social/friends/${targetId}/reject`, { method: "POST", credentials: "same-origin", headers: { "content-type": "application/json" }, body: JSON.stringify({ comment }) });
     if (!response.ok) { alert("Не удалось отклонить предложение дружбы"); return; }
     setFriendRequests((current) => current.map((request) => request.status === "pending" && request.fromId === targetId && request.toId === currentUser.id ? { ...request, status: "rejected", comment } : request));
-    addNotification({ userId: targetId, actorId: currentUser.id, type: "friend_rejected", title: "Предложение дружбы отклонено", text: `${currentUser.profile.name} отклонил предложение дружбы.${comment.trim() ? ` Комментарий: ${comment.trim()}` : ""} Вы не сможете начать переписку, но можете подписаться на пользователя и следить за обновлениями.` });
+    const isMembership = currentUser.profile.type === "Сообщество";
+    addNotification({ userId: targetId, actorId: currentUser.id, type: "friend_rejected", title: isMembership ? "Заявка отклонена" : "Предложение дружбы отклонено", text: isMembership ? `${currentUser.profile.name} отклонило заявку на вступление.${comment.trim() ? ` Комментарий: ${comment.trim()}` : ""}` : `${currentUser.profile.name} отклонил предложение дружбы.${comment.trim() ? ` Комментарий: ${comment.trim()}` : ""} Вы не сможете начать переписку, но можете подписаться на пользователя и следить за обновлениями.` });
     setProfileUserId(null);
   }
 
@@ -666,8 +679,11 @@ export function useBookMeetController() {
     if (!currentUser) return;
     const response = await apiFetch(`/api/social/friends/${targetId}`, { method: "DELETE", credentials: "same-origin" });
     if (!response.ok) { alert("Не удалось изменить список друзей"); return; }
-    setFriendships((current) => current.filter((item) => !((item.userA === currentUser.id && item.userB === targetId) || (item.userA === targetId && item.userB === currentUser.id))));
-    addNotification({ userId: targetId, actorId: currentUser.id, type: "friendship_ended", title: "Дружба завершена", text: `${currentUser.profile.name} перестал дружить с вами.` });
+    const targetIsCommunity = users.find((user) => user.id === targetId)?.profile.type === "Сообщество";
+    if (targetIsCommunity || currentUser.profile.type === "Сообщество") setCommunityMemberships((current) => current.filter((item) => !((item.communityId === currentUser.id && item.memberId === targetId) || (item.communityId === targetId && item.memberId === currentUser.id))));
+    else setFriendships((current) => current.filter((item) => !((item.userA === currentUser.id && item.userB === targetId) || (item.userA === targetId && item.userB === currentUser.id))));
+    const membershipEnded = targetIsCommunity || currentUser.profile.type === "Сообщество";
+    addNotification({ userId: targetId, actorId: currentUser.id, type: "friendship_ended", title: membershipEnded ? "Участие завершено" : "Дружба завершена", text: membershipEnded ? `${currentUser.profile.name} завершило участие в сообществе.` : `${currentUser.profile.name} перестал дружить с вами.` });
     setProfileUserId(null); if (selectedFriend?.id === targetId) { setSelectedFriend(null); setChatExpanded(false); }
   }
 
@@ -863,7 +879,7 @@ export function useBookMeetController() {
 
   async function logout() {
     await apiFetch("/api/auth/logout", { method: "POST", credentials: "same-origin" }).catch(() => undefined);
-    setUsers([]); setActiveUserId(null); setMessages({}); setFriendRequests([]); setFriendships([]); setFollows([]); setNotifications([]); setLikes({}); setEvents([]); setOccasions([]); setBlocks([]); setBlockedByUserIds([]); setReports([]); setSuspension(null); setCommenters({}); setSelectedFriend(null); setChatExpanded(false);
+    setUsers([]); setActiveUserId(null); setMessages({}); setFriendRequests([]); setFriendships([]); setCommunityMemberships([]); setFollows([]); setNotifications([]); setLikes({}); setEvents([]); setOccasions([]); setBlocks([]); setBlockedByUserIds([]); setReports([]); setSuspension(null); setCommenters({}); setSelectedFriend(null); setChatExpanded(false);
     navigateMainView("home", { replace: true }); setNotificationsOpen(false); setProfileAction(null); setNewlyRegistered(false); setAuthTransition(false);
   }
 
@@ -890,9 +906,9 @@ export function useBookMeetController() {
   if (deletedRecovery) return <main className="deleted-profile-recovery"><section role="dialog" aria-modal="true"><h1>Профиль удалён</h1><p>Данные профиля будут храниться ещё {deletedRecovery.daysRemaining} дн. Вы можете восстановить прежний профиль или создать новый.</p><p>При создании нового профиля прежний будет удалён окончательно. Это действие нельзя отменить.</p>{startupError && <span className="login-error">{startupError}</span>}<div className="form-actions"><button className="primary-button" type="button" onClick={() => void resolveDeletedProfile("restore")}>Восстановить профиль</button><button className="danger-button" type="button" onClick={() => void resolveDeletedProfile("new")}>Создать новый</button></div></section></main>;
   if (suspension) return <main className="suspension-screen"><section><h1>Доступ к сайту ограничен</h1><p>{suspension.permanent ? "Ваш профиль заблокирован бессрочно." : `Ваш профиль заблокирован до ${new Date(suspension.until ?? "").toLocaleString("ru-RU")}.`}</p><p><strong>Причина:</strong> {suspension.reason || "Нарушение правил сайта."}</p></section></main>;
   if (!currentUser) return <LoginScreen onLogin={login} onRegister={register} initialError={startupError} />;
-  const relationshipToProfile = profileUser ? isFriendPair(currentUser.id, profileUser.id) ? "friends" : friendRequests.some((request) => request.status === "pending" && request.fromId === profileUser.id && request.toId === currentUser.id) ? "incoming" : friendRequests.some((request) => request.status === "pending" && request.fromId === currentUser.id && request.toId === profileUser.id) ? "outgoing" : "none" : "none";
-  const profileFriendUsers = profileUser ? friendships.filter((item) => item.userA === profileUser.id || item.userB === profileUser.id).map((item) => users.find((candidate) => candidate.id === (item.userA === profileUser.id ? item.userB : item.userA))).filter((candidate): candidate is DemoUser => Boolean(candidate) && !candidate!.isAdmin) : [];
-  const relationshipFor = (userId: number) => isFriendPair(currentUser.id, userId) ? "friends" as const : friendRequests.some((request) => request.status === "pending" && request.fromId === userId && request.toId === currentUser.id) ? "incoming" as const : friendRequests.some((request) => request.status === "pending" && request.fromId === currentUser.id && request.toId === userId) ? "outgoing" as const : "none" as const;
+  const relationshipToProfile: SocialRelationship = profileUser ? isFriendPair(currentUser.id, profileUser.id) ? "friends" : isCommunityMemberPair(currentUser.id, profileUser.id) ? "community-member" : friendRequests.some((request) => request.status === "pending" && request.fromId === profileUser.id && request.toId === currentUser.id) ? "incoming" : friendRequests.some((request) => request.status === "pending" && request.fromId === currentUser.id && request.toId === profileUser.id) ? "outgoing" : "none" : "none";
+  const profileFriendUsers = profileUser ? (profileUser.profile.type === "Сообщество" ? communityMemberships.filter((item) => item.communityId === profileUser.id).map((item) => users.find((candidate) => candidate.id === item.memberId)) : friendships.filter((item) => item.userA === profileUser.id || item.userB === profileUser.id).map((item) => users.find((candidate) => candidate.id === (item.userA === profileUser.id ? item.userB : item.userA)))).filter((candidate): candidate is DemoUser => Boolean(candidate) && !candidate!.isAdmin) : [];
+  const relationshipFor = (userId: number): SocialRelationship => isFriendPair(currentUser.id, userId) ? "friends" : isCommunityMemberPair(currentUser.id, userId) ? "community-member" : friendRequests.some((request) => request.status === "pending" && request.fromId === userId && request.toId === currentUser.id) ? "incoming" : friendRequests.some((request) => request.status === "pending" && request.fromId === currentUser.id && request.toId === userId) ? "outgoing" : "none";
   const followsUser = (userId: number) => isFriendPair(currentUser.id, userId) || follows.some((follow) => follow.followerId === currentUser.id && follow.targetId === userId);
   const activeChatMessages = selectedFriend ? (messages[conversationKey(currentUser.id, selectedFriend.id)] ?? []).map((message) => ({ ...message, mine: message.senderId === currentUser.id })) : [];
   const closeChat = () => {
@@ -976,7 +992,7 @@ export function useBookMeetController() {
       />
 
       {view === "profile" && !chatExpanded ? (
-        currentUser.isAdmin ? <AdminProfile onBack={closeOwnProfile} onLogout={logout} events={events} occasions={occasions} users={users} reports={reports} onModerateEvent={moderateEvent} onModerateOccasion={moderateOccasion} onModeratePublisher={moderatePublisher} onOpenChat={openChat} onOpenUser={openUserProfile} onRefresh={() => void refreshBootstrap()} onDeleteMaterial={deleteMaterial} /> : <MyProfile key={`${currentUser.id}-${profileAction ?? "profile"}-${profileEditId ?? "new"}-${newlyRegistered ? "setup" : "ready"}`} onBack={closeOwnProfile} user={currentUser} users={users} friends={currentFriendUsers} friendRequests={friendRequests} follows={follows} events={events} occasions={occasions} likes={likes} initialAction={profileAction} initialEditId={profileEditId} initialEditing={newlyRegistered} onProfileCompleted={() => { if (newlyRegistered) void apiFetch("/api/users/me/profile-complete", { method: "PATCH", credentials: "same-origin" }); setNewlyRegistered(false); }} onToggleLike={toggleLike} onComment={addComment} onEditEvent={setEditingEvent} onDeleteEvent={(id) => setEvents((current) => current.filter((item) => item.id !== id))} onEditOccasion={setEditingOccasion} onDeleteOccasion={(id) => setOccasions((current) => current.filter((item) => item.id !== id))} onModerateEvent={moderateEvent} onModerateOccasion={moderateOccasion} onOpenUser={openUserProfile} onOpenChat={openChat} onUserChange={handleUserChange} onHomeViewChange={handleHomeViewChange} onLogout={logout} />
+        currentUser.isAdmin ? <AdminProfile onBack={closeOwnProfile} onLogout={logout} events={events} occasions={occasions} users={users} reports={reports} onModerateEvent={moderateEvent} onModerateOccasion={moderateOccasion} onModeratePublisher={moderatePublisher} onOpenChat={openChat} onOpenUser={openUserProfile} onRefresh={() => void refreshBootstrap()} onDeleteMaterial={deleteMaterial} /> : <MyProfile key={`${currentUser.id}-${profileAction ?? "profile"}-${profileEditId ?? "new"}-${newlyRegistered ? "setup" : "ready"}`} onBack={closeOwnProfile} user={currentUser} users={users} friends={currentUser.profile.type === "Сообщество" ? currentMembershipUsers : currentFriendUsers} friendRequests={friendRequests} follows={follows} events={events} occasions={occasions} likes={likes} initialAction={profileAction} initialEditId={profileEditId} initialEditing={newlyRegistered} onProfileCompleted={() => { if (newlyRegistered) void apiFetch("/api/users/me/profile-complete", { method: "PATCH", credentials: "same-origin" }); setNewlyRegistered(false); }} onToggleLike={toggleLike} onComment={addComment} onEditEvent={setEditingEvent} onDeleteEvent={(id) => setEvents((current) => current.filter((item) => item.id !== id))} onEditOccasion={setEditingOccasion} onDeleteOccasion={(id) => setOccasions((current) => current.filter((item) => item.id !== id))} onModerateEvent={moderateEvent} onModerateOccasion={moderateOccasion} onOpenUser={openUserProfile} onOpenChat={openChat} onUserChange={handleUserChange} onHomeViewChange={handleHomeViewChange} onLogout={logout} />
       ) : (
         <WorkspaceScreen
           friends={currentFriends}

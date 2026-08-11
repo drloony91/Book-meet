@@ -312,6 +312,11 @@ export async function loadBootstrap(userId, options = {}) {
     `SELECT user_low_id, user_high_id FROM friendships
       WHERE user_low_id = ? OR user_high_id = ?`, [userId, userId],
   ) : [[]];
+  // Memberships are public (for community participant tabs), but deliberately
+  // travel separately from friendships so no friend-only consumer can use them.
+  const [communityMembershipRows] = includeCatalog || includeSocial ? await pool.query(
+    "SELECT community_user_id, member_user_id FROM community_memberships",
+  ) : [[]];
   const [wishlistRows] = includeCatalog ? await pool.query(
     `SELECT w.id, w.user_id, w.catalog_book_id, w.author, w.title, w.genres,
             COALESCE(NULLIF(w.annotation, ''), b.annotation, '') AS annotation,
@@ -506,6 +511,7 @@ export async function loadBootstrap(userId, options = {}) {
     reports: reportRows.map((row) => ({ id: Number(row.id), reporterId: Number(row.reporter_user_id), reporterName: row.reporter_name, targetKind: row.target_kind, targetId: Number(row.target_id), targetUserId: row.target_user_id ? Number(row.target_user_id) : undefined, targetUserName: row.target_user_name ?? undefined, targetTitle: row.target_title, reason: row.reason, status: row.status, createdAt: new Date(row.created_at).toISOString(), commentText: row.comment_text ?? undefined, materialKind: row.comment_material_kind ?? undefined, materialId: row.comment_material_id ? Number(row.comment_material_id) : undefined, conversationMessages: conversationByReport.get(Number(row.id)) })),
     friendRequests: requestRows.filter((row) => currentUser?.isAdmin || (!hiddenUserIds.has(Number(row.from_user_id)) && !hiddenUserIds.has(Number(row.to_user_id)))).map((row) => ({ id: Number(row.id), fromId: Number(row.from_user_id), toId: Number(row.to_user_id), status: row.status, message: row.message ?? undefined, comment: row.rejection_comment ?? undefined })),
     friendships: friendshipRows.filter((row) => currentUser?.isAdmin || (!hiddenUserIds.has(Number(row.user_low_id)) && !hiddenUserIds.has(Number(row.user_high_id)))).map((row) => ({ userA: Number(row.user_low_id), userB: Number(row.user_high_id) })),
+    communityMemberships: communityMembershipRows.filter((row) => currentUser?.isAdmin || (!hiddenUserIds.has(Number(row.community_user_id)) && !hiddenUserIds.has(Number(row.member_user_id)))).map((row) => ({ communityId: Number(row.community_user_id), memberId: Number(row.member_user_id) })),
     follows: followRows.filter((row) => currentUser?.isAdmin || (!hiddenUserIds.has(Number(row.follower_user_id)) && !hiddenUserIds.has(Number(row.target_user_id)))).map((row) => ({ followerId: Number(row.follower_user_id), targetId: Number(row.target_user_id) })),
     notifications: notificationRows.filter((row) => currentUser?.isAdmin || !hiddenUserIds.has(Number(row.actor_user_id))).map((row) => ({ id: Number(row.id), userId: Number(row.user_id), actorId: Number(row.actor_user_id ?? row.user_id), type: row.notification_type, title: row.title, text: row.body, unread: Boolean(row.is_unread), createdAt: formatDate(row.created_at), materialId: row.material_id ? Number(row.material_id) : undefined, materialKind: row.material_kind ?? undefined })),
     messages,

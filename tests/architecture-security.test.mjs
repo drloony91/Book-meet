@@ -38,6 +38,33 @@ test("дата рождения, спойлеры и материалы 18+ за
   assert.match(content, /Прочитано глав/);
 });
 
+test("участие в сообществе не является дружбой, а реакции читают только доступные материалы", async () => {
+  const migration = await readFile(path.join(root, "mysql", "migrations", "024_community_memberships.sql"), "utf8");
+  const api = await readFile(path.join(root, "server", "api.js"), "utf8");
+  const data = await readFile(path.join(root, "server", "data.js"), "utf8");
+  const controller = await readFile(path.join(root, "app", "hooks", "useBookMeetController.tsx"), "utf8");
+  const bootstrapRouter = await readFile(path.join(root, "server", "modules", "bootstrap-router.js"), "utf8");
+  assert.match(migration, /CREATE TABLE IF NOT EXISTS community_memberships/);
+  assert.match(migration, /profile_type <> 'Сообщество'/);
+  assert.match(migration, /DELETE f FROM friendships/);
+  assert.match(data, /communityMemberships: communityMembershipRows/);
+  assert.match(api, /INSERT IGNORE INTO community_memberships/);
+  assert.match(api, /changesCommunitySemantics/);
+  assert.match(api, /Перед сменой типа профиля завершите дружбу/);
+  assert.match(api, /DELETE FROM community_memberships WHERE \(community_user_id = \? AND member_user_id = \?\)/);
+  assert.match(api, /ORDER BY u\.id FOR UPDATE/);
+  assert.match(api, /async function lockInteractionPair/);
+  assert.match(api, /await lockInteractionPair\(connection, blockerId, blockedId\)/);
+  assert.match(api, /const membership = currentProfile\?\.profile_type === "Сообщество";\s+await assertUsersCanInteract/);
+  assert.match(api, /router\.get\("\/material-stats"[\s\S]*const pool = getPool\(\)/);
+  assert.match(api, /readableMaterialInfo/);
+  assert.match(api, /interactableMaterialInfo/);
+  assert.match(api, /p\.publisher_status = 'approved'/);
+  assert.match(controller, /isCommunityMemberPair/);
+  assert.match(controller, /community-member/);
+  assert.match(bootstrapRouter, /communityMemberships/);
+});
+
 test("тип загруженного изображения определяется по содержимому, а не по расширению", () => {
   assert.deepEqual(imageType(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a])), { mime: "image/png", extension: "png" });
   assert.deepEqual(imageType(Buffer.from([0xff, 0xd8, 0xff, 0x00])), { mime: "image/jpeg", extension: "jpg" });

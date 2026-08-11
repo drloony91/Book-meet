@@ -399,7 +399,7 @@ test("communities, membership chats and responsive conversation panels share pro
   assert.match(api, /хочет присоединиться к сообществу/);
   assert.match(api, /creator_user_id AS owner_id, title FROM events/);
   assert.match(api, /creator_user_id AS owner_id, primary_text AS title FROM occasions/);
-  assert.match(api, /user_id AS owner_id, title FROM publisher_news/);
+  assert.match(api, /publisher_news n JOIN profiles p/);
   assert.match(profile, /Участники сообщества/);
   assert.match(content, /Присоединиться к сообществу/);
   assert.match(content, /profileFriends/);

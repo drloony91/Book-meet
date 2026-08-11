@@ -105,6 +105,7 @@ const state = {
   messages: {},
   friendRequests: [],
   friendships: [],
+  communityMemberships: [],
   follows: [],
   blocks: [],
   reports: [],
@@ -167,6 +168,8 @@ function bootstrap(userId) {
     const privateVisible = user.id === userId || friend;
     const profile = user.id === userId || viewer?.isAdmin ? user.profile : {
       ...user.profile,
+      birthDate: user.profile.showBirthDateToFriends && friend ? user.profile.birthDate : undefined,
+      showBirthDateToFriends: undefined,
       publisherLegalName: undefined, publisherBin: undefined, publisherAccount: undefined,
       publisherBik: undefined, publisherBank: undefined, publisherLegalAddress: undefined,
       publisherPostalAddress: undefined, publisherModerationNote: undefined,
@@ -266,7 +269,7 @@ router.get("/bootstrap/:section", (request, response) => {
   const keys = {
     session: ["activeUserId", "profileCompleted"],
     catalog: ["activeUserId", "adultAccess", "users", "events", "occasions"],
-    social: ["activeUserId", "blocks", "blockedByUserIds", "friendRequests", "friendships", "follows", "notifications", "messages", "likes"],
+    social: ["activeUserId", "blocks", "blockedByUserIds", "friendRequests", "friendships", "communityMemberships", "follows", "notifications", "messages", "likes"],
     moderation: ["activeUserId", "reports"],
   }[request.params.section];
   if (!keys) return response.status(404).json({ error: "Неизвестный набор данных" });
@@ -400,6 +403,7 @@ router.post("/reports", (request, response) => {
     state.blocks.push({ blockerId: request.demoUserId, blockedId: targetId, createdAt: new Date().toISOString() });
     state.follows = state.follows.filter((item) => ![item.followerId, item.targetId].every((id) => [request.demoUserId, targetId].includes(id)));
     state.friendships = state.friendships.filter((item) => ![item.userA, item.userB].every((id) => [request.demoUserId, targetId].includes(id)));
+    state.communityMemberships = state.communityMemberships.filter((item) => ![item.communityId, item.memberId].every((id) => [request.demoUserId, targetId].includes(id)));
     state.friendRequests = state.friendRequests.filter((item) => ![item.fromId, item.toId].every((id) => [request.demoUserId, targetId].includes(id)));
     delete state.messages[conversationKey(request.demoUserId, targetId)];
   }
@@ -519,6 +523,14 @@ router.put("/users/me/state", (request, response) => {
   const user = users.find((item) => item.id === request.demoUserId);
   if (!user) return response.status(404).json({ error: "Пользователь не найден" });
   const profile = request.body?.profile;
+  const changesCommunitySemantics = user.profile.type !== profile?.type
+    && (user.profile.type === "Сообщество" || profile?.type === "Сообщество");
+  if (changesCommunitySemantics) {
+    const hasRelationship = state.friendships.some((item) => [item.userA, item.userB].includes(user.id))
+      || state.communityMemberships.some((item) => item.communityId === user.id || item.memberId === user.id)
+      || state.friendRequests.some((item) => item.status === "pending" && (item.fromId === user.id || item.toId === user.id));
+    if (hasRelationship) return response.status(409).json({ error: "Перед сменой типа профиля завершите дружбу, участие в сообществах и ожидающие заявки" });
+  }
   const publisher = ["Издатель", "Сообщество"].includes(profile?.type);
   if (!String(profile?.name ?? "").trim() || !Number(profile?.cityId)) return response.status(400).json({ error: "Заполните обязательные поля" });
   if (!publisher && !/^\d{4}-\d{2}-\d{2}$/.test(String(profile?.birthDate ?? ""))) return response.status(400).json({ error: "Укажите корректную дату рождения" });
@@ -899,13 +911,19 @@ router.delete("/social/friend-requests/:targetId", (request, response) => {
 router.post("/social/friends/:targetId/accept", (request, response) => {
   const targetId = Number(request.params.targetId);
   const pending = state.friendRequests.find((item) => item.status === "pending" && item.fromId === targetId && item.toId === request.demoUserId);
-  if (pending) pending.status = "accepted";
-  if (!state.friendships.some((item) => [item.userA, item.userB].includes(targetId) && [item.userA, item.userB].includes(request.demoUserId))) state.friendships.push({ userA: targetId, userB: request.demoUserId });
-  for (const follow of [{ followerId: targetId, targetId: request.demoUserId }, { followerId: request.demoUserId, targetId }]) {
-    if (!state.follows.some((item) => item.followerId === follow.followerId && item.targetId === follow.targetId)) state.follows.push(follow);
+  if (!pending) return response.status(404).json({ error: "Предложение дружбы не найдено" });
+  pending.status = "accepted";
+  const isCommunity = users.find((user) => user.id === request.demoUserId)?.profile.type === "Сообщество";
+  if (isCommunity) {
+    if (!state.communityMemberships.some((item) => item.communityId === request.demoUserId && item.memberId === targetId)) state.communityMemberships.push({ communityId: request.demoUserId, memberId: targetId });
+  } else {
+    if (!state.friendships.some((item) => [item.userA, item.userB].includes(targetId) && [item.userA, item.userB].includes(request.demoUserId))) state.friendships.push({ userA: targetId, userB: request.demoUserId });
+    for (const follow of [{ followerId: targetId, targetId: request.demoUserId }, { followerId: request.demoUserId, targetId }]) {
+      if (!state.follows.some((item) => item.followerId === follow.followerId && item.targetId === follow.targetId)) state.follows.push(follow);
+    }
   }
   const key = conversationKey(targetId, request.demoUserId);
-  const community = users.find((user) => user.id === request.demoUserId)?.profile.type === "Сообщество";
+  const community = isCommunity;
   (state.messages[key] ??= []).push({ id: nextId++, system: true, text: community ? "Заявка принята. Теперь вы участник сообщества и можете начать переписку" : "Теперь вы друзья и можете начать переписку", time: "сейчас" });
   response.json({ ok: true });
 });
@@ -918,7 +936,9 @@ router.post("/social/friends/:targetId/reject", (request, response) => {
 
 router.delete("/social/friends/:targetId", (request, response) => {
   const targetId = Number(request.params.targetId);
-  state.friendships = state.friendships.filter((item) => !([item.userA, item.userB].includes(targetId) && [item.userA, item.userB].includes(request.demoUserId)));
+  const communityId = users.find((user) => user.id === request.demoUserId)?.profile.type === "Сообщество" ? request.demoUserId : users.find((user) => user.id === targetId)?.profile.type === "Сообщество" ? targetId : null;
+  if (communityId) state.communityMemberships = state.communityMemberships.filter((item) => !(item.communityId === communityId && item.memberId === (communityId === targetId ? request.demoUserId : targetId)));
+  else state.friendships = state.friendships.filter((item) => !([item.userA, item.userB].includes(targetId) && [item.userA, item.userB].includes(request.demoUserId)));
   response.json({ ok: true });
 });
 
@@ -943,7 +963,8 @@ router.post("/social/messages", (request, response) => {
   const sender = users.find((user) => user.id === request.demoUserId);
   const target = users.find((user) => user.id === targetId);
   const friends = state.friendships.some((item) => [item.userA, item.userB].includes(request.demoUserId) && [item.userA, item.userB].includes(targetId));
-  if (!friends && !sender?.isAdmin && !target?.isAdmin) return response.status(403).json({ error: "Переписка доступна только друзьям и службе поддержки" });
+  const membership = state.communityMemberships.some((item) => (item.communityId === request.demoUserId && item.memberId === targetId) || (item.communityId === targetId && item.memberId === request.demoUserId));
+  if (!friends && !membership && !sender?.isAdmin && !target?.isAdmin) return response.status(403).json({ error: "Переписка доступна только друзьям, участникам сообщества и службе поддержки" });
   const body = String(request.body.body ?? "").trim();
   const attachment = request.body.attachment && Number(request.body.attachment.id) ? { kind: String(request.body.attachment.kind), id: Number(request.body.attachment.id) } : undefined;
   if (!body && !attachment) return response.status(400).json({ error: "Сообщение пусто" });

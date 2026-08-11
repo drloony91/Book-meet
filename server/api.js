@@ -53,6 +53,7 @@ async function purgeDeletedProfile(connection, userId) {
   await connection.query("DELETE FROM sessions WHERE user_id = ?", [userId]);
   await connection.query("DELETE FROM friend_requests WHERE from_user_id = ? OR to_user_id = ?", [userId, userId]);
   await connection.query("DELETE FROM friendships WHERE user_low_id = ? OR user_high_id = ?", [userId, userId]);
+  await connection.query("DELETE FROM community_memberships WHERE community_user_id = ? OR member_user_id = ?", [userId, userId]);
   await connection.query("DELETE FROM follows WHERE follower_user_id = ? OR target_user_id = ?", [userId, userId]);
   await connection.query("DELETE FROM user_blocks WHERE blocker_user_id = ? OR blocked_user_id = ?", [userId, userId]);
   await connection.query("DELETE FROM event_reminders WHERE user_id = ?", [userId]);
@@ -725,6 +726,7 @@ async function blockExists(connection, firstUserId, secondUserId) {
 }
 
 async function assertUsersCanInteract(connection, firstUserId, secondUserId) {
+  await lockInteractionPair(connection, firstUserId, secondUserId);
   const [[inactive]] = await connection.query(
     "SELECT id FROM users WHERE id IN (?, ?) AND (deleted_at IS NOT NULL OR purged_at IS NOT NULL) LIMIT 1",
     [firstUserId, secondUserId],
@@ -737,15 +739,26 @@ async function assertUsersCanInteract(connection, firstUserId, secondUserId) {
   }
 }
 
+async function lockInteractionPair(connection, firstUserId, secondUserId) {
+  const low = Math.min(Number(firstUserId), Number(secondUserId));
+  const high = Math.max(Number(firstUserId), Number(secondUserId));
+  await connection.query(
+    "SELECT user_id FROM profiles WHERE user_id IN (?, ?) ORDER BY user_id FOR UPDATE",
+    [low, high],
+  );
+}
+
 async function applyPersonalBlock(connection, blockerId, blockedId) {
   if (!blockedId || Number(blockerId) === Number(blockedId)) {
     throw Object.assign(new Error("Некорректный пользователь"), { statusCode: 400 });
   }
   const low = Math.min(Number(blockerId), Number(blockedId));
   const high = Math.max(Number(blockerId), Number(blockedId));
+  await lockInteractionPair(connection, blockerId, blockedId);
   await connection.query("INSERT IGNORE INTO user_blocks (blocker_user_id, blocked_user_id) VALUES (?, ?)", [blockerId, blockedId]);
   await connection.query("DELETE FROM follows WHERE (follower_user_id = ? AND target_user_id = ?) OR (follower_user_id = ? AND target_user_id = ?)", [blockerId, blockedId, blockedId, blockerId]);
   await connection.query("DELETE FROM friendships WHERE user_low_id = ? AND user_high_id = ?", [low, high]);
+  await connection.query("DELETE FROM community_memberships WHERE (community_user_id = ? AND member_user_id = ?) OR (community_user_id = ? AND member_user_id = ?)", [blockerId, blockedId, blockedId, blockerId]);
   await connection.query("DELETE FROM friend_requests WHERE (from_user_id = ? AND to_user_id = ?) OR (from_user_id = ? AND to_user_id = ?)", [blockerId, blockedId, blockedId, blockerId]);
   await connection.query("DELETE FROM messages WHERE (sender_user_id = ? AND recipient_user_id = ?) OR (sender_user_id = ? AND recipient_user_id = ?)", [blockerId, blockedId, blockedId, blockerId]);
   await connection.query("DELETE FROM notifications WHERE (user_id = ? AND actor_user_id = ?) OR (user_id = ? AND actor_user_id = ?)", [blockerId, blockedId, blockedId, blockerId]);
@@ -839,10 +852,29 @@ async function materialInfo(connection, kind, id) {
     return row;
   }
   if (kind === "publisher_news") {
-    const [[row]] = await connection.query("SELECT user_id AS owner_id, title FROM publisher_news WHERE id = ?", [id]);
+    const [[row]] = await connection.query(
+      "SELECT n.user_id AS owner_id, n.title FROM publisher_news n JOIN profiles p ON p.user_id = n.user_id WHERE n.id = ? AND p.profile_type IN ('Издатель', 'Сообщество') AND p.publisher_status = 'approved'",
+      [id],
+    );
     return row;
   }
   return null;
+}
+
+async function readableMaterialInfo(connection, userId, kind, id) {
+  const material = await materialInfo(connection, kind, id);
+  if (!material) throw Object.assign(new Error("Материал не найден"), { statusCode: 404 });
+  await assertAdultMaterialReadable(connection, userId, kind, id);
+  if (await blockExists(connection, userId, Number(material.owner_id))) {
+    throw Object.assign(new Error("Материал недоступен"), { statusCode: 403 });
+  }
+  return material;
+}
+
+async function interactableMaterialInfo(connection, userId, kind, id) {
+  const material = await readableMaterialInfo(connection, userId, kind, id);
+  await assertUsersCanInteract(connection, userId, Number(material.owner_id));
+  return material;
 }
 
 async function validatedChatAttachment(connection, input) {
@@ -1692,6 +1724,16 @@ router.put("/users/me/state", asyncRoute(async (request, response) => {
   await withTransaction(async (connection) => {
     const city = await knownCity(connection, profile.city, profile.cityId);
     const [[currentProfile]] = await connection.query("SELECT profile_type, publisher_status FROM profiles WHERE user_id = ? FOR UPDATE", [userId]);
+    const changesCommunitySemantics = currentProfile?.profile_type !== requestedType
+      && (currentProfile?.profile_type === "Сообщество" || requestedType === "Сообщество");
+    if (changesCommunitySemantics) {
+      const [[friendship]] = await connection.query("SELECT 1 FROM friendships WHERE user_low_id = ? OR user_high_id = ? LIMIT 1", [userId, userId]);
+      const [[membership]] = await connection.query("SELECT 1 FROM community_memberships WHERE community_user_id = ? OR member_user_id = ? LIMIT 1", [userId, userId]);
+      const [[pendingRequest]] = await connection.query("SELECT 1 FROM friend_requests WHERE status = 'pending' AND (from_user_id = ? OR to_user_id = ?) LIMIT 1", [userId, userId]);
+      if (friendship || membership || pendingRequest) {
+        throw Object.assign(new Error("Перед сменой типа профиля завершите дружбу, участие в сообществах и ожидающие заявки"), { statusCode: 409 });
+      }
+    }
     const switchingToPublisher = isOrganization && currentProfile?.profile_type !== requestedType;
     const publisherStatus = isOrganization
       ? switchingToPublisher || currentProfile?.publisher_status !== "approved" ? "pending" : "approved"
@@ -2499,7 +2541,7 @@ router.get("/reactions", asyncRoute(async (request, response) => {
   const kind = String(request.query.kind ?? "");
   const id = Number(request.query.id);
   const pool = getPool();
-  await assertAdultMaterialReadable(pool, request.bookMeetUser.id, kind, id);
+  await readableMaterialInfo(pool, request.bookMeetUser.id, kind, id);
   const [rows] = await pool.query(
     `SELECT ml.user_id FROM material_likes ml
       WHERE ml.material_kind = ? AND ml.material_id = ?
@@ -2518,10 +2560,7 @@ router.post("/reactions", asyncRoute(async (request, response) => {
   const kind = String(request.body?.materialKind ?? "");
   const materialId = Number(request.body?.materialId);
   await withTransaction(async (connection) => {
-    await assertAdultMaterialReadable(connection, userId, kind, materialId);
-    const material = await materialInfo(connection, kind, materialId);
-    if (!material) throw new Error("Материал не найден");
-    await assertUsersCanInteract(connection, userId, Number(material.owner_id));
+    const material = await interactableMaterialInfo(connection, userId, kind, materialId);
     if (Number(material.owner_id) === userId) return;
     await connection.query("INSERT IGNORE INTO material_likes (user_id, material_kind, material_id) VALUES (?, ?, ?)", [userId, kind, materialId]);
     const [[actor]] = await connection.query("SELECT display_name FROM profiles WHERE user_id = ?", [userId]);
@@ -2540,7 +2579,9 @@ router.post("/reactions", asyncRoute(async (request, response) => {
 }));
 
 router.delete("/reactions", asyncRoute(async (request, response) => {
-  await getPool().query("DELETE FROM material_likes WHERE user_id = ? AND material_kind = ? AND material_id = ?", [request.bookMeetUser.id, request.body?.materialKind, Number(request.body?.materialId)]);
+  const pool = getPool();
+  await readableMaterialInfo(pool, request.bookMeetUser.id, String(request.body?.materialKind ?? ""), Number(request.body?.materialId));
+  await pool.query("DELETE FROM material_likes WHERE user_id = ? AND material_kind = ? AND material_id = ?", [request.bookMeetUser.id, request.body?.materialKind, Number(request.body?.materialId)]);
   response.json({ ok: true });
 }));
 
@@ -2548,7 +2589,7 @@ router.get("/comments", asyncRoute(async (request, response) => {
   const kind = String(request.query.kind ?? "");
   const materialId = Number(request.query.id);
   const pool = getPool();
-  await assertAdultMaterialReadable(pool, request.bookMeetUser.id, kind, materialId);
+  await readableMaterialInfo(pool, request.bookMeetUser.id, kind, materialId);
   const [rows] = await pool.query(
     `SELECT mc.id, mc.user_id, mc.body, mc.created_at FROM material_comments mc
       WHERE mc.material_kind = ? AND mc.material_id = ?
@@ -2564,7 +2605,8 @@ router.get("/comments", asyncRoute(async (request, response) => {
 }));
 
 router.get("/material-stats", asyncRoute(async (request, response) => {
-  const [rows] = await getPool().query(
+  const pool = getPool();
+  const [rows] = await pool.query(
     `SELECT material_kind, material_id, user_id
        FROM material_comments mc
       WHERE NOT EXISTS (
@@ -2575,9 +2617,16 @@ router.get("/material-stats", asyncRoute(async (request, response) => {
       GROUP BY material_kind, material_id, user_id`,
     [request.bookMeetUser.id, request.bookMeetUser.id],
   );
+  const readableKeys = new Set();
+  const materials = [...new Map(rows.map((row) => [`${row.material_kind}-${row.material_id}`, row])).values()];
+  for (const row of materials) {
+    const material = await readableMaterialInfo(pool, request.bookMeetUser.id, row.material_kind, Number(row.material_id)).catch(() => null);
+    if (material) readableKeys.add(`${row.material_kind}-${row.material_id}`);
+  }
   const commenters = {};
   for (const row of rows) {
     const key = `${row.material_kind}-${row.material_id}`;
+    if (!readableKeys.has(key)) continue;
     commenters[key] ??= [];
     commenters[key].push(Number(row.user_id));
   }
@@ -2591,10 +2640,7 @@ router.post("/comments", asyncRoute(async (request, response) => {
   const materialId = Number(request.body?.materialId);
   if (!body) return response.status(400).json({ error: "Комментарий пуст" });
   const comment = await withTransaction(async (connection) => {
-    await assertAdultMaterialReadable(connection, userId, kind, materialId);
-    const material = await materialInfo(connection, kind, materialId);
-    if (!material) throw new Error("Материал не найден");
-    await assertUsersCanInteract(connection, userId, Number(material.owner_id));
+    const material = await interactableMaterialInfo(connection, userId, kind, materialId);
     const [created] = await connection.query("INSERT INTO material_comments (user_id, material_kind, material_id, body) VALUES (?, ?, ?, ?)", [userId, kind, materialId, body]);
     if (Number(material.owner_id) !== userId) {
       const [[actor]] = await connection.query("SELECT display_name FROM profiles WHERE user_id = ?", [userId]);
@@ -2627,20 +2673,25 @@ router.post("/social/friend-requests", asyncRoute(async (request, response) => {
   if (!targetId || targetId === userId) return response.status(400).json({ error: "Некорректный пользователь" });
   await withTransaction(async (connection) => {
     await assertUsersCanInteract(connection, userId, targetId);
-    const [[target]] = await connection.query("SELECT u.role, p.profile_type FROM users u JOIN profiles p ON p.user_id = u.id WHERE u.id = ?", [targetId]);
-    const [[source]] = await connection.query("SELECT profile_type FROM profiles WHERE user_id = ?", [userId]);
+    const [profiles] = await connection.query(
+      "SELECT u.id, u.role, p.profile_type, p.display_name FROM users u JOIN profiles p ON p.user_id = u.id WHERE u.id IN (?, ?) ORDER BY u.id FOR UPDATE",
+      [userId, targetId],
+    );
+    const source = profiles.find((item) => Number(item.id) === userId);
+    const target = profiles.find((item) => Number(item.id) === targetId);
     if (!target) throw Object.assign(new Error("Пользователь не найден"), { statusCode: 404 });
     if (target.role === "admin") throw Object.assign(new Error("Службу поддержки нельзя добавить в друзья"), { statusCode: 403 });
     if (source?.profile_type === "Сообщество") throw Object.assign(new Error("Сообщество не может отправлять запросы дружбы"), { statusCode: 403 });
     const low = Math.min(userId, targetId); const high = Math.max(userId, targetId);
-    const [[friendship]] = await connection.query("SELECT 1 FROM friendships WHERE user_low_id = ? AND user_high_id = ?", [low, high]);
-    if (friendship) throw Object.assign(new Error(target.profile_type === "Сообщество" ? "Вы уже состоите в сообществе" : "Вы уже друзья"), { statusCode: 409 });
+    const [[relationship]] = target.profile_type === "Сообщество"
+      ? await connection.query("SELECT 1 FROM community_memberships WHERE community_user_id = ? AND member_user_id = ?", [targetId, userId])
+      : await connection.query("SELECT 1 FROM friendships WHERE user_low_id = ? AND user_high_id = ?", [low, high]);
+    if (relationship) throw Object.assign(new Error(target.profile_type === "Сообщество" ? "Вы уже состоите в сообществе" : "Вы уже друзья"), { statusCode: 409 });
     const [[pending]] = await connection.query("SELECT id FROM friend_requests WHERE status = 'pending' AND ((from_user_id = ? AND to_user_id = ?) OR (from_user_id = ? AND to_user_id = ?)) LIMIT 1", [userId, targetId, targetId, userId]);
     if (pending) throw Object.assign(new Error(target.profile_type === "Сообщество" ? "Заявка на вступление уже отправлена" : "Предложение уже отправлено"), { statusCode: 409 });
     await connection.query("INSERT INTO friend_requests (from_user_id, to_user_id, message) VALUES (?, ?, ?)", [userId, targetId, message || null]);
-    const [[actor]] = await connection.query("SELECT display_name FROM profiles WHERE user_id = ?", [userId]);
     const membership = target.profile_type === "Сообщество";
-    await connection.query("INSERT INTO notifications (user_id, actor_user_id, notification_type, title, body) VALUES (?, ?, 'friend_request', ?, ?)", [targetId, userId, membership ? "Новая заявка" : "Новый друг", membership ? `${actor.display_name} хочет присоединиться к сообществу.` : `${actor.display_name} хочет добавить вас в друзья.`]);
+    await connection.query("INSERT INTO notifications (user_id, actor_user_id, notification_type, title, body) VALUES (?, ?, 'friend_request', ?, ?)", [targetId, userId, membership ? "Новая заявка" : "Новый друг", membership ? `${source.display_name} хочет присоединиться к сообществу.` : `${source.display_name} хочет добавить вас в друзья.`]);
   });
   response.status(201).json({ ok: true });
 }));
@@ -2666,13 +2717,21 @@ router.post("/social/friends/:targetId/accept", asyncRoute(async (request, respo
   const userId = request.bookMeetUser.id;
   const targetId = Number(request.params.targetId);
   await withTransaction(async (connection) => {
-    const [[currentProfile]] = await connection.query("SELECT profile_type FROM profiles WHERE user_id = ?", [userId]);
+    const [profiles] = await connection.query("SELECT user_id, profile_type FROM profiles WHERE user_id IN (?, ?) ORDER BY user_id FOR UPDATE", [userId, targetId]);
+    const currentProfile = profiles.find((item) => Number(item.user_id) === userId);
+    const sourceProfile = profiles.find((item) => Number(item.user_id) === targetId);
     const membership = currentProfile?.profile_type === "Сообщество";
+    await assertUsersCanInteract(connection, userId, targetId);
+    if (sourceProfile?.profile_type === "Сообщество") throw Object.assign(new Error("Сообщество не может отправлять запросы дружбы"), { statusCode: 403 });
     const [updated] = await connection.query("UPDATE friend_requests SET status = 'accepted' WHERE status = 'pending' AND from_user_id = ? AND to_user_id = ?", [targetId, userId]);
     if (!updated.affectedRows) throw Object.assign(new Error("Предложение дружбы не найдено"), { statusCode: 404 });
     const low = Math.min(userId, targetId); const high = Math.max(userId, targetId);
-    await connection.query("INSERT IGNORE INTO friendships (user_low_id, user_high_id) VALUES (?, ?)", [low, high]);
-    await connection.query("INSERT IGNORE INTO follows (follower_user_id, target_user_id) VALUES (?, ?), (?, ?)", [userId, targetId, targetId, userId]);
+    if (membership) {
+      await connection.query("INSERT IGNORE INTO community_memberships (community_user_id, member_user_id) VALUES (?, ?)", [userId, targetId]);
+    } else {
+      await connection.query("INSERT IGNORE INTO friendships (user_low_id, user_high_id) VALUES (?, ?)", [low, high]);
+      await connection.query("INSERT IGNORE INTO follows (follower_user_id, target_user_id) VALUES (?, ?), (?, ?)", [userId, targetId, targetId, userId]);
+    }
     const systemText = membership ? "Заявка принята. Теперь вы участник сообщества и можете начать переписку" : "Теперь вы друзья и можете начать переписку";
     await connection.query("INSERT INTO messages (sender_user_id, recipient_user_id, body, is_system) VALUES (?, ?, ?, 1), (?, ?, ?, 1)", [targetId, userId, systemText, userId, targetId, systemText]);
     const title = membership ? "Заявка принята" : "Теперь вы друзья";
@@ -2686,7 +2745,8 @@ router.post("/social/friends/:targetId/reject", asyncRoute(async (request, respo
   const targetId = Number(request.params.targetId);
   const comment = String(request.body?.comment ?? "").trim().slice(0, 2000);
   await withTransaction(async (connection) => {
-    const [[currentProfile]] = await connection.query("SELECT profile_type FROM profiles WHERE user_id = ?", [userId]);
+    const [profiles] = await connection.query("SELECT user_id, profile_type FROM profiles WHERE user_id IN (?, ?) ORDER BY user_id FOR UPDATE", [userId, targetId]);
+    const currentProfile = profiles.find((item) => Number(item.user_id) === userId);
     const membership = currentProfile?.profile_type === "Сообщество";
     const [updated] = await connection.query("UPDATE friend_requests SET status = 'rejected', rejection_comment = ? WHERE status = 'pending' AND from_user_id = ? AND to_user_id = ?", [comment || null, targetId, userId]);
     if (!updated.affectedRows) throw Object.assign(new Error("Предложение дружбы не найдено"), { statusCode: 404 });
@@ -2700,12 +2760,18 @@ router.post("/social/friends/:targetId/reject", asyncRoute(async (request, respo
 router.delete("/social/friends/:targetId", asyncRoute(async (request, response) => {
   const userId = request.bookMeetUser.id;
   const targetId = Number(request.params.targetId);
-  const low = Math.min(userId, targetId); const high = Math.max(userId, targetId);
   await withTransaction(async (connection) => {
-    await connection.query("DELETE FROM friendships WHERE user_low_id = ? AND user_high_id = ?", [low, high]);
     const [[actor]] = await connection.query("SELECT display_name, profile_type FROM profiles WHERE user_id = ?", [userId]);
     const [[target]] = await connection.query("SELECT profile_type FROM profiles WHERE user_id = ?", [targetId]);
     const membership = actor?.profile_type === "Сообщество" || target?.profile_type === "Сообщество";
+    if (membership) {
+      const communityId = actor?.profile_type === "Сообщество" ? userId : targetId;
+      const memberId = communityId === userId ? targetId : userId;
+      await connection.query("DELETE FROM community_memberships WHERE community_user_id = ? AND member_user_id = ?", [communityId, memberId]);
+    } else {
+      const low = Math.min(userId, targetId); const high = Math.max(userId, targetId);
+      await connection.query("DELETE FROM friendships WHERE user_low_id = ? AND user_high_id = ?", [low, high]);
+    }
     await connection.query("INSERT INTO notifications (user_id, actor_user_id, notification_type, title, body) VALUES (?, ?, 'friendship_ended', ?, ?)", [targetId, userId, membership ? "Участие завершено" : "Дружба завершена", membership ? `${actor.display_name} завершило участие в сообществе.` : `${actor.display_name} перестал(а) дружить с вами.`]);
   });
   response.json({ ok: true });
@@ -2755,9 +2821,10 @@ router.post("/social/messages", asyncRoute(async (request, response) => {
   const createdMessage = await withTransaction(async (connection) => {
     await assertUsersCanInteract(connection, userId, targetId);
     const [[friendship]] = await connection.query("SELECT 1 FROM friendships WHERE user_low_id = ? AND user_high_id = ?", [low, high]);
+    const [[membership]] = await connection.query("SELECT 1 FROM community_memberships WHERE (community_user_id = ? AND member_user_id = ?) OR (community_user_id = ? AND member_user_id = ?)", [userId, targetId, targetId, userId]);
     const [participants] = await connection.query("SELECT id, role FROM users WHERE id IN (?, ?)", [userId, targetId]);
     const hasAdmin = participants.some((participant) => participant.role === "admin");
-    if (!friendship && !hasAdmin) throw Object.assign(new Error("Переписка доступна только друзьям и службе поддержки"), { statusCode: 403 });
+    if (!friendship && !membership && !hasAdmin) throw Object.assign(new Error("Переписка доступна только друзьям, участникам сообщества и службе поддержки"), { statusCode: 403 });
     const attachment = await validatedChatAttachment(connection, request.body?.attachment);
     const [created] = await connection.query("INSERT INTO messages (sender_user_id, recipient_user_id, body, attachment_kind, attachment_id) VALUES (?, ?, ?, ?, ?)", [userId, targetId, body, attachment?.kind ?? null, attachment?.id ?? null]);
     const [[actor]] = await connection.query("SELECT display_name FROM profiles WHERE user_id = ?", [userId]);
