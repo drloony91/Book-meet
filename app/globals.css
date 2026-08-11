@@ -2950,7 +2950,7 @@ select {
 
 /* Final cascade overrides for the profile/editor fixes. */
 .mobile-friends-backdrop { display: none; }
-.all-books-grid .library-book-cover { background-size: contain; background-position: center; background-repeat: no-repeat; background-color: #f4f1ed; }
+.all-books-grid .library-book-cover { background-size: cover; background-position: center; background-repeat: no-repeat; background-color: #f4f1ed; }
 .rich-editor-shell { position: relative; overflow: visible; }
 .rich-editor-toolbar { flex-wrap: nowrap; overflow-x: auto; overflow-y: hidden; }
 .rich-book-search { top: 51px; left: 9px; max-height: min(320px,45vh); overflow-y: auto; }

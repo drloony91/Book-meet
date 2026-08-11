@@ -539,11 +539,12 @@ export function useBookMeetController() {
 
   function goHome() { navigateMainView("home"); setSelectedFriend(null); setChatExpanded(false); setProfileAction(null); setProfileEditId(null); }
   function startCreating(action: "review" | "excerpt" | "book") {
-    if (action === "review" && currentUser?.profile.type !== "Читатель" && currentUser?.profile.type !== "Блогер") {
+    const currentProfileType = currentUser?.profile.type.trim();
+    if (action === "review" && currentProfileType !== "Читатель" && currentProfileType !== "Блогер") {
       setRoleRestrictionNotice("review");
       return;
     }
-    if (action === "excerpt" && currentUser?.profile.type !== "Писатель" && currentUser?.profile.type !== "Блогер") {
+    if (action === "excerpt" && currentProfileType !== "Писатель" && currentProfileType !== "Блогер") {
       setRoleRestrictionNotice("excerpt");
       return;
     }

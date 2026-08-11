@@ -191,7 +191,7 @@ export async function loadUsers(connection = getPool(), viewerId = null) {
         city: row.city,
         cityId: row.city_id ? Number(row.city_id) : undefined,
         country: row.country_name ?? undefined,
-        type: row.profile_type,
+        type: String(row.profile_type ?? "Читатель").trim() || "Читатель",
         gender: row.gender ?? "Не указан",
         birthDate: Number(row.id) === Number(viewerId) || viewerIsAdmin || row.show_birth_date_to_friends && isViewerFriend(row.id) ? sqlDate(row.birth_date) || undefined : undefined,
         age: Number(row.id) === Number(viewerId) || viewerIsAdmin ? ageFromBirthDate(row.birth_date) ?? undefined : undefined,

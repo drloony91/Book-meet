@@ -31,7 +31,10 @@ export function ContentHubControls({ view, profileType, showSwitch = true, onNav
   }, [open]);
   const choose = (action: () => void) => { setOpen(false); action(); };
   if (!["home", "events", "reviews", "publications", "occasions"].includes(view)) return null;
-  const publisher = profileType === "Издатель" || profileType === "Сообщество";
+  const normalizedProfileType = profileType.trim();
+  const reader = normalizedProfileType === "Читатель";
+  const blogger = normalizedProfileType === "Блогер";
+  const publisher = normalizedProfileType === "Издатель" || normalizedProfileType === "Сообщество";
   return <>
     {showSwitch && <nav className="content-hub-switch" aria-label="Разделы главной страницы">
       <span className={`content-hub-indicator at-${sections.findIndex((item) => item.view === view)}`} aria-hidden="true" />
@@ -39,9 +42,9 @@ export function ContentHubControls({ view, profileType, showSwitch = true, onNav
     </nav>}
     <div ref={rootRef} className={`floating-create ${open ? "is-open" : ""}`}>
       <div className="floating-create-menu" aria-hidden={!open}>
-        {(profileType !== "Читатель") && <button type="button" onClick={() => choose(onEvent)}>Добавить событие</button>}
-        {(profileType === "Читатель" || profileType === "Блогер") && <button type="button" onClick={() => choose(onReview)}>Написать рецензию</button>}
-        {!publisher && (profileType === "Писатель" || profileType === "Блогер") && <button type="button" onClick={() => choose(onPublication)}>Создать публикацию</button>}
+        {!reader && <button type="button" onClick={() => choose(onEvent)}>Добавить событие</button>}
+        {(reader || blogger) && <button type="button" data-material-action="review" onClick={() => choose(onReview)}>Написать рецензию</button>}
+        {!publisher && (normalizedProfileType === "Писатель" || blogger) && <button type="button" onClick={() => choose(onPublication)}>Создать публикацию</button>}
         {!publisher && <button type="button" onClick={() => choose(onOccasion)}>Предложить повод</button>}
         {publisher && <button type="button" onClick={() => choose(onPublisherNews)}>Опубликовать новость</button>}
       </div>

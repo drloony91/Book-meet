@@ -266,8 +266,9 @@ test("адаптивный редактор, обложки и мобильна�
   assert.match(content, /closest\("\.rich-book-search, \.rich-book-tool"\)/);
   assert.match(content, /window\.addEventListener\("keydown", close\)/);
   assert.match(content, /reading-stats-mobile-chart/);
-  assert.match(controls, /profileType === "Читатель" \|\| profileType === "Блогер"/);
-  assert.match(styles, /all-books-grid \.library-book-cover \{ background-size: contain/);
+  assert.match(controls, /const reader = normalizedProfileType === "Читатель"/);
+  assert.match(controls, /data-material-action="review"/);
+  assert.match(styles, /all-books-grid \.library-book-cover \{ background-size: cover/);
   assert.match(styles, /reading-stats-mobile-row/);
   assert.match(styles, /publishing-card-intro > \.avatar/);
   assert.match(styles, /chat-popup \.chat-actions button:last-child/);
