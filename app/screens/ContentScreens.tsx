@@ -29,6 +29,7 @@ import type {
   MaterialComment,
   Occasion,
   PublisherNews,
+  PublicCatalogBook,
   ReadingItem,
   Review,
 } from "../types/domain";
@@ -176,15 +177,25 @@ export function MaterialsDirectoryPage({ kind, reviews, excerpts, publisherNews 
 
 type CatalogDirectoryBook = LibraryBook & { addedAt: string; popularity: number };
 
-export function AllBooksDirectoryPage({ users, currentUser, onOpenUser }: { users: DemoUser[]; currentUser: DemoUser; onOpenUser: (id: number) => void }) {
-  const [books, setBooks] = useState<CatalogDirectoryBook[]>([]);
+function catalogDirectoryBook(book: Partial<CatalogDirectoryBook> & Pick<CatalogDirectoryBook, "id" | "author" | "title" | "popularity">): CatalogDirectoryBook {
+  return { genres: [], annotation: "", pages: "", format: "Бумажная", durationHours: "", durationMinutes: "", rating: 0, review: "", coverTone: "blue", addedAt: "", ...book } as CatalogDirectoryBook;
+}
+
+export function AllBooksDirectoryPage({ users = [], currentUser, onOpenUser = () => undefined, publicBooks, onBookOpen }: { users?: DemoUser[]; currentUser?: DemoUser; onOpenUser?: (id: number) => void; publicBooks?: PublicCatalogBook[]; onBookOpen?: (book: PublicCatalogBook) => void }) {
+  const [books, setBooks] = useState<CatalogDirectoryBook[]>(() => (publicBooks ?? []).map(catalogDirectoryBook));
   const [query, setQuery] = useState("");
   const [sort, setSort] = useState<"alphabetical" | "added" | "popular">("alphabetical");
   const [opened, setOpened] = useState<CatalogDirectoryBook | null>(null);
-  const [loading, setLoading] = useState(true);
-  useEffect(() => { let active = true; fetch("/api/books/catalog", { credentials: "same-origin", cache: "no-store" }).then((response) => response.json()).then((data: { books?: Array<Partial<CatalogDirectoryBook> & Pick<CatalogDirectoryBook, "id" | "author" | "title" | "addedAt" | "popularity">> }) => { if (!active) return; setBooks((data.books ?? []).map((book) => ({ genres: [], annotation: "", pages: "", format: "Бумажная", durationHours: "", durationMinutes: "", rating: 0, review: "", coverTone: "blue", ...book } as CatalogDirectoryBook))); }).catch(console.warn).finally(() => { if (active) setLoading(false); }); return () => { active = false; }; }, []);
+  const [loading, setLoading] = useState(!publicBooks);
+  useEffect(() => {
+    if (publicBooks) { setBooks(publicBooks.map(catalogDirectoryBook)); setLoading(false); return; }
+    let active = true;
+    fetch("/api/books/catalog", { credentials: "same-origin", cache: "no-store" }).then((response) => response.json()).then((data: { books?: Array<Partial<CatalogDirectoryBook> & Pick<CatalogDirectoryBook, "id" | "author" | "title" | "addedAt" | "popularity">> }) => { if (!active) return; setBooks((data.books ?? []).map(catalogDirectoryBook)); }).catch(console.warn).finally(() => { if (active) setLoading(false); });
+    return () => { active = false; };
+  }, [publicBooks]);
   const visible = useMemo(() => { const needle = query.trim().toLocaleLowerCase("ru"); return books.filter((book) => !needle || `${book.title} ${book.author}`.toLocaleLowerCase("ru").includes(needle)).sort((first, second) => sort === "added" ? Date.parse(second.addedAt) - Date.parse(first.addedAt) || first.title.localeCompare(second.title, "ru") : sort === "popular" ? second.popularity - first.popularity || first.title.localeCompare(second.title, "ru") : first.title.localeCompare(second.title, "ru") || first.author.localeCompare(second.author, "ru")); }, [books, query, sort]);
-  return <main className="content-scroll directory-page books-directory-page"><div className="directory-heading"><div><h1>Все книги</h1><p>{visible.length} книг</p></div><div className="directory-controls books-directory-controls"><label className="books-search-field"><span>Поиск по названию или автору</span><input type="search" value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Название книги или автор" /></label><label className="directory-control-field"><span>Сортировка</span><CustomSelect ariaLabel="Сортировка книг" value={sort} onChange={setSort} options={[{ value: "alphabetical", label: "По алфавиту" }, { value: "added", label: "По дате добавления" }, { value: "popular", label: "По популярности" }]} /></label></div></div>{loading ? <p className="directory-loading">Загружаем книги…</p> : visible.length ? <div className="all-books-grid">{visible.map((book) => <article className="library-book material-clickable-card" role="button" tabIndex={0} key={book.id} onClick={() => setOpened(book)} onKeyDown={(event) => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); setOpened(book); } }}><div className="all-books-cover-frame"><div className={`library-book-cover library-cover-${book.coverTone}`} style={book.coverUrl ? { backgroundImage: `url(${book.coverUrl})` } : undefined}>{!book.coverUrl && <><em>{book.author}</em><strong>{book.title}</strong><span>Book Meet</span></>}</div></div><div className="library-book-copy"><h3>{book.title}</h3><p>{book.author}</p><small>В библиотеках: {book.popularity}</small></div></article>)}</div> : <EmptyContentState />}{opened && <UnifiedBookModal book={opened} users={users} onOpenUser={onOpenUser} onClose={() => setOpened(null)} onReport={!currentUser.isAdmin && opened.creatorUserId !== currentUser.id ? () => openReportDialog({ kind: "book", id: opened.id }) : undefined} />}</main>;
+  const openBook = (book: CatalogDirectoryBook) => onBookOpen ? onBookOpen(book) : setOpened(book);
+  return <main className="content-scroll directory-page books-directory-page"><div className="directory-heading"><div><h1>Все книги</h1><p>{visible.length} книг</p></div><div className="directory-controls books-directory-controls"><label className="books-search-field"><span>Поиск по названию или автору</span><input type="search" value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Название книги или автор" /></label><label className="directory-control-field"><span>Сортировка</span><CustomSelect ariaLabel="Сортировка книг" value={sort} onChange={setSort} options={[{ value: "alphabetical", label: "По алфавиту" }, { value: "added", label: "По дате добавления" }, { value: "popular", label: "По популярности" }]} /></label></div></div>{loading ? <p className="directory-loading">Загружаем книги…</p> : visible.length ? <div className="all-books-grid">{visible.map((book) => <article className="library-book material-clickable-card" role="button" tabIndex={0} key={book.id} onClick={() => openBook(book)} onKeyDown={(event) => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); openBook(book); } }}><div className="all-books-cover-frame"><div className={`library-book-cover library-cover-${book.coverTone}`} style={book.coverUrl ? { backgroundImage: `url(${book.coverUrl})` } : undefined}>{!book.coverUrl && <><em>{book.author}</em><strong>{book.title}</strong><span>Book Meet</span></>}</div></div><div className="library-book-copy"><h3>{book.title}</h3><p>{book.author}</p><small>В библиотеках: {book.popularity}</small></div></article>)}</div> : <EmptyContentState />}{opened && currentUser && <UnifiedBookModal book={opened} users={users} onOpenUser={onOpenUser} onClose={() => setOpened(null)} onReport={!currentUser.isAdmin && opened.creatorUserId !== currentUser.id ? () => openReportDialog({ kind: "book", id: opened.id }) : undefined} />}</main>;
 }
 
 export function SimpleDirectoryPage({ kind }: { kind: "communities" | "partners" }) {

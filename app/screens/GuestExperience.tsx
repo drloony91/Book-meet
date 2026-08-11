@@ -1,25 +1,74 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
-import type { PublicCatalogData } from "../types/domain";
+import { useEffect, useMemo, useState, type ReactNode } from "react";
+import { EmptyContentState } from "../components/common/EmptyContentState";
+import { ContentHubControls } from "../components/content/ContentHubControls";
+import { EventCard, MaterialPreviewCard } from "../components/content/ContentComponents";
+import { BookMeetHeader, WorkspaceScreen } from "../components/layout/AppLayout";
+import type { Friend } from "../components/chat/types";
 import { safeReturnTo } from "../lib/navigation-security";
+import type { MainView } from "../navigation/routes";
+import { AllBooksDirectoryPage, SimpleDirectoryPage } from "./ContentScreens";
+import { PublicOrganizationDirectoryPage } from "./UsersDirectoryScreen";
+import type { BookEvent, PublicCatalogData, PublicCatalogEvent, PublicCatalogMaterial, ReadingItem } from "../types/domain";
 
 type GuestView = "home" | "books" | "publishing" | "communities" | "partners";
 
 const paths: Record<GuestView, string> = { home: "/", books: "/books", publishing: "/publishing", communities: "/communities", partners: "/partners" };
+const supportFriend: Friend = { id: -1, name: "Служба поддержки", type: "Читатель", city: "Book Meet", initials: "", color: "blue", online: true, lastMessage: "Мы всегда готовы помочь", time: "", bio: "", books: "", support: true };
 
 function guestView(pathname: string): GuestView {
-  const entry = Object.entries(paths).find(([, path]) => path === pathname.replace(/\/+$/, "") || path === "/" && pathname === "/");
-  return entry ? entry[0] as GuestView : "home";
+  const clean = pathname === "/" ? "/" : pathname.replace(/\/+$/, "");
+  return (Object.entries(paths).find(([, path]) => path === clean)?.[0] as GuestView | undefined) ?? "home";
+}
+
+function readingItem(item: PublicCatalogMaterial): ReadingItem {
+  return { id: item.id, kind: item.kind === "review" ? "review" : "excerpt", title: item.title, author: item.ownerName, text: item.preview, preview: item.preview, createdAt: item.createdAt };
+}
+
+function bookEvent(item: PublicCatalogEvent): BookEvent {
+  return { id: item.id, creatorId: 0, title: item.title, summary: item.summary, description: item.summary, date: item.date, time: item.time, city: item.city, address: item.address, mapUrl: "", detailsUrl: "", status: "published", createdAt: item.createdAt ?? `${item.date}T${item.time || "00:00"}:00` };
+}
+
+type GuestHubView = "home" | "events" | "reviews" | "publications" | "occasions";
+
+function GuestHome({ data, authenticate, onNavigate }: { data: PublicCatalogData; authenticate: () => void; onNavigate: (view: GuestHubView) => void }) {
+  const materials = useMemo(() => data.materials.map((source) => ({ source, item: readingItem(source) })), [data.materials]);
+  const events = useMemo(() => data.events.map(bookEvent), [data.events]);
+  const feed = useMemo(() => [
+    ...materials.map((entry) => ({ kind: "material" as const, time: Date.parse(entry.source.createdAt ?? "") || entry.source.id, entry })),
+    ...events.map((item) => ({ kind: "event" as const, time: Date.parse(item.createdAt) || item.id, item })),
+  ].sort((first, second) => second.time - first.time), [events, materials]);
+  const reviews = materials.filter(({ source }) => source.kind === "review");
+  const blog = materials.filter(({ source }) => source.kind !== "review");
+  const materialCard = ({ source, item }: (typeof materials)[number], index: number) => <MaterialPreviewCard key={`${source.kind}-${source.id}`} item={item} index={index} kindLabel={source.kind === "publisher_news" ? "Новость издательства" : undefined} onOpen={authenticate} onOpenUser={() => undefined} onOpenAuthor={authenticate} />;
+  return <main className="content-scroll home-content home-mode-feed">
+    <section className="content-section home-feed">{feed.map((entry, index) => entry.kind === "event" ? <EventCard key={`event-${entry.item.id}`} item={entry.item} own={false} onOpen={authenticate} /> : materialCard(entry.entry, index))}{!feed.length && <EmptyContentState />}</section>
+    <section className="content-section events-section"><div className="section-heading"><button className="home-section-link" type="button" onClick={() => onNavigate("events")}>Книжные события</button></div>{events.length ? <div className="events-grid">{events.slice(0, 2).map((item) => <EventCard key={item.id} item={item} own={false} onOpen={authenticate} />)}</div> : <EmptyContentState />}</section>
+    <section className="content-section"><div className="section-heading"><button className="home-section-link" type="button" onClick={() => onNavigate("reviews")}>Рецензии</button></div>{reviews.length ? <div className="excerpt-grid review-material-grid">{reviews.map(materialCard)}</div> : <EmptyContentState />}</section>
+    <section className="content-section"><div className="section-heading"><button className="home-section-link" type="button" onClick={() => onNavigate("publications")}>Публикации блога</button></div>{blog.length ? <div className="excerpt-grid">{blog.map(materialCard)}</div> : <EmptyContentState />}</section>
+    <section className="content-section occasions-section"><div className="section-heading"><button className="home-section-link" type="button" onClick={() => onNavigate("occasions")}>Поводы познакомиться</button></div><EmptyContentState /></section>
+  </main>;
+}
+
+function GuestHubDirectory({ view, data, authenticate }: { view: Exclude<GuestHubView, "home">; data: PublicCatalogData; authenticate: () => void }) {
+  const materials = data.materials.filter((item) => view === "reviews" ? item.kind === "review" : view === "publications" ? item.kind !== "review" : false);
+  const heading = view === "events" ? "Книжные события" : view === "reviews" ? "Рецензии" : view === "publications" ? "Публикации" : "Поводы познакомиться";
+  return <main className="content-scroll directory-page"><div className="directory-heading"><div><h1>{heading}</h1></div></div>
+    {view === "events" && (data.events.length ? <div className="events-grid">{data.events.map((item) => <EventCard key={item.id} item={bookEvent(item)} own={false} onOpen={authenticate} />)}</div> : <EmptyContentState />)}
+    {(view === "reviews" || view === "publications") && (materials.length ? <div className={`excerpt-grid ${view === "reviews" ? "review-material-grid" : ""}`}>{materials.map((source, index) => <MaterialPreviewCard key={`${source.kind}-${source.id}`} item={readingItem(source)} index={index} kindLabel={source.kind === "publisher_news" ? "Новость издательства" : undefined} onOpen={authenticate} onOpenUser={() => undefined} onOpenAuthor={authenticate} />)}</div> : <EmptyContentState />)}
+    {view === "occasions" && <EmptyContentState />}
+  </main>;
 }
 
 export function GuestExperience({ data, onAuthenticate }: { data: PublicCatalogData; onAuthenticate: (returnTo?: string) => void }) {
   const [view, setView] = useState<GuestView>(() => guestView(window.location.pathname));
-  const [feedKind, setFeedKind] = useState<"materials" | "events">("materials");
+  const [hubView, setHubView] = useState<GuestHubView>("home");
   const authenticate = () => onAuthenticate(safeReturnTo(`${window.location.pathname}${window.location.search}${window.location.hash}`));
   const navigate = (next: GuestView) => {
     window.history.pushState({}, "", paths[next]);
     setView(next);
+    if (next === "home") setHubView("home");
     window.scrollTo({ top: 0, behavior: "smooth" });
   };
   useEffect(() => {
@@ -32,25 +81,22 @@ export function GuestExperience({ data, onAuthenticate }: { data: PublicCatalogD
     window.addEventListener("popstate", restore);
     return () => window.removeEventListener("popstate", restore);
   }, []);
-  const organizations = useMemo(() => data.organizations.filter((organization) => view === "publishing" ? organization.type === "Издатель" : view === "communities" ? organization.type === "Сообщество" : false), [data.organizations, view]);
+  const directoryShell = (content: ReactNode) => <div className="directory-page-shell"><button className="back-button directory-home-button" type="button" onClick={() => navigate("home")}>← На главную</button>{content}</div>;
+  const content = view === "books"
+    ? directoryShell(<AllBooksDirectoryPage publicBooks={data.books} onBookOpen={authenticate} />)
+    : view === "publishing"
+      ? directoryShell(<PublicOrganizationDirectoryPage type="Издатель" organizations={data.organizations} onOpen={authenticate} />)
+      : view === "communities"
+        ? directoryShell(<PublicOrganizationDirectoryPage type="Сообщество" organizations={data.organizations} onOpen={authenticate} />)
+        : view === "partners"
+          ? directoryShell(<SimpleDirectoryPage kind="partners" />)
+          : hubView === "home" ? <GuestHome data={data} authenticate={authenticate} onNavigate={setHubView} /> : <GuestHubDirectory view={hubView} data={data} authenticate={authenticate} />;
 
-  return <div className="book-meet-app guest-app">
-    <header className="topbar guest-topbar">
-      <button className="brand brand-header-logo" type="button" onClick={() => navigate("home")} aria-label="Book Meet — на главную"><img src="/book-meet-header-logo-v3.png" alt="" /></button>
-      <nav className="topbar-menu topbar-menu-left"><button type="button" onClick={() => navigate("books")}>Все книги</button><button type="button" onClick={() => navigate("publishing")}>Новинки издательств</button></nav>
-      <nav className="topbar-menu topbar-menu-right"><button type="button" onClick={() => navigate("communities")}>Книжные сообщества</button><button type="button" onClick={() => navigate("partners")}>Наши партнеры</button></nav>
-      <div className="topbar-account-actions guest-account-actions"><button className="notification-button" type="button" onClick={authenticate} aria-label="Уведомления доступны после входа">🔔</button><button className="primary-button guest-login-button" type="button" onClick={authenticate}>Вход/Регистрация</button></div>
-    </header>
-    <nav className="guest-mobile-nav" aria-label="Публичные разделы"><button type="button" className={view === "home" ? "active" : ""} onClick={() => navigate("home")}>Главная</button><button type="button" className={view === "books" ? "active" : ""} onClick={() => navigate("books")}>Все книги</button><button type="button" className={view === "publishing" ? "active" : ""} onClick={() => navigate("publishing")}>Издательства</button><button type="button" className={view === "communities" ? "active" : ""} onClick={() => navigate("communities")}>Сообщества</button><button type="button" className={view === "partners" ? "active" : ""} onClick={() => navigate("partners")}>Партнёры</button></nav>
-    <main className="guest-content">
-      {view === "home" && <>
-        <section className="guest-hero"><span className="section-subtitle">Book Meet</span><h1>Встречаемся благодаря книгам</h1><p>Читайте публичную ленту и каталог. Для общения и публикации войдите или зарегистрируйтесь.</p><div><button className="primary-button" type="button" onClick={authenticate}>＋ Добавить материал</button><button className="outline-button" type="button" onClick={authenticate}>Найти друзей</button><button className="outline-button" type="button" onClick={authenticate}>Книжный повод</button><button className="outline-button" type="button" onClick={authenticate}>Поддержка</button></div></section>
-        <div className="guest-feed-switch" role="group" aria-label="Переключить ленту"><button className={feedKind === "materials" ? "active" : ""} type="button" onClick={() => setFeedKind("materials")}>Материалы</button><button className={feedKind === "events" ? "active" : ""} type="button" onClick={() => setFeedKind("events")}>События</button></div>
-        {feedKind === "materials" ? <section className="guest-card-grid">{data.materials.map((item) => <button className="guest-material-card" type="button" key={`${item.kind}-${item.id}`} onClick={authenticate}><span>{item.kind === "review" ? "Рецензия" : item.kind === "excerpt" ? "Публикация" : "Новость издательства"}</span><h2>{item.title}</h2><p>{item.preview}</p><small>{item.ownerName}</small></button>)}</section> : <section className="guest-card-grid">{data.events.map((item) => <button className="guest-event-card" type="button" key={item.id} onClick={authenticate}><span>{item.date} · {item.time} · {item.city}</span><h2>{item.title}</h2><p>{item.summary}</p><small>{item.address}</small></button>)}</section>}
-      </>}
-      {view === "books" && <section className="directory-page"><div className="directory-heading"><div><h1>Все книги</h1><p>{data.books.length} книг в публичном каталоге</p></div></div><div className="all-books-grid">{data.books.map((book) => <article className="library-book material-clickable-card" role="button" tabIndex={0} key={book.id} onClick={authenticate} onKeyDown={(event) => { if (event.key === "Enter" || event.key === " ") authenticate(); }}><div className="all-books-cover-frame"><div className={`library-book-cover library-cover-${book.coverTone}`} style={book.coverUrl ? { backgroundImage: `url(${book.coverUrl})` } : undefined}>{!book.coverUrl && <><em>{book.author}</em><strong>{book.title}</strong><span>Book Meet</span></>}</div></div><div className="library-book-copy"><h3>{book.title}</h3><p>{book.author}</p><small>В библиотеках: {book.popularity}</small></div></article>)}</div></section>}
-      {view === "partners" && <section className="directory-page"><div className="directory-heading"><div><h1>Наши партнеры</h1><p>Проекты и организации, которые помогают развивать книжную культуру.</p></div></div><div className="content-empty"><span aria-hidden="true">···</span><h3>Здесь пока ничего нет</h3></div></section>}
-      {(view === "publishing" || view === "communities") && <section className="directory-page"><div className="directory-heading"><div><h1>{view === "publishing" ? "Издательства" : "Книжные сообщества"}</h1><p>{organizations.length} подтвержденных организаций</p></div></div><div className="organization-directory-grid">{organizations.map((organization) => <button className="organization-directory-card" type="button" key={organization.id} onClick={authenticate}><span className={`avatar avatar-md avatar-${organization.color} ${organization.avatarUrl ? "has-photo" : ""}`} style={organization.avatarUrl ? { backgroundImage: `url(${organization.avatarUrl})` } : undefined}>{!organization.avatarUrl && organization.initials}</span><span><small>{organization.type}{organization.communityType ? ` · ${organization.communityType}` : ""}</small><h2>{organization.name}</h2><p>{organization.city}</p><p>{organization.bio}</p></span></button>)}</div></section>}
-    </main>
+  return <div className="app-shell">
+    <BookMeetHeader accountName="" accountCaption="" initials="" unreadCount={0} unreadMessages={0} chatsOpen={false} notificationsOpen={false} onHome={() => navigate("home")} onBooks={() => navigate("books")} onPublishing={() => navigate("publishing")} onCommunities={() => navigate("communities")} onPartners={() => navigate("partners")} onNotifications={authenticate} onChats={authenticate} onProfile={authenticate} onLogout={authenticate} guestAction={{ label: "Вход/Регистрация", onClick: authenticate }} />
+    <WorkspaceScreen friends={[supportFriend]} selectedId={null} adminMode={false} contentHub={view === "home"} onFindFriends={authenticate} onCreateOccasion={authenticate} onSelectFriend={authenticate} mobileFriendsOpen={false}>
+      <ContentHubControls view={(view === "home" ? hubView : view) as MainView} profileType="Читатель" onNavigate={(next) => { if (["home", "events", "reviews", "publications", "occasions"].includes(next)) setHubView(next as GuestHubView); else authenticate(); }} onEvent={authenticate} onReview={authenticate} onPublication={authenticate} onOccasion={authenticate} onPublisherNews={authenticate} />
+      {content}
+    </WorkspaceScreen>
   </div>;
 }

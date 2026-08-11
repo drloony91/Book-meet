@@ -2,7 +2,7 @@ import { useMemo, useState } from "react";
 import { CustomSelect } from "../components/common/CustomSelect";
 import { CityFilter } from "../components/content/ContentComponents";
 import { userBookMatches } from "../lib/domain";
-import type { BookEvent, DemoUser } from "../types/domain";
+import type { BookEvent, DemoUser, PublicOrganization } from "../types/domain";
 
 export function UsersDirectoryPage({ currentUser, users, onOpenUser }: { currentUser: DemoUser; users: DemoUser[]; onOpenUser: (userId: number) => void }) {
   const [sort, setSort] = useState<"registration" | "matches">("matches");
@@ -46,6 +46,22 @@ export function PublishingDirectoryPage({ users, events, onOpenUser }: { users: 
 
 export function CommunitiesDirectoryPage({ users, events, onOpenUser }: { users: DemoUser[]; events: BookEvent[]; onOpenUser: (userId: number) => void }) {
   return <OrganizationDirectoryPage type="Сообщество" users={users} events={events} onOpenUser={onOpenUser} />;
+}
+
+export function PublicOrganizationDirectoryPage({ type, organizations, onOpen }: { type: "Издатель" | "Сообщество"; organizations: PublicOrganization[]; onOpen: () => void }) {
+  const [query, setQuery] = useState("");
+  const [communityType, setCommunityType] = useState("all");
+  const community = type === "Сообщество";
+  const available = useMemo(() => organizations.filter((item) => item.type === type), [organizations, type]);
+  const communityTypes = useMemo(() => Array.from(new Set(available.map((item) => item.communityType?.trim()).filter((value): value is string => Boolean(value)))).sort((a, b) => a.localeCompare(b, "ru")), [available]);
+  const visible = useMemo(() => {
+    const needle = query.trim().toLocaleLowerCase("ru");
+    return available.filter((item) => (!needle || item.name.toLocaleLowerCase("ru").includes(needle)) && (!community || communityType === "all" || item.communityType === communityType));
+  }, [available, community, communityType, query]);
+  return <main className="content-scroll directory-page publishing-directory-page">
+    <div className="directory-heading"><div><h1>{community ? "Книжные сообщества" : "Новинки издательств"}</h1><p>{community ? "Книжные клубы, объединения, их книги, события и новости." : "Познакомьтесь с издательствами! Книги, события и новости издательства — в одном месте."}</p></div><div className={`organization-directory-filters ${community ? "has-community-type" : ""}`}><label className="books-search-field"><span>Поиск по названию</span><input type="search" value={query} onChange={(event) => setQuery(event.target.value)} placeholder={community ? "Название сообщества" : "Название издательства"} /></label>{community && <label className="directory-control-field"><span>Тип сообщества</span><CustomSelect ariaLabel="Тип сообщества" value={communityType} onChange={setCommunityType} options={[{ value: "all", label: "Все типы" }, ...communityTypes.map((item) => ({ value: item, label: item }))]} /></label>}</div></div>
+    {visible.length ? <div className="publishing-list">{visible.map((organization) => <article className="publishing-card material-clickable-card" role="button" tabIndex={0} key={organization.id} onClick={onOpen} onKeyDown={(event) => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); onOpen(); } }}><div className="publishing-card-intro"><span className={`avatar avatar-lg avatar-${organization.color} ${organization.avatarUrl ? "has-photo" : ""}`} style={organization.avatarUrl ? { backgroundImage: `url(${organization.avatarUrl})` } : undefined}>{!organization.avatarUrl && organization.initials}</span><div className="publishing-card-copy"><span className="section-subtitle">{organization.type}{organization.communityType ? ` · ${organization.communityType}` : ""}{organization.city ? ` · ${organization.city}` : ""}</span><h2>{organization.name}</h2><p>{organization.bio || `${community ? "Сообщество" : "Издательство"} пока не добавило описание.`}</p></div></div></article>)}</div> : <div className="profile-tab-placeholder">{query ? "Ничего не найдено." : `Подтверждённых ${community ? "сообществ" : "издательств"} пока нет.`}</div>}
+  </main>;
 }
 
 function OrganizationDirectoryPage({ type, users, events, onOpenUser }: { type: "Издатель" | "Сообщество"; users: DemoUser[]; events: BookEvent[]; onOpenUser: (userId: number) => void }) {

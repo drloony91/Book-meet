@@ -22,6 +22,7 @@ export function BookMeetHeader({
   onChats,
   onProfile,
   onLogout,
+  guestAction,
 }: {
   accountName: string;
   accountCaption: string;
@@ -42,6 +43,7 @@ export function BookMeetHeader({
   onChats: () => void;
   onProfile: () => void;
   onLogout: () => void;
+  guestAction?: { label: string; onClick: () => void };
 }) {
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const mobileNavigate = (action: () => void) => { setMobileMenuOpen(false); action(); };
@@ -63,11 +65,11 @@ export function BookMeetHeader({
         <button className={`notification-button ${unreadCount ? "has-notifications" : ""}`} type="button" onClick={onNotifications} aria-label={`Уведомления: ${unreadCount}`} aria-expanded={notificationsOpen}>
           <span>🔔</span>{unreadCount > 0 && <b>{unreadCount > 99 ? "99+" : unreadCount}</b>}
         </button>
-        <button className="user-button" type="button" onClick={() => { if (window.matchMedia("(max-width: 800px)").matches) setMobileMenuOpen((open) => !open); else onProfile(); }} aria-label={`Открыть: ${accountCaption}`} aria-expanded={mobileMenuOpen}>
+        {guestAction ? <button className="primary-button guest-login-button" type="button" onClick={guestAction.onClick}>{guestAction.label}</button> : <button className="user-button" type="button" onClick={() => { if (window.matchMedia("(max-width: 800px)").matches) setMobileMenuOpen((open) => !open); else onProfile(); }} aria-label={`Открыть: ${accountCaption}`} aria-expanded={mobileMenuOpen}>
           <span className="user-copy"><strong>{accountName}</strong><small>{accountCaption}</small></span>
           <span className={`avatar avatar-sm avatar-user ${avatarUrl ? "has-photo" : ""}`} style={avatarUrl ? { backgroundImage: `url(${avatarUrl})` } : undefined}>{!avatarUrl && initials}<span className="online-dot" /></span>
-        </button>
-        {mobileMenuOpen && <nav className="mobile-account-menu" aria-label="Меню пользователя">
+        </button>}
+        {!guestAction && mobileMenuOpen && <nav className="mobile-account-menu" aria-label="Меню пользователя">
           <button type="button" onClick={() => mobileNavigate(onProfile)}>Профиль</button>
           <button type="button" onClick={() => mobileNavigate(onBooks)}>Все книги</button>
           <button type="button" onClick={() => mobileNavigate(onPublishing)}>Издательства</button>
