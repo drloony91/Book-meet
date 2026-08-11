@@ -2887,7 +2887,8 @@ select {
 .friends-panel.is-collapsed { cursor: pointer; }
 .all-books-grid { grid-template-columns: repeat(6,minmax(0,1fr)); grid-auto-rows: 1fr; gap: 16px 12px; }
 .all-books-grid .library-book { display: grid; grid-template-rows: auto minmax(0,1fr); align-items: start; gap: 7px; height: 100%; padding: 8px; border-radius: 11px; }
-.all-books-grid .library-book-cover { width: 100%; min-width: 0; max-width: 100%; height: auto; aspect-ratio: 2/3; align-self: start; }
+.all-books-cover-frame { position: relative; width: 100%; height: 0; overflow: hidden; padding-top: 150%; }
+.all-books-grid .all-books-cover-frame > .library-book-cover { position: absolute; inset: 0; width: 100%; min-width: 0; max-width: none; height: 100%; aspect-ratio: auto; }
 .all-books-grid .library-book-copy { gap: 2px; }
 .all-books-grid .library-book-copy h3 { font-size: 13px; line-height: 1.2; }
 .all-books-grid .library-book-copy p, .all-books-grid .library-book-copy small { font-size: 10px; }
@@ -2950,7 +2951,7 @@ select {
 
 /* Final cascade overrides for the profile/editor fixes. */
 .mobile-friends-backdrop { display: none; }
-.all-books-grid .library-book-cover { background-size: cover; background-position: center; background-repeat: no-repeat; background-color: #f4f1ed; }
+.all-books-grid .all-books-cover-frame > .library-book-cover { background-size: cover; background-position: center; background-repeat: no-repeat; background-color: #f4f1ed; }
 .rich-editor-shell { position: relative; overflow: visible; }
 .rich-editor-toolbar { flex-wrap: nowrap; overflow-x: auto; overflow-y: hidden; }
 .rich-book-search { top: 51px; left: 9px; max-height: min(320px,45vh); overflow-y: auto; }

@@ -261,6 +261,7 @@ test("профили сообществ, видимость меню и изда
 
 test("адаптивный редактор, обложки и мобильная статистика закреплены интерфейсом", async () => {
   const content = await readFile(path.join(root, "app", "components", "content", "ContentComponents.tsx"), "utf8");
+  const screens = await readFile(path.join(root, "app", "screens", "ContentScreens.tsx"), "utf8");
   const styles = await readFile(path.join(root, "app", "globals.css"), "utf8");
   const controls = await readFile(path.join(root, "app", "components", "content", "ContentHubControls.tsx"), "utf8");
   assert.match(content, /closest\("\.rich-book-search, \.rich-book-tool"\)/);
@@ -271,7 +272,9 @@ test("адаптивный редактор, обложки и мобильна�
   assert.match(controls, /data-material-action="review"/);
   assert.match(styles, /all-books-grid \{ grid-template-columns: repeat\(6,minmax\(0,1fr\)\); grid-auto-rows: 1fr/);
   assert.match(styles, /all-books-grid \.library-book \{ display: grid; grid-template-rows: auto minmax\(0,1fr\); align-items: start/);
-  assert.match(styles, /all-books-grid \.library-book-cover \{ background-size: cover/);
+  assert.match(screens, /className="all-books-cover-frame"/);
+  assert.match(styles, /all-books-cover-frame \{ position: relative; width: 100%; height: 0; overflow: hidden; padding-top: 150%/);
+  assert.match(styles, /all-books-grid \.all-books-cover-frame > \.library-book-cover \{ background-size: cover/);
   assert.match(styles, /organization-directory-filters\.has-community-type \{ grid-template-columns:/);
   assert.match(styles, /reading-stats-mobile-row/);
   assert.match(styles, /publishing-card-intro > \.avatar/);
