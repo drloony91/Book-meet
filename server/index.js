@@ -4,6 +4,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { mkdir } from "node:fs/promises";
 import { apiRateLimit } from "./modules/request-limits.js";
+import { createTelegramOutboxDispatcher } from "./modules/telegram-outbox.js";
 
 const app = express();
 const projectRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
@@ -26,6 +27,7 @@ async function start() {
   }
 
   const { default: api } = await import(demoMode ? "./demo-api.js" : "./api.js");
+  const telegramDispatcher = demoMode ? null : createTelegramOutboxDispatcher();
 
   app.disable("x-powered-by");
   app.set("trust proxy", 1);
@@ -82,15 +84,18 @@ async function start() {
     console.error(error);
     const status = error.statusCode || 500;
     const message = process.env.NODE_ENV === "production" && status >= 500 ? "Не удалось выполнить запрос" : error.message;
-    response.status(status).json({ error: message });
+    const code = error.code === "TOP3_LIMIT" ? error.code : undefined;
+    response.status(status).json(code ? { error: message, code } : { error: message });
   });
 
   const port = Number(process.env.PORT || 3000);
   const server = app.listen(port, () => {
     console.log(`Book Meet запущен на http://localhost:${port}`);
   });
+  telegramDispatcher?.start();
 
   function shutdown(signal) {
+    telegramDispatcher?.stop();
     console.log(`${signal}: останавливаем Book Meet`);
     server.close(() => process.exit(0));
     setTimeout(() => process.exit(1), 10_000).unref();

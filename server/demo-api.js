@@ -3,6 +3,7 @@ import { randomBytes } from "node:crypto";
 import QRCode from "qrcode";
 import { generateRecoveryCodes, generateTotpSecret, hashRecoveryCode, recoveryCodeIndex, verifyTotp } from "./security.js";
 import { canCreateFriendRequest, canMessagePair } from "./modules/social-permissions.js";
+import { nextTopRank, top3Eligibility } from "./modules/top3.js";
 
 const router = Router();
 const sessions = new Map();
@@ -276,6 +277,20 @@ router.get("/bootstrap/:section", (request, response) => {
   if (!keys) return response.status(404).json({ error: "Неизвестный набор данных" });
   const data = bootstrap(userId);
   response.json(Object.fromEntries(keys.map((key) => [key, data[key]])));
+});
+
+router.get("/public/catalog", (_request, response) => {
+  const books = [...new Map(users.flatMap((owner) => [...(owner.books ?? []), ...(owner.authorBooks ?? [])])
+    .filter((book) => !book.isAdult)
+    .map((book) => [book.catalogBookId ?? book.id, { id: book.catalogBookId ?? book.id, author: book.author, title: book.title, isbn: book.isbn, publisher: book.publisher, genres: book.genres ?? [], annotation: book.annotation ?? "", coverUrl: book.coverUrl, coverTone: book.coverTone ?? "blue", addedAt: book.createdAtValue ?? new Date().toISOString(), popularity: users.filter((user) => user.books.some((item) => (item.catalogBookId ?? item.id) === (book.catalogBookId ?? book.id))).length }])).values()];
+  const materials = users.flatMap((owner) => [
+    ...(owner.reviews ?? []).filter((item) => !item.isAdult).map((item) => ({ id: item.id, kind: "review", title: item.bookTitle, preview: item.preview, ownerName: owner.profile.name, createdAt: item.createdAtValue ?? new Date().toISOString() })),
+    ...(owner.excerpts ?? []).filter((item) => !item.isAdult).map((item) => ({ id: item.id, kind: "excerpt", title: item.bookTitle || "Публикация", preview: item.previewText, ownerName: owner.profile.name, createdAt: item.createdAtValue ?? new Date().toISOString() })),
+    ...(["Издатель", "Сообщество"].includes(owner.profile.type) && owner.profile.publisherStatus === "approved" ? (owner.publisherNews ?? []).filter((item) => !item.isAdult).map((item) => ({ id: item.id, kind: "publisher_news", title: item.title, preview: item.previewText, ownerName: owner.profile.name, createdAt: item.createdAtValue ?? new Date().toISOString() })) : []),
+  ]).sort((first, second) => Date.parse(second.createdAt) - Date.parse(first.createdAt));
+  const events = state.events.filter((item) => item.status === "published" && !item.isAdult).map((item) => ({ id: item.id, title: item.title, summary: item.summary, date: item.date, time: item.time, city: item.city, address: item.address, createdAt: item.createdAt }));
+  const organizations = users.filter((user) => ["Издатель", "Сообщество"].includes(user.profile.type) && user.profile.publisherStatus === "approved").map((user) => ({ id: user.id, name: user.profile.name, city: user.profile.city, type: user.profile.type, bio: user.profile.bio, communityType: user.profile.communityType, initials: user.initials, color: user.color, avatarUrl: user.avatarUrl }));
+  response.json({ books, materials, events, organizations });
 });
 
 router.post("/auth/deleted-profile/restore", (request, response) => {
@@ -632,14 +647,22 @@ router.post("/books", (request, response) => {
     || (item.links ?? []).some((link) => sourceUrls.includes(link.url))
     || Boolean(payload.flipUrl && item.flipUrl === payload.flipUrl));
   const id = Number(payload.useExistingId || exact?.id || payload.id || nextId++);
+  const top3Requested = payload.top3 === true || Number(payload.topRank) > 0;
+  if (top3Requested && !top3Eligibility({ isAuthor: (user.authorBooks ?? []).some((item) => item.id === id), readingStatus: payload.readingStatus ?? "read" }).allowed) return response.status(400).json({ error: "В TOP3 можно добавлять только прочитанные книги из своей библиотеки" });
+  let topRank;
+  if (!payload.isAuthor && (payload.readingStatus ?? "read") === "read" && top3Requested) {
+    const topBooks = user.books.filter((item) => item.topRank && item.id !== id);
+    if (topBooks.length >= 3) return response.status(409).json({ error: "В TOP3 уже добавлены три книги. Сначала снимите отметку с одной из них.", code: "TOP3_LIMIT" });
+    topRank = nextTopRank(topBooks, id);
+  }
   const canonical = allBooks.find((item) => item.id === id);
   const book = canonical
-    ? { ...canonical, ...payload, id, author: canonical.author, title: canonical.title, isbn: canonical.isbn || payload.isbn, publisher: canonical.publisher || payload.publisher, annotation: canonical.annotation, coverUrl: canonical.coverUrl || payload.coverUrl, links: [...(canonical.links ?? []), ...(payload.links ?? [])].filter((link, index, list) => list.findIndex((item) => item.url === link.url) === index) }
-    : { ...payload, id, links: payload.links ?? [] };
+    ? { ...canonical, ...payload, id, catalogBookId: id, topRank, author: canonical.author, title: canonical.title, isbn: canonical.isbn || payload.isbn, publisher: canonical.publisher || payload.publisher, annotation: canonical.annotation, coverUrl: canonical.coverUrl || payload.coverUrl, links: [...(canonical.links ?? []), ...(payload.links ?? [])].filter((link, index, list) => list.findIndex((item) => item.url === link.url) === index) }
+    : { ...payload, id, catalogBookId: id, topRank, links: payload.links ?? [] };
   const target = payload.isAuthor ? (user.authorBooks ??= []) : user.books;
   const index = target.findIndex((item) => item.id === id);
   if (index >= 0) target[index] = book; else target.unshift(book);
-  response.json({ ok: true, bookId: id });
+  response.json({ ok: true, bookId: id, topRank });
 });
 
 function demoMarketplace(value) {

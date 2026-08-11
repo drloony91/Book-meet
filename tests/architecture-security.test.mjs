@@ -7,8 +7,108 @@ import { imageType } from "../server/modules/image-storage.js";
 import { requestLimitPolicy } from "../server/modules/request-limits.js";
 import { canCreateFriendRequest, canMessagePair } from "../server/modules/social-permissions.js";
 import { ageFromBirthDate } from "../server/data.js";
+import { nextTopRank, top3Eligibility } from "../server/modules/top3.js";
+import { createTelegramOutboxDispatcher, dispatchTelegramOutbox, shouldEnqueueSupportAlert, telegramAlertsEnabled, telegramAlertText } from "../server/modules/telegram-outbox.js";
+import { safeReturnTo } from "../app/lib/navigation-security.js";
+import { loadPublicCatalog } from "../server/modules/public-catalog.js";
 
 const root = path.resolve(import.meta.dirname, "..");
+
+test("TOP3 assigns stable free ranks and rejects ineligible copies", () => {
+  assert.equal(nextTopRank([{ book_id: 10, top_rank: 1 }, { book_id: 11, top_rank: 3 }], 11), 3);
+  assert.equal(nextTopRank([{ book_id: 10, top_rank: 1 }, { book_id: 11, top_rank: 3 }], 12), 2);
+  assert.equal(nextTopRank([{ book_id: 10, top_rank: 1 }, { book_id: 11, top_rank: 2 }, { book_id: 12, top_rank: 3 }], 13), null);
+  assert.deepEqual(top3Eligibility({ isAuthor: false, readingStatus: "read" }), { allowed: true });
+  assert.equal(top3Eligibility({ isAuthor: true, readingStatus: "read" }).allowed, false);
+  assert.equal(top3Eligibility({ isAuthor: false, readingStatus: "reading" }).allowed, false);
+});
+
+test("guest returnTo accepts only same-origin application paths", () => {
+  const origin = "https://bookmeet.club";
+  assert.equal(safeReturnTo("/books?sort=popular#top", origin), "/books?sort=popular#top");
+  assert.equal(safeReturnTo("https://bookmeet.club/communities", origin), "/communities");
+  assert.equal(safeReturnTo("https://evil.example/steal", origin), "/");
+  assert.equal(safeReturnTo("//evil.example/steal", origin), "/");
+  assert.equal(safeReturnTo("javascript:alert(1)", origin), "/");
+});
+
+test("public catalog maps only the minimal read-only DTO", async () => {
+  const results = [
+    [[{ id: 1, author: "Автор", title: "Книга", genres: "[]", annotation: "Текст", cover_tone: "blue", created_at: "2026-01-01", popularity: 2 }]],
+    [[{ id: 2, kind: "review", title: "Книга", preview: "Отзыв", owner_name: "Читатель", created_at: "2026-01-02", private_email: "hidden@example.com" }]],
+    [[]],
+    [[]],
+    [[{ id: 3, title: "Событие", summary: "Описание", event_date: "2026-08-20", event_time: "18:00", city: "Алматы", address: "Адрес", created_at: "2026-01-03" }]],
+    [[{ id: 4, initials: "КК", color: "blue", display_name: "Клуб", city: "Астана", profile_type: "Сообщество", bio: "О клубе", community_type: "Книжный клуб", publisher_bin: "secret" }]],
+  ];
+  const data = await loadPublicCatalog({ query: async () => results.shift() });
+  assert.deepEqual(Object.keys(data.materials[0]).sort(), ["createdAt", "id", "kind", "ownerName", "preview", "title"]);
+  assert.deepEqual(Object.keys(data.organizations[0]).sort(), ["avatarUrl", "bio", "city", "color", "communityType", "id", "initials", "name", "type"].sort());
+  assert.equal("private_email" in data.materials[0], false);
+  assert.equal("publisher_bin" in data.organizations[0], false);
+});
+
+test("Telegram outbox filters admin replies and delivers without payload leakage", async () => {
+  const participants = [{ id: 1, role: "user" }, { id: 2, role: "admin" }];
+  assert.equal(shouldEnqueueSupportAlert(participants, 1, 2), true);
+  assert.equal(shouldEnqueueSupportAlert(participants, 2, 1), false);
+  assert.equal(telegramAlertsEnabled({ TELEGRAM_ALERTS_ENABLED: "1", TELEGRAM_BOT_TOKEN: "token", TELEGRAM_CHAT_ID: "chat" }), true);
+  assert.equal(telegramAlertsEnabled({ TELEGRAM_ALERTS_ENABLED: "0", TELEGRAM_BOT_TOKEN: "token", TELEGRAM_CHAT_ID: "chat" }), false);
+  const poolQueries = [];
+  const environment = { TELEGRAM_ALERTS_ENABLED: "1", TELEGRAM_BOT_TOKEN: "secret-token", TELEGRAM_CHAT_ID: "alerts" };
+  let requestBody;
+  const result = await dispatchTelegramOutbox({
+    environment,
+    claimNext: async () => ({ id: 9, event_type: "support_message", entity_id: 71, summary: "Новое сообщение пользователя", attempts: 0 }),
+    fetchImpl: async (_url, options) => { requestBody = JSON.parse(options.body); return { ok: true, status: 200 }; },
+    pool: { query: async (...args) => { poolQueries.push(args); } },
+  });
+  assert.equal(result.status, "delivered");
+  assert.equal(requestBody.chat_id, "alerts");
+  assert.doesNotMatch(requestBody.text, /secret-token|alerts/);
+  assert.match(telegramAlertText({ event_type: "report_created", entity_id: 4, summary: "book" }), /ID: 4/);
+  assert.match(poolQueries[0][0], /delivered_at = UTC_TIMESTAMP\(\)/);
+});
+
+test("Telegram outbox retries safely and skips an empty or disabled queue", async () => {
+  const environment = { TELEGRAM_ALERTS_ENABLED: "1", TELEGRAM_BOT_TOKEN: "very-secret", TELEGRAM_CHAT_ID: "42" };
+  const poolQueries = [];
+  const retry = await dispatchTelegramOutbox({
+    environment,
+    claimNext: async () => ({ id: 10, event_type: "report_created", entity_id: 3, summary: "user", attempts: 1 }),
+    fetchImpl: async () => { throw new Error("https://api.telegram.org/botvery-secret/sendMessage failed"); },
+    pool: { query: async (...args) => { poolQueries.push(args); } },
+  });
+  assert.equal(retry.status, "retry");
+  assert.equal(retry.attempts, 2);
+  assert.doesNotMatch(String(poolQueries[0][1][2]), /very-secret/);
+  let fetched = false;
+  const idle = await dispatchTelegramOutbox({ environment, claimNext: async () => null, fetchImpl: async () => { fetched = true; } });
+  assert.equal(idle.status, "idle");
+  assert.equal(fetched, false);
+  const disabled = await dispatchTelegramOutbox({ environment: { TELEGRAM_ALERTS_ENABLED: "0" }, fetchImpl: async () => { fetched = true; } });
+  assert.equal(disabled.status, "disabled");
+});
+
+test("Telegram dispatcher stops cleanly and delivered rows are not claimed twice", async () => {
+  const environment = { TELEGRAM_ALERTS_ENABLED: "1", TELEGRAM_BOT_TOKEN: "token", TELEGRAM_CHAT_ID: "chat" };
+  let pending = { id: 12, event_type: "event_pending", entity_id: 8, summary: "Событие", attempts: 0 };
+  let sends = 0;
+  const options = {
+    environment,
+    claimNext: async () => pending,
+    fetchImpl: async () => { sends += 1; return { ok: true, status: 200 }; },
+    pool: { query: async (sql) => { if (/delivered_at = UTC_TIMESTAMP/.test(sql)) pending = null; } },
+  };
+  assert.equal((await dispatchTelegramOutbox(options)).status, "delivered");
+  assert.equal((await dispatchTelegramOutbox(options)).status, "idle");
+  assert.equal(sends, 1);
+  let claimsAfterStop = 0;
+  const dispatcher = createTelegramOutboxDispatcher({ ...options, claimNext: async () => { claimsAfterStop += 1; return null; } });
+  dispatcher.stop();
+  await dispatcher.tick();
+  assert.equal(claimsAfterStop, 0);
+});
 
 test("издательские социальные разрешения проверяются общим предикатом", () => {
   assert.equal(canCreateFriendRequest("Читатель", "Блогер"), true);

@@ -13,6 +13,9 @@ import { previewRemoteCover, saveAvatar, saveCover, saveRemoteCover } from "./mo
 import { cleanUrl, eventPayload, knownCities, knownCity, occasionPayload } from "./modules/material-input.js";
 import { createLocationRouter } from "./modules/location-router.js";
 import { canCreateFriendRequest, canMessagePair } from "./modules/social-permissions.js";
+import { enqueueTelegramAlert, shouldEnqueueSupportAlert } from "./modules/telegram-outbox.js";
+import { loadPublicCatalog } from "./modules/public-catalog.js";
+import { nextTopRank, top3Eligibility } from "./modules/top3.js";
 import { clearSessionCookie, clearTransientCookie, createSessionToken, generateRecoveryCodes, generateTotpSecret, hashPassword, hashRecoveryCode, hashSessionToken, isValidEmail, normalizeEmail, normalizeIdentity, readCookie, recoveryCodeIndex, sessionCookie, transientCookie, verifyPassword, verifyTotp } from "./security.js";
 
 const router = Router();
@@ -1154,6 +1157,11 @@ router.post("/auth/deleted-profile/new", asyncRoute(async (request, response) =>
 
 router.use(createBootstrapRouter({ authenticatedUser }));
 
+router.get("/public/catalog", asyncRoute(async (_request, response) => {
+  response.setHeader("Cache-Control", "public, max-age=60, stale-while-revalidate=300");
+  response.json(await loadPublicCatalog());
+}));
+
 router.get("/admin/statistics", asyncRoute(async (request, response) => {
   const pool = getPool();
   const user = await authenticatedUser(request);
@@ -1410,6 +1418,7 @@ router.post("/events", asyncRoute(async (request, response) => {
       [userId, payload.title, payload.summary, payload.description, payload.isAdult ? 1 : 0, payload.date, payload.time, city.name, city.id, payload.address, payload.mapUrl || null, payload.detailsUrl || null, linkedBook?.id ?? null],
     );
     await syncMaterialBooks(connection, "event", created.insertId, linkedBooks.map((book) => book.id));
+    await enqueueTelegramAlert(connection, { eventType: "event_pending", entityId: created.insertId, actorUserId: userId, summary: payload.title });
     await connection.query(
       `INSERT INTO notifications (user_id, actor_user_id, notification_type, title, body, material_kind, material_id)
        VALUES (?, ?, 'event_submitted', 'Событие на модерации', ?, 'event', ?)`,
@@ -1510,6 +1519,7 @@ router.patch("/events/:id", asyncRoute(async (request, response) => {
       [payload.title, payload.summary, payload.description, payload.isAdult ? 1 : 0, payload.date, payload.time, city.name, city.id, payload.address, payload.mapUrl || null, payload.detailsUrl || null, linkedBook?.id ?? null, eventId],
     );
     await syncMaterialBooks(connection, "event", eventId, linkedBooks.map((book) => book.id));
+    await enqueueTelegramAlert(connection, { eventType: "event_pending", entityId: eventId, actorUserId: userId, summary: payload.title, dedupeKey: `event_pending:${eventId}:${randomBytes(8).toString("hex")}` });
     return {
       id: eventId, creatorId: userId, ...payload, city: city.name, cityId: city.id,
       linkedBookId: linkedBook ? Number(linkedBook.id) : undefined,
@@ -1591,6 +1601,7 @@ router.post("/occasions", asyncRoute(async (request, response) => {
       [userId, payload.type, payload.primaryText, payload.audienceText, payload.isAdult ? 1 : 0, payload.targetGender, JSON.stringify(payload.targetCities), payload.targetProfileType, payload.meetingDate ?? null, payload.meetingStartTime ?? null, payload.meetingEndTime ?? null, payload.meetingCity ?? null, payload.meetingCityId ?? null, payload.meetingAddress ?? null, payload.meetingMapUrl || null, payload.linkedBookId ?? null],
     );
     await syncMaterialBooks(connection, "occasion", created.insertId, linkedBooks.map((book) => book.id));
+    await enqueueTelegramAlert(connection, { eventType: "occasion_pending", entityId: created.insertId, actorUserId: userId, summary: payload.primaryText });
     await connection.query(
       `INSERT INTO notifications (user_id, actor_user_id, notification_type, title, body, material_kind, material_id)
        VALUES (?, ?, 'event_submitted', 'Повод на модерации', ?, 'occasion', ?)`,
@@ -1618,6 +1629,7 @@ router.patch("/occasions/:id", asyncRoute(async (request, response) => {
       [payload.type, payload.primaryText, payload.audienceText, payload.isAdult ? 1 : 0, payload.targetGender, JSON.stringify(payload.targetCities), payload.targetProfileType, payload.meetingDate ?? null, payload.meetingStartTime ?? null, payload.meetingEndTime ?? null, payload.meetingCity ?? null, payload.meetingCityId ?? null, payload.meetingAddress ?? null, payload.meetingMapUrl || null, payload.linkedBookId ?? null, occasionId],
     );
     await syncMaterialBooks(connection, "occasion", occasionId, linkedBooks.map((book) => book.id));
+    await enqueueTelegramAlert(connection, { eventType: "occasion_pending", entityId: occasionId, actorUserId: userId, summary: payload.primaryText, dedupeKey: `occasion_pending:${occasionId}:${randomBytes(8).toString("hex")}` });
     const [[creator]] = await connection.query("SELECT display_name FROM profiles WHERE user_id = ?", [userId]);
     return { id: occasionId, creatorId: userId, ...payload, linkedBooks, status: "pending", moderationNote: "", creatorName: creator?.display_name ?? "", createdAt: new Date(current.created_at).toISOString() };
   });
@@ -1813,6 +1825,9 @@ router.put("/users/me/state", asyncRoute(async (request, response) => {
         publisherStatus, userId,
       ],
     );
+    if (isOrganization && publisherStatus === "pending" && currentProfile?.publisher_status !== "pending") {
+      await enqueueTelegramAlert(connection, { eventType: "organization_pending", entityId: userId, actorUserId: userId, summary: profile.name });
+    }
     if (isOrganization) {
       const newsIds = [];
       for (const item of publisherNews) {
@@ -2077,6 +2092,8 @@ router.post("/books", asyncRoute(async (request, response) => {
   if (!author || !title) return response.status(400).json({ error: "Автор и название обязательны" });
   const rating = Number(payload.rating);
   const readingStatus = ["want", "reading", "read"].includes(payload.readingStatus) ? payload.readingStatus : "read";
+  const top3Specified = typeof payload.top3 === "boolean" || payload.topRank !== undefined;
+  const top3Requested = payload.top3 === true || Number(payload.topRank) > 0;
   const readMonth = Number(payload.readMonth) || null;
   const readYear = Number(payload.readYear) || null;
   const lastReadChapter = readingStatus === "reading" && Number(payload.lastReadChapter) > 0 ? Math.floor(Number(payload.lastReadChapter)) : null;
@@ -2132,8 +2149,9 @@ router.post("/books", asyncRoute(async (request, response) => {
       createdCanonical = true;
       canonicalOwnerId = payload.isAuthor ? userId : null;
     } else {
-      const [[book]] = await connection.query("SELECT id, creator_user_id, annotation, cover_path, isbn, publisher FROM books WHERE id = ? FOR UPDATE", [bookId]);
+      const [[book]] = await connection.query("SELECT id, creator_user_id, annotation, cover_path, isbn, publisher, is_adult FROM books WHERE id = ? FOR UPDATE", [bookId]);
       if (!book) throw new Error("Выбранная книга не найдена");
+      if (book.is_adult) await assertAdultMaterialAllowed(connection, userId, true);
       canonicalOwnerId = book.creator_user_id ? Number(book.creator_user_id) : null;
       if (payload.isAuthor && !access.isPublisher && book.creator_user_id && Number(book.creator_user_id) !== userId) {
         throw Object.assign(new Error("Эта авторская карточка принадлежит другому писателю"), { statusCode: 409 });
@@ -2149,13 +2167,34 @@ router.post("/books", asyncRoute(async (request, response) => {
         await connection.query("UPDATE books SET annotation = ? WHERE id = ? AND (annotation IS NULL OR annotation = '')", [String(payload.annotation).trim(), bookId]);
       }
     }
-    const [[existingUserBook]] = await connection.query("SELECT user_id FROM user_books WHERE user_id = ? AND book_id = ?", [userId, bookId]);
+    const [[existingUserBook]] = await connection.query("SELECT user_id, is_author, top_rank FROM user_books WHERE user_id = ? AND book_id = ? FOR UPDATE", [userId, bookId]);
+    if (top3Requested && !top3Eligibility({ isAuthor: Boolean(payload.isAuthor || existingUserBook?.is_author), readingStatus }).allowed) {
+      throw Object.assign(new Error("В TOP3 можно добавлять только прочитанные книги из своей библиотеки"), { statusCode: 400 });
+    }
     await connection.query(
       `INSERT INTO user_books (user_id, book_id, rating, short_review, read_month, read_year, reading_status, last_read_chapter, reading_comment, is_author)
        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
        ON DUPLICATE KEY UPDATE rating = VALUES(rating), short_review = VALUES(short_review), read_month = VALUES(read_month), read_year = VALUES(read_year), reading_status = VALUES(reading_status), last_read_chapter = VALUES(last_read_chapter), reading_comment = VALUES(reading_comment), is_author = VALUES(is_author)`,
       [userId, bookId, payload.isAuthor || readingStatus !== "read" ? null : rating, payload.isAuthor || readingStatus !== "read" ? null : String(payload.shortReview ?? "").trim(), payload.isAuthor || readingStatus !== "read" ? null : readMonth, payload.isAuthor || readingStatus !== "read" ? null : readYear, payload.isAuthor ? "read" : readingStatus, payload.isAuthor ? null : lastReadChapter, payload.isAuthor ? null : readingComment, payload.isAuthor ? 1 : 0],
     );
+    let topRank = existingUserBook?.top_rank ? Number(existingUserBook.top_rank) : null;
+    if (payload.isAuthor || readingStatus !== "read" || top3Specified && !top3Requested) {
+      await connection.query("UPDATE user_books SET top_rank = NULL WHERE user_id = ? AND book_id = ?", [userId, bookId]);
+      topRank = null;
+    } else if (top3Requested) {
+      const [topBooks] = await connection.query(
+        "SELECT book_id, top_rank FROM user_books WHERE user_id = ? AND top_rank IS NOT NULL ORDER BY top_rank FOR UPDATE",
+        [userId],
+      );
+      const currentTop = topBooks.find((item) => Number(item.book_id) === bookId);
+      if (currentTop) topRank = Number(currentTop.top_rank);
+      else {
+        const availableRank = nextTopRank(topBooks, bookId);
+        if (!availableRank) throw Object.assign(new Error("В TOP3 уже добавлены три книги. Сначала снимите отметку с одной из них."), { statusCode: 409, code: "TOP3_LIMIT" });
+        await connection.query("UPDATE user_books SET top_rank = ? WHERE user_id = ? AND book_id = ? AND is_author = 0 AND reading_status = 'read'", [availableRank, userId, bookId]);
+        topRank = availableRank;
+      }
+    }
     if (payload.isAuthor) {
       if (createdCanonical || canonicalOwnerId === userId) {
         const coverPath = uploadedCoverPath ?? (payload.coverUrl ? await saveCover(payload.coverUrl) : null);
@@ -2176,7 +2215,7 @@ router.post("/books", asyncRoute(async (request, response) => {
       }
     }
     if (!payload.isAuthor && !existingUserBook) await notifyWriterAboutBook(connection, bookId, userId, "library");
-    return { bookId };
+    return { bookId, topRank: topRank ?? undefined };
   });
   if (result.conflict) return response.status(409).json({ match: result.conflict });
   response.status(201).json(result);
@@ -2449,6 +2488,7 @@ router.post("/reports", asyncRoute(async (request, response) => {
       "INSERT INTO reports (reporter_user_id, target_kind, target_id, target_user_id, reason) VALUES (?, ?, ?, ?, ?)",
       [reporterId, targetKind, targetId, target.owner_id || null, reason],
     );
+    await enqueueTelegramAlert(connection, { eventType: "report_created", entityId: created.insertId, actorUserId: reporterId, summary: targetKind });
     if (targetKind === "user" && shouldBlock) await applyPersonalBlock(connection, reporterId, targetId);
     return { id: Number(created.insertId), blocked: targetKind === "user" && shouldBlock };
   });
@@ -2859,6 +2899,9 @@ router.post("/social/messages", asyncRoute(async (request, response) => {
     if (!canMessagePair({ friends: Boolean(friendship), communityMembers: Boolean(membership), hasAdmin, firstProfileType: firstParticipant?.profile_type, secondProfileType: secondParticipant?.profile_type })) throw Object.assign(new Error("Переписка доступна только друзьям, участникам сообщества, издательствам и службе поддержки"), { statusCode: 403 });
     const attachment = await validatedChatAttachment(connection, request.body?.attachment);
     const [created] = await connection.query("INSERT INTO messages (sender_user_id, recipient_user_id, body, attachment_kind, attachment_id) VALUES (?, ?, ?, ?, ?)", [userId, targetId, body, attachment?.kind ?? null, attachment?.id ?? null]);
+    if (shouldEnqueueSupportAlert(participants, userId, targetId)) {
+      await enqueueTelegramAlert(connection, { eventType: "support_message", entityId: created.insertId, actorUserId: userId, summary: "Новое сообщение пользователя" });
+    }
     const [[actor]] = await connection.query("SELECT display_name FROM profiles WHERE user_id = ?", [userId]);
     const notificationPreview = body || "Поделился(ась) материалом";
     await connection.query("INSERT INTO notifications (user_id, actor_user_id, notification_type, title, body, group_key) VALUES (?, ?, 'new_message', 'Новое сообщение', ?, ?) ON DUPLICATE KEY UPDATE actor_user_id = VALUES(actor_user_id), body = VALUES(body), is_unread = 1, created_at = CURRENT_TIMESTAMP", [targetId, userId, `${actor.display_name}: ${notificationPreview}`, `message:${userId}`]);

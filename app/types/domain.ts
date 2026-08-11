@@ -107,6 +107,7 @@ export type LibraryBook = {
   readMonth?: number;
   readYear?: number;
   readingStatus?: ReadingStatus;
+  topRank?: 1 | 2 | 3;
   lastReadChapter?: number;
   readingComment?: string;
   isAdult?: boolean;
@@ -187,6 +188,11 @@ export type DemoUser = { id: number; username: string; initials: string; color: 
 export type AdultMaterialKind = "book" | "review" | "excerpt" | "event" | "occasion";
 export type AdultAccess = { status: "adult" | "minor" | "missing"; restricted: Partial<Record<AdultMaterialKind, number[]>> };
 export type BootstrapData = { activeUserId: number; profileCompleted?: boolean; adultAccess?: AdultAccess; users: DemoUser[]; messages: Record<string, Message[]>; friendRequests: FriendRequest[]; friendships: Friendship[]; communityMemberships?: CommunityMembership[]; follows: Follow[]; notifications: SocialNotification[]; likes: Record<string, number[]>; events?: BookEvent[]; occasions?: Occasion[]; blocks?: UserBlock[]; blockedByUserIds?: number[]; reports?: SafetyReport[] };
+export type PublicCatalogBook = Pick<LibraryBook, "id" | "author" | "title" | "isbn" | "publisher" | "genres" | "annotation" | "coverUrl" | "coverTone"> & { addedAt?: string; popularity: number };
+export type PublicCatalogMaterial = { id: number; kind: "review" | "excerpt" | "publisher_news"; title: string; preview: string; ownerName: string; createdAt?: string };
+export type PublicCatalogEvent = { id: number; title: string; summary: string; date: string; time: string; city: string; address: string; createdAt?: string };
+export type PublicOrganization = { id: number; name: string; city: string; type: "Издатель" | "Сообщество"; bio: string; communityType?: string; initials: string; color: string; avatarUrl?: string };
+export type PublicCatalogData = { books: PublicCatalogBook[]; materials: PublicCatalogMaterial[]; events: PublicCatalogEvent[]; organizations: PublicOrganization[] };
 export type AuthResult = { error?: string; requiresTotp?: boolean; deletedProfile?: boolean; daysRemaining?: number };
 
 export type AdminMaterialKind = "book" | "review" | "excerpt" | "event" | "occasion";

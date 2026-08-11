@@ -1,5 +1,13 @@
 import type { AuthorBook, BookEvent, DemoUser, LibraryBook, ReadingItem } from "../types/domain";
 
+export function sortLibraryBooks(books: LibraryBook[]) {
+  return books.map((book, index) => ({ book, index })).sort((first, second) => {
+    const firstRank = first.book.topRank ?? Number.POSITIVE_INFINITY;
+    const secondRank = second.book.topRank ?? Number.POSITIVE_INFINITY;
+    return firstRank - secondRank || first.index - second.index;
+  }).map(({ book }) => book);
+}
+
 export function sanitizeRichHtml(value: string) {
   if (typeof document === "undefined" || !value) return "";
   const template = document.createElement("template");

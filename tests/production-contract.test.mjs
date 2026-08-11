@@ -39,6 +39,83 @@ test("MySQL-схема содержит все MVP-сущности", async () =
   assert.match(sql, /CHARSET=utf8mb4/);
 });
 
+test("TOP3 хранится отдельным ранжированным слотом и обновляется атомарно", async () => {
+  const migration = await readFile(path.join(root, "mysql", "migrations", "026_user_books_top3.sql"), "utf8");
+  const api = await readFile(path.join(root, "server", "api.js"), "utf8");
+  const data = await readFile(path.join(root, "server", "data.js"), "utf8");
+  const demo = await readFile(path.join(root, "server", "demo-api.js"), "utf8");
+  const content = await readFile(path.join(root, "app", "components", "content", "ContentComponents.tsx"), "utf8");
+  assert.match(migration, /ADD COLUMN top_rank TINYINT UNSIGNED NULL/);
+  assert.match(migration, /UNIQUE KEY uq_user_books_user_top_rank \(user_id, top_rank\)/);
+  assert.match(api, /SELECT book_id, top_rank FROM user_books WHERE user_id = \? AND top_rank IS NOT NULL ORDER BY top_rank FOR UPDATE/);
+  assert.match(api, /UPDATE user_books SET top_rank = NULL WHERE user_id = \? AND book_id = \?/);
+  assert.match(api, /code: "TOP3_LIMIT"/);
+  assert.match(data, /topRank: book\.top_rank \? Number\(book\.top_rank\) : undefined/);
+  assert.match(demo, /topRank = nextTopRank\(topBooks, id\)/);
+  assert.match(content, /Добавить в TOP3/);
+  assert.match(content, /top3-crown/);
+  assert.match(content, /sortLibraryBooks/);
+});
+
+test("каталожная книга открывает единый BookEditor без дублирования canonical book", async () => {
+  const controller = await readFile(path.join(root, "app", "hooks", "useBookMeetController.tsx"), "utf8");
+  const content = await readFile(path.join(root, "app", "components", "content", "ContentComponents.tsx"), "utf8");
+  const api = await readFile(path.join(root, "server", "api.js"), "utf8");
+  assert.match(content, /Добавить в Мою библиотеку/);
+  assert.match(content, /bookmeet:add-catalog-book/);
+  assert.match(controller, /catalogBookToAdd && <BookEditor/);
+  assert.match(controller, /useExistingId: catalogBookId/);
+  assert.match(controller, /user\.books\.some\(\(item\) => \(item\.catalogBookId \?\? item\.id\) === catalogBookId\)/);
+  assert.match(api, /ON DUPLICATE KEY UPDATE rating = VALUES\(rating\)/);
+});
+
+test("guest bootstrap публичен до requireUser и не содержит приватных социальных данных", async () => {
+  const api = await readFile(path.join(root, "server", "api.js"), "utf8");
+  const demo = await readFile(path.join(root, "server", "demo-api.js"), "utf8");
+  const loader = await readFile(path.join(root, "server", "modules", "public-catalog.js"), "utf8");
+  const guest = await readFile(path.join(root, "app", "screens", "GuestExperience.tsx"), "utf8");
+  const controller = await readFile(path.join(root, "app", "hooks", "useBookMeetController.tsx"), "utf8");
+  assert.ok(api.indexOf('router.get("/public/catalog"') < api.indexOf("router.use(asyncRoute(requireUser))"));
+  assert.ok(demo.indexOf('router.get("/public/catalog"') < demo.indexOf("router.use(requireUser)"));
+  assert.match(loader, /b\.is_adult = 0/);
+  assert.match(loader, /e\.status = 'published' AND e\.is_adult = 0/);
+  assert.match(loader, /p\.publisher_status = 'approved'/);
+  assert.doesNotMatch(loader, /messages|notifications|friend_requests|friendships|user_blocks|reports|publisher_legal|publisher_bin|email/);
+  assert.match(guest, /Вход\/Регистрация/);
+  assert.match(guest, /Найти друзей/);
+  assert.match(guest, /Книжный повод/);
+  assert.match(controller, /loadPublicCatalog/);
+  assert.match(controller, /bookmeet:returnTo/);
+});
+
+test("Telegram alerts use a transactional outbox and environment-only credentials", async () => {
+  const migration = await readFile(path.join(root, "mysql", "migrations", "027_telegram_alert_outbox.sql"), "utf8");
+  const outbox = await readFile(path.join(root, "server", "modules", "telegram-outbox.js"), "utf8");
+  const api = await readFile(path.join(root, "server", "api.js"), "utf8");
+  const server = await readFile(path.join(root, "server", "index.js"), "utf8");
+  const environment = await readFile(path.join(root, ".env.example"), "utf8");
+  assert.match(migration, /CREATE TABLE telegram_alert_outbox/);
+  assert.match(migration, /UNIQUE KEY uq_telegram_alert_outbox_dedupe/);
+  assert.match(migration, /delivered_at DATETIME NULL/);
+  assert.match(outbox, /available_at <= UTC_TIMESTAMP\(\)/);
+  assert.match(outbox, /delivered_at = UTC_TIMESTAMP\(\)/);
+  assert.match(outbox, /retryDelaySeconds/);
+  for (const eventType of ["support_message", "event_pending", "occasion_pending", "organization_pending", "report_created"]) assert.match(api, new RegExp(`eventType: "${eventType}"`));
+  assert.match(server, /telegramDispatcher\?\.stop\(\)/);
+  assert.match(environment, /TELEGRAM_ALERTS_ENABLED=0/);
+  assert.match(environment, /TELEGRAM_BOT_TOKEN=/);
+  assert.match(environment, /TELEGRAM_CHAT_ID=/);
+  assert.doesNotMatch(`${api}\n${server}\n${outbox}`, /\d{8,}:[A-Za-z0-9_-]{20,}/);
+});
+
+test("occasion preview and modal render primary and audience fields as label-value rows", async () => {
+  const content = await readFile(path.join(root, "app", "components", "content", "ContentComponents.tsx"), "utf8");
+  assert.match(content, /occasion-audience-row/);
+  assert.match(content, /<strong>\{labels\.primary\}:<\/strong> \{item\.primaryText\}/);
+  assert.match(content, /<strong>\{labels\.audience\}:<\/strong> \{item\.audienceText\}/);
+  assert.doesNotMatch(content, /<h[23]>\{labels\.primary\}: \{item\.primaryText\}<\/h[23]>/);
+});
+
 test("события, роли и модерация описаны отдельной миграцией", async () => {
   const sql = await readFile(path.join(root, "mysql", "migrations", "002_events_admin_support.sql"), "utf8");
   assert.match(sql, /ADD COLUMN role/);

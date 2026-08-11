@@ -1,4 +1,4 @@
-import type { BootstrapData } from "../types/domain";
+import type { BootstrapData, PublicCatalogData } from "../types/domain";
 import { apiFetch } from "./api";
 
 export type BootstrapSection = "session" | "catalog" | "social" | "moderation";
@@ -19,4 +19,16 @@ async function loadSection(section: BootstrapSection) {
 export async function loadApplicationData(sections: BootstrapSection[] = ["session", "catalog", "social", "moderation"]): Promise<BootstrapData> {
   const parts = await Promise.all(sections.map(loadSection));
   return Object.assign({}, ...parts) as BootstrapData;
+}
+
+export async function loadPublicCatalog(): Promise<PublicCatalogData> {
+  const response = await apiFetch("/api/public/catalog", { cache: "no-store" });
+  const data = await response.json().catch(() => ({})) as Partial<PublicCatalogData> & { error?: string };
+  if (!response.ok) throw new Error(data.error || "Не удалось загрузить публичный каталог Book Meet");
+  return {
+    books: data.books ?? [],
+    materials: data.materials ?? [],
+    events: data.events ?? [],
+    organizations: data.organizations ?? [],
+  };
 }

@@ -20,12 +20,15 @@ import {
 } from "../navigation/routes";
 import { ChatScreen } from "../screens/ChatScreen";
 import { AuthBookTransition, LoginScreen } from "../screens/AuthScreens";
+import { GuestExperience } from "../screens/GuestExperience";
+import { safeReturnTo } from "../lib/navigation-security";
 import { CommunitiesDirectoryPage, PublishingDirectoryPage, UsersDirectoryPage } from "../screens/UsersDirectoryScreen";
 import { AllBooksDirectoryPage, EventsDirectoryPage, HomeContent, MaterialsDirectoryPage, OccasionsDirectoryPage, SimpleDirectoryPage } from "../screens/ContentScreens";
 import { ContentHubControls } from "../components/content/ContentHubControls";
 import { AdminProfile, MyProfile } from "../screens/ProfileScreens";
 import {
   AdminCatalogEditor,
+  BookEditor,
   EventForm,
   EventModal,
   OccasionForm,
@@ -55,7 +58,7 @@ import {
   userBookMatches,
 } from "../lib/domain";
 import { apiFetch } from "../services/api";
-import { BootstrapRequestError, loadApplicationData } from "../services/bootstrap";
+import { BootstrapRequestError, loadApplicationData, loadPublicCatalog } from "../services/bootstrap";
 import { conversationKey, finishMinimumLoading } from "./controller-utils";
 import type {
   AdminCatalogItem,
@@ -83,6 +86,7 @@ import type {
   Occasion,
   OccasionType,
   ProfileTab,
+  PublicCatalogData,
   ReadingItem,
   Review,
   SocialNotification,
@@ -102,6 +106,8 @@ export function useBookMeetController() {
   const [activeUserId, setActiveUserId] = useState<number | null>(null);
   const [authLoading, setAuthLoading] = useState(true);
   const [authTransition, setAuthTransition] = useState(false);
+  const [guestAuthOpen, setGuestAuthOpen] = useState(false);
+  const [publicCatalog, setPublicCatalog] = useState<PublicCatalogData | null>(null);
   const [newlyRegistered, setNewlyRegistered] = useState(false);
   const [startupError, setStartupError] = useState("");
   const [view, setView] = useState<MainView>(initialMainView);
@@ -122,6 +128,7 @@ export function useBookMeetController() {
   const [likes, setLikes] = useState<Record<string, number[]>>({});
   const [commenters, setCommenters] = useState<Record<string, number[]>>({});
   const [selectedBook, setSelectedBook] = useState<LibraryBook | AuthorBook | null>(null);
+  const [catalogBookToAdd, setCatalogBookToAdd] = useState<LibraryBook | null>(null);
   const [selectedMaterial, setSelectedMaterial] = useState<ReadingItem | null>(null);
   const [adminEditingMaterial, setAdminEditingMaterial] = useState<AdminCatalogItem | null>(null);
   const [events, setEvents] = useState<BookEvent[]>([]);
@@ -149,6 +156,12 @@ export function useBookMeetController() {
   const visibleUsers = users.filter((user) => currentUser?.isAdmin || user.id === activeUserId || !user.blockedByMe);
   const routeDataRef = useRef({ users, activeUserId, friendships, communityMemberships, notifications, events, occasions, adultAccess });
   routeDataRef.current = { users, activeUserId, friendships, communityMemberships, notifications, events, occasions, adultAccess };
+
+  useEffect(() => {
+    if (currentUser) document.documentElement.dataset.bookMeetUserId = String(currentUser.id);
+    else delete document.documentElement.dataset.bookMeetUserId;
+    return () => { delete document.documentElement.dataset.bookMeetUserId; };
+  }, [currentUser?.id]);
 
   useEffect(() => {
     if (profileUserId && blockedByUserIds.includes(profileUserId)) setBlockedProfileNotice(true);
@@ -435,9 +448,17 @@ export function useBookMeetController() {
           window.history.replaceState(restrictedAdultLink ? { backgroundPath: "/profile" } : {}, "", restrictedAdultLink ? window.location.pathname : "/profile");
         }
       }
-    }).catch((error) => {
+    }).catch(async (error) => {
       if (!active) return;
-      if (error instanceof BootstrapRequestError && error.status === 401) return;
+      if (error instanceof BootstrapRequestError && error.status === 401) {
+        try {
+          setPublicCatalog(await loadPublicCatalog());
+        } catch (publicError) {
+          setStartupError(publicError instanceof Error ? publicError.message : "Не удалось загрузить публичный каталог");
+          setGuestAuthOpen(true);
+        }
+        return;
+      }
       if (error instanceof BootstrapRequestError && error.status === 423) {
         setSuspension({ permanent: Boolean(error.data.permanent), until: typeof error.data.until === "string" ? error.data.until : undefined, reason: typeof error.data.reason === "string" ? error.data.reason : "" });
         return;
@@ -454,10 +475,34 @@ export function useBookMeetController() {
   useEffect(() => {
     const createReview = () => startCreating("review");
     const createExcerpt = () => startCreating("excerpt");
+    const addCatalogBook = (event: Event) => {
+      if (!currentUser || ["Издатель", "Сообщество"].includes(currentUser.profile.type)) return;
+      const bookId = Number((event as CustomEvent<{ bookId?: number }>).detail?.bookId);
+      const catalogBook = catalogFromUsers(users).find((book) => (book.catalogBookId ?? book.id) === bookId);
+      if (!catalogBook || currentUser.books.some((book) => (book.catalogBookId ?? book.id) === bookId)) return;
+      setCatalogBookToAdd({ ...catalogBook, id: bookId, catalogBookId: bookId, rating: 0, review: "", readingStatus: "want", topRank: undefined });
+      setSelectedBook(null);
+    };
     window.addEventListener("bookmeet:create-review", createReview);
     window.addEventListener("bookmeet:create-excerpt", createExcerpt);
-    return () => { window.removeEventListener("bookmeet:create-review", createReview); window.removeEventListener("bookmeet:create-excerpt", createExcerpt); };
-  }, [currentUser?.id, currentUser?.profile.type]);
+    window.addEventListener("bookmeet:add-catalog-book", addCatalogBook);
+    return () => { window.removeEventListener("bookmeet:create-review", createReview); window.removeEventListener("bookmeet:create-excerpt", createExcerpt); window.removeEventListener("bookmeet:add-catalog-book", addCatalogBook); };
+  }, [currentUser, users]);
+
+  async function saveCatalogBookToLibrary(book: LibraryBook) {
+    if (!currentUser) return;
+    const catalogBookId = book.catalogBookId ?? book.id;
+    const payload = { author: book.author, title: book.title, isbn: book.isbn, publisher: book.publisher, genres: book.genres, annotation: book.annotation, isAdult: book.isAdult, coverUrl: book.coverUrl, coverTone: book.coverTone, flipUrl: book.flipUrl, links: book.links?.map(({ label, url, action }) => ({ label, url, action })), rating: book.rating, shortReview: book.review, readMonth: book.readMonth, readYear: book.readYear, readingStatus: book.readingStatus ?? "read", lastReadChapter: book.lastReadChapter, readingComment: book.readingComment, top3: Boolean(book.topRank), useExistingId: catalogBookId };
+    const response = await apiFetch("/api/books", { method: "POST", body: JSON.stringify(payload) });
+    const data = await response.json().catch(() => ({})) as { bookId?: number; topRank?: 1 | 2 | 3; error?: string; code?: string };
+    if (!response.ok) {
+      window.alert(data.code === "TOP3_LIMIT" ? "В TOP3 уже добавлены три книги. Сначала снимите отметку с одной из них." : data.error || "Не удалось добавить книгу в Мою библиотеку");
+      return;
+    }
+    const savedBook = { ...book, id: Number(data.bookId ?? catalogBookId), catalogBookId, topRank: data.topRank };
+    setUsers((current) => current.map((user) => user.id === currentUser.id ? { ...user, books: user.books.some((item) => (item.catalogBookId ?? item.id) === catalogBookId) ? user.books.map((item) => (item.catalogBookId ?? item.id) === catalogBookId ? savedBook : item) : [savedBook, ...user.books] } : user));
+    setCatalogBookToAdd(null);
+  }
 
   function addNotification(notification: Omit<SocialNotification, "id" | "unread" | "createdAt">) {
     setNotifications((current) => [...current, { ...notification, id: Date.now() + Math.random(), unread: true, createdAt: "сейчас" }]);
@@ -853,7 +898,11 @@ export function useBookMeetController() {
       if (!response.ok) { await finishMinimumLoading(loadingStartedAt); setAuthTransition(false); return { error: data.error ?? "Не удалось войти" }; }
       applyBootstrap(data);
       setNewlyRegistered(false);
-      navigateMainView("home", { replace: true });
+      const returnTo = safeReturnTo(sessionStorage.getItem("bookmeet:returnTo") || "/");
+      sessionStorage.removeItem("bookmeet:returnTo");
+      window.history.replaceState({}, "", returnTo);
+      setView(appRouteFromPathname(returnTo).view);
+      setGuestAuthOpen(false);
       await finishMinimumLoading(loadingStartedAt); setAuthTransition(false);
       return {};
     } catch {
@@ -884,7 +933,8 @@ export function useBookMeetController() {
   async function logout() {
     await apiFetch("/api/auth/logout", { method: "POST", credentials: "same-origin" }).catch(() => undefined);
     setUsers([]); setActiveUserId(null); setMessages({}); setFriendRequests([]); setFriendships([]); setCommunityMemberships([]); setFollows([]); setNotifications([]); setLikes({}); setEvents([]); setOccasions([]); setBlocks([]); setBlockedByUserIds([]); setReports([]); setSuspension(null); setCommenters({}); setSelectedFriend(null); setChatExpanded(false);
-    navigateMainView("home", { replace: true }); setNotificationsOpen(false); setProfileAction(null); setNewlyRegistered(false); setAuthTransition(false);
+    navigateMainView("home", { replace: true }); setNotificationsOpen(false); setProfileAction(null); setNewlyRegistered(false); setGuestAuthOpen(false); setAuthTransition(false);
+    loadPublicCatalog().then(setPublicCatalog).catch((error) => setStartupError(error instanceof Error ? error.message : "Не удалось загрузить публичный каталог"));
   }
 
   async function resolveDeletedProfile(action: "restore" | "new") {
@@ -909,7 +959,10 @@ export function useBookMeetController() {
   if (authLoading) return <AuthBookTransition />;
   if (deletedRecovery) return <main className="deleted-profile-recovery"><section role="dialog" aria-modal="true"><h1>Профиль удалён</h1><p>Данные профиля будут храниться ещё {deletedRecovery.daysRemaining} дн. Вы можете восстановить прежний профиль или создать новый.</p><p>При создании нового профиля прежний будет удалён окончательно. Это действие нельзя отменить.</p>{startupError && <span className="login-error">{startupError}</span>}<div className="form-actions"><button className="primary-button" type="button" onClick={() => void resolveDeletedProfile("restore")}>Восстановить профиль</button><button className="danger-button" type="button" onClick={() => void resolveDeletedProfile("new")}>Создать новый</button></div></section></main>;
   if (suspension) return <main className="suspension-screen"><section><h1>Доступ к сайту ограничен</h1><p>{suspension.permanent ? "Ваш профиль заблокирован бессрочно." : `Ваш профиль заблокирован до ${new Date(suspension.until ?? "").toLocaleString("ru-RU")}.`}</p><p><strong>Причина:</strong> {suspension.reason || "Нарушение правил сайта."}</p></section></main>;
-  if (!currentUser) return <LoginScreen onLogin={login} onRegister={register} initialError={startupError} />;
+  if (!currentUser) {
+    if (guestAuthOpen || !publicCatalog) return <LoginScreen onLogin={login} onRegister={register} initialError={startupError} />;
+    return <GuestExperience data={publicCatalog} onAuthenticate={(returnTo) => { sessionStorage.setItem("bookmeet:returnTo", safeReturnTo(returnTo || window.location.href)); setGuestAuthOpen(true); }} />;
+  }
   const relationshipToProfile: SocialRelationship = profileUser ? isFriendPair(currentUser.id, profileUser.id) ? "friends" : isCommunityMemberPair(currentUser.id, profileUser.id) ? "community-member" : friendRequests.some((request) => request.status === "pending" && request.fromId === profileUser.id && request.toId === currentUser.id) ? "incoming" : friendRequests.some((request) => request.status === "pending" && request.fromId === currentUser.id && request.toId === profileUser.id) ? "outgoing" : "none" : "none";
   const profileFriendUsers = profileUser ? (profileUser.profile.type === "Сообщество" ? communityMemberships.filter((item) => item.communityId === profileUser.id).map((item) => users.find((candidate) => candidate.id === item.memberId)) : friendships.filter((item) => item.userA === profileUser.id || item.userB === profileUser.id).map((item) => users.find((candidate) => candidate.id === (item.userA === profileUser.id ? item.userB : item.userA)))).filter((candidate): candidate is DemoUser => Boolean(candidate) && !candidate!.isAdmin) : [];
   const relationshipFor = (userId: number): SocialRelationship => isFriendPair(currentUser.id, userId) ? "friends" : isCommunityMemberPair(currentUser.id, userId) ? "community-member" : friendRequests.some((request) => request.status === "pending" && request.fromId === userId && request.toId === currentUser.id) ? "incoming" : friendRequests.some((request) => request.status === "pending" && request.fromId === currentUser.id && request.toId === userId) ? "outgoing" : "none";
@@ -1035,6 +1088,7 @@ export function useBookMeetController() {
       {profileUser && profileUser.id !== currentUser.id && <UserProfileModal user={profileUser} viewer={currentUser} users={visibleUsers} profileFriends={profileFriendUsers} events={events} occasions={occasions} likes={likes} friendCount={profileFriendUsers.length} relationship={relationshipToProfile} incomingMessage={friendRequests.find((request) => request.status === "pending" && request.fromId === profileUser.id && request.toId === currentUser.id)?.message} isFollowing={(currentUser.profile.type === "Издатель" || profileUser.profile.type === "Издатель" ? false : isFriendPair(currentUser.id, profileUser.id)) || follows.some((follow) => follow.followerId === currentUser.id && follow.targetId === profileUser.id)} canMessage={Boolean(currentUser.isAdmin || profileUser.isAdmin || currentUser.profile.type === "Издатель" || profileUser.profile.type === "Издатель")} blockedByMe={Boolean(profileUser.blockedByMe || currentUser.isAdmin && profileUser.suspension)} onClose={() => setProfileUserId(null)} onAddFriend={(message) => sendFriendRequest(profileUser.id, message)} onCancelFriendRequest={() => cancelFriendRequest(profileUser.id)} onAccept={() => acceptFriend(profileUser.id)} onReject={(comment) => rejectFriend(profileUser.id, comment)} onRemoveFriend={() => removeFriend(profileUser.id)} onOpenChat={() => openChat(profileUser.id)} onFollow={() => followUser(profileUser.id)} onUnfollow={() => unfollowUser(profileUser.id)} onBlock={() => blockUser(profileUser.id)} onUnblock={() => unblockUser(profileUser.id)} onReport={currentUser.isAdmin ? undefined : () => openReportDialog({ kind: "user", id: profileUser.id })} onToggleLike={toggleLike} onComment={addComment} onOpenUser={openUserProfile} />}
       {blockedProfileNotice && <div className="nested-modal-backdrop" onMouseDown={() => setBlockedProfileNotice(false)}><section className="confirm-social-modal" role="alertdialog" aria-modal="true" onMouseDown={(event) => event.stopPropagation()}><h2>Кажется, с вами не хотят общаться</h2><button className="primary-button" type="button" autoFocus onClick={() => setBlockedProfileNotice(false)}>Ок</button></section></div>}
       {adultRestrictionNotice && <div className="nested-modal-backdrop"><section className="adult-restriction-modal" role="alertdialog" aria-modal="true" aria-labelledby="adult-restriction-title"><span className="adult-restriction-mark" aria-hidden="true">18+</span><h2 id="adult-restriction-title">Материал предназначен для лиц старше 18 лет</h2>{adultRestrictionNotice === "missing" && <p>Пожалуйста, укажите дату рождения в профиле, чтобы система могла определить ваш возраст.</p>}<div className="form-actions">{adultRestrictionNotice === "missing" ? <><button className="primary-button" type="button" onClick={() => leaveRestrictedMaterial(true)}>Перейти в профиль</button><button className="outline-button" type="button" onClick={() => leaveRestrictedMaterial(false)}>Выйти</button></> : <button className="primary-button" type="button" autoFocus onClick={() => leaveRestrictedMaterial(false)}>Ок</button>}</div></section></div>}
+      {catalogBookToAdd && <BookEditor book={catalogBookToAdd} catalog={catalogFromUsers(users)} top3Count={currentUser.books.filter((item) => item.topRank).length} onClose={() => setCatalogBookToAdd(null)} onSave={(book) => void saveCatalogBookToLibrary(book)} />}
       <SafetyCenter onChanged={() => void refreshBootstrap()} />
     </div>
   );

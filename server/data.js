@@ -60,11 +60,11 @@ export async function loadUsers(connection = getPool(), viewerId = null) {
       ORDER BY u.id`,
   );
   const [bookRows] = await connection.query(
-    `SELECT ub.user_id, ub.rating, ub.short_review, ub.read_month, ub.read_year, ub.reading_status, ub.last_read_chapter, ub.reading_comment, ub.is_author,
+    `SELECT ub.user_id, ub.rating, ub.short_review, ub.read_month, ub.read_year, ub.reading_status, ub.top_rank, ub.last_read_chapter, ub.reading_comment, ub.is_author,
              b.id, b.creator_user_id, b.author, b.title, b.isbn, b.publisher, b.genres, b.annotation, b.is_adult, b.cover_path, b.cover_tone, b.flip_url, b.created_at AS book_created_at
        FROM user_books ub
        JOIN books b ON b.id = ub.book_id
-      ORDER BY ub.created_at DESC`,
+      ORDER BY (ub.top_rank IS NULL), ub.top_rank, ub.created_at DESC, ub.book_id`,
   );
   const [linkRows] = await connection.query(
     `SELECT id, book_id, owner_user_id, action, label, url
@@ -117,6 +117,7 @@ export async function loadUsers(connection = getPool(), viewerId = null) {
     const userBooks = bookRows.filter((book) => Number(book.user_id) === Number(row.id) && (!hideAdultMaterials || !book.is_adult));
     const library = userBooks.filter((book) => !book.is_author).map((book) => ({
       id: Number(book.id),
+      catalogBookId: Number(book.id),
       creatorUserId: book.creator_user_id ? Number(book.creator_user_id) : undefined,
       author: book.author,
       title: book.title,
@@ -133,6 +134,7 @@ export async function loadUsers(connection = getPool(), viewerId = null) {
       readMonth: book.read_month ? Number(book.read_month) : undefined,
       readYear: book.read_year ? Number(book.read_year) : undefined,
       readingStatus: book.reading_status || "read",
+      topRank: book.top_rank ? Number(book.top_rank) : undefined,
       lastReadChapter: book.last_read_chapter ? Number(book.last_read_chapter) : undefined,
       readingComment: book.reading_comment ?? "",
       isAdult: Boolean(book.is_adult),
