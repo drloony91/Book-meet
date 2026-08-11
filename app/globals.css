@@ -2955,7 +2955,10 @@ select {
 .rich-editor-toolbar { flex-wrap: nowrap; overflow-x: auto; overflow-y: hidden; }
 .rich-book-search { top: 51px; left: 9px; max-height: min(320px,45vh); overflow-y: auto; }
 .community-profile-fields { display: grid; gap: 18px; }
-.organization-directory-filters { display: grid; gap: 12px; min-width: min(360px,100%); }
+.organization-directory-filters { display: grid; grid-template-columns: minmax(0,1fr); align-items: end; gap: 12px; width: min(360px,100%); }
+.organization-directory-filters.has-community-type { grid-template-columns: minmax(0,1.2fr) minmax(150px,.8fr); width: min(620px,100%); }
+.organization-directory-filters > label { width: auto; min-width: 0; }
+.organization-directory-filters .directory-control-field > .custom-select { width: 100%; min-width: 0; }
 .profile-settings-stack { display: grid; gap: 22px; }
 .profile-settings-stack > section { margin: 0; }
 .profile-settings-stack > section > h2 { margin: 0 0 18px; font: 700 22px/1.2 Georgia,serif; }

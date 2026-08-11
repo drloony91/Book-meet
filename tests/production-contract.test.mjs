@@ -269,6 +269,7 @@ test("адаптивный редактор, обложки и мобильна�
   assert.match(controls, /const reader = normalizedProfileType === "Читатель"/);
   assert.match(controls, /data-material-action="review"/);
   assert.match(styles, /all-books-grid \.library-book-cover \{ background-size: cover/);
+  assert.match(styles, /organization-directory-filters\.has-community-type \{ grid-template-columns:/);
   assert.match(styles, /reading-stats-mobile-row/);
   assert.match(styles, /publishing-card-intro > \.avatar/);
   assert.match(styles, /chat-popup \.chat-actions button:last-child/);
