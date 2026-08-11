@@ -2885,9 +2885,9 @@ select {
 .friends-collapse-toggle svg { width: 20px; height: 20px; fill: none; stroke: currentColor; stroke-width: 2.2; stroke-linecap: round; stroke-linejoin: round; transition: transform .34s cubic-bezier(.22,.8,.3,1); }
 .friends-collapse-toggle.is-collapsed svg { transform: rotate(180deg); }
 .friends-panel.is-collapsed { cursor: pointer; }
-.all-books-grid { grid-template-columns: repeat(6,minmax(0,1fr)); gap: 16px 12px; }
-.all-books-grid .library-book { display: grid; gap: 7px; padding: 8px; border-radius: 11px; }
-.all-books-grid .library-book-cover { width: 100%; height: auto; aspect-ratio: 2/3; }
+.all-books-grid { grid-template-columns: repeat(6,minmax(0,1fr)); grid-auto-rows: 1fr; gap: 16px 12px; }
+.all-books-grid .library-book { display: grid; grid-template-rows: auto minmax(0,1fr); align-items: start; gap: 7px; height: 100%; padding: 8px; border-radius: 11px; }
+.all-books-grid .library-book-cover { width: 100%; min-width: 0; max-width: 100%; height: auto; aspect-ratio: 2/3; align-self: start; }
 .all-books-grid .library-book-copy { gap: 2px; }
 .all-books-grid .library-book-copy h3 { font-size: 13px; line-height: 1.2; }
 .all-books-grid .library-book-copy p, .all-books-grid .library-book-copy small { font-size: 10px; }
