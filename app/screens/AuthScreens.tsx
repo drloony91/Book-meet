@@ -28,6 +28,11 @@ export function LoginScreen({ onLogin, onRegister, initialError = "" }: { onLogi
   const [providers, setProviders] = useState({ google: false, googleClientId: "" });
   const [error, setError] = useState(initialError);
   const [submitting, setSubmitting] = useState(false);
+  const [accountAction, setAccountAction] = useState<"none" | "recovery" | "reset" | "verification">("none");
+  const [actionNotice, setActionNotice] = useState("");
+  const [resetToken, setResetToken] = useState("");
+  const [resetPassword, setResetPassword] = useState("");
+  const [resetConfirmation, setResetConfirmation] = useState("");
   const googleButtonRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -35,6 +40,27 @@ export function LoginScreen({ onLogin, onRegister, initialError = "" }: { onLogi
     return () => {
       if (turnTimer.current) clearTimeout(turnTimer.current);
     };
+  }, []);
+
+  useEffect(() => {
+    const parameters = new URLSearchParams(window.location.search);
+    const reset = parameters.get("reset");
+    const verify = parameters.get("verify");
+    if (reset) {
+      setResetToken(reset);
+      setAccountAction("reset");
+      window.history.replaceState({}, "", window.location.pathname);
+      return;
+    }
+    if (!verify) return;
+    setAccountAction("verification");
+    window.history.replaceState({}, "", window.location.pathname);
+    void apiFetch("/api/auth/email-verification/confirm", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ token: verify }) })
+      .then(async (response) => {
+        const result = await response.json().catch(() => ({})) as { error?: string };
+        setActionNotice(response.ok ? "E-mail подтверждён. Теперь можно войти в Book Meet." : result.error || "Не удалось подтвердить e-mail. Запросите новое письмо позднее.");
+      })
+      .catch(() => setActionNotice("Не удалось подтвердить e-mail. Попробуйте открыть ссылку ещё раз."));
   }, []);
 
   useEffect(() => {
@@ -134,7 +160,44 @@ export function LoginScreen({ onLogin, onRegister, initialError = "" }: { onLogi
     setSubmitting(false);
   }
 
+  async function requestPasswordRecovery(event: FormEvent) {
+    event.preventDefault();
+    setSubmitting(true);
+    setActionNotice("");
+    try {
+      const response = await apiFetch("/api/auth/password-reset/request", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ email }) });
+      const result = await response.json().catch(() => ({})) as { message?: string };
+      setActionNotice(result.message || "Если такой e-mail зарегистрирован, дальнейшие инструкции отправлены.");
+    } catch {
+      setActionNotice("Не удалось отправить запрос. Попробуйте немного позже.");
+    } finally { setSubmitting(false); }
+  }
+
+  async function saveResetPassword(event: FormEvent) {
+    event.preventDefault();
+    if (resetPassword.length < 8 || resetPassword !== resetConfirmation) {
+      setActionNotice("Пароль должен быть не короче 8 знаков, а поля должны совпадать.");
+      return;
+    }
+    setSubmitting(true);
+    setActionNotice("");
+    try {
+      const response = await apiFetch("/api/auth/password-reset/confirm", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ token: resetToken, password: resetPassword }) });
+      const result = await response.json().catch(() => ({})) as { error?: string };
+      if (!response.ok) { setActionNotice(result.error || "Не удалось сохранить новый пароль."); return; }
+      setResetToken(""); setResetPassword(""); setResetConfirmation(""); setAccountAction("none"); setError("Новый пароль сохранён. Войдите с ним в Book Meet.");
+    } catch { setActionNotice("Не удалось сохранить новый пароль. Попробуйте ещё раз."); }
+    finally { setSubmitting(false); }
+  }
+
   const visibleMode = mode;
+
+  if (accountAction !== "none") return <main className="login-page"><section className="login-book account-action-book"><div className="login-book-spread"><article className="login-book-page"><div className="auth-form-page account-action-form"><img className="login-brand-logo" src="/book-meet-header-logo-v3.png" alt="Book Meet" />
+    {accountAction === "recovery" && <><h1>Восстановить пароль</h1><p>Введите e-mail. Если профиль существует, мы отправим ссылку для восстановления. Пароль никогда не отправляется в письме.</p><form onSubmit={requestPasswordRecovery}><label>E-mail<input required type="email" autoComplete="email" value={email} onChange={(event) => setEmail(event.target.value)} placeholder="you@example.com" /></label>{actionNotice && <span className="login-error account-action-notice">{actionNotice}</span>}<button className="primary-button" type="submit" disabled={submitting}>{submitting ? "Отправляем…" : "Отправить ссылку"}</button></form></>}
+    {accountAction === "reset" && <><h1>Новый пароль</h1><p>Задайте новый пароль для входа в Book Meet.</p><form onSubmit={saveResetPassword}><label>Новый пароль<input required minLength={8} type="password" autoComplete="new-password" value={resetPassword} onChange={(event) => setResetPassword(event.target.value)} /></label><label>Повторите пароль<input required minLength={8} type="password" autoComplete="new-password" value={resetConfirmation} onChange={(event) => setResetConfirmation(event.target.value)} /></label>{actionNotice && <span className="login-error account-action-notice">{actionNotice}</span>}<button className="primary-button" type="submit" disabled={submitting}>{submitting ? "Сохраняем…" : "Сохранить пароль"}</button></form></>}
+    {accountAction === "verification" && <><h1>Подтверждение e-mail</h1><p>{actionNotice || "Проверяем ссылку подтверждения…"}</p></>}
+    <button className="outline-button auth-switch-button" type="button" onClick={() => { setAccountAction("none"); setActionNotice(""); }}>Ко входу</button>
+  </div></article></div></section></main>;
 
   function authForm(formMode: "login" | "register") {
     return <div className="auth-form-page">
@@ -150,6 +213,7 @@ export function LoginScreen({ onLogin, onRegister, initialError = "" }: { onLogi
       </form>
       <div className="auth-provider-actions">
         {providers.google ? <div className="google-provider-button" ref={googleButtonRef} /> : <span>Google-вход будет доступен после добавления ключей сервиса.</span>}
+        {formMode === "login" && <button className="auth-recovery-link" type="button" onClick={() => { setAccountAction("recovery"); setActionNotice(""); }}>Восстановить пароль</button>}
       </div>
       <div className="mobile-auth-invitation">
         <h2>{formMode === "login" ? "Вы у нас впервые?" : "Уже есть профиль?"}</h2>

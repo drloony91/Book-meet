@@ -100,11 +100,24 @@ export async function dispatchTelegramOutbox(options = {}) {
 
 export function createTelegramOutboxDispatcher({ intervalMs = 15_000, ...options } = {}) {
   let timer = null;
+  let wakeTimer = null;
   let running = false;
   let stopping = false;
+  let wakeRequested = false;
+  const enabled = () => telegramAlertsEnabled(options.environment ?? process.env);
+  const scheduleWake = () => {
+    if (stopping || !enabled() || wakeTimer) return;
+    wakeTimer = setTimeout(() => {
+      wakeTimer = null;
+      void tick();
+    }, 0);
+    wakeTimer.unref?.();
+  };
   const tick = async () => {
-    if (running || stopping) return;
+    if (stopping) return;
+    if (running) { wakeRequested = true; return; }
     running = true;
+    wakeRequested = false;
     try {
       let result;
       do { result = await dispatchTelegramOutbox(options); } while (!stopping && result.status === "delivered");
@@ -112,20 +125,29 @@ export function createTelegramOutboxDispatcher({ intervalMs = 15_000, ...options
       console.warn("Telegram alert dispatcher failed", String(error?.message ?? "unknown error").replace(/bot[^/\s]+/gi, "bot[redacted]"));
     } finally {
       running = false;
+      if (wakeRequested && !stopping) scheduleWake();
     }
   };
   return {
     start() {
-      if (timer || !telegramAlertsEnabled(options.environment ?? process.env)) return;
+      if (timer || !enabled()) return;
       stopping = false;
       timer = setInterval(tick, intervalMs);
       timer.unref?.();
       void tick();
     },
+    // Called only after a successful API response, which is after its DB transaction committed.
+    wake() {
+      if (stopping || !enabled()) return;
+      wakeRequested = true;
+      scheduleWake();
+    },
     stop() {
       stopping = true;
       if (timer) clearInterval(timer);
+      if (wakeTimer) clearTimeout(wakeTimer);
       timer = null;
+      wakeTimer = null;
     },
     tick,
   };

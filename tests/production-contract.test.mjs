@@ -39,6 +39,48 @@ test("MySQL-схема содержит все MVP-сущности", async () =
   assert.match(sql, /CHARSET=utf8mb4/);
 });
 
+test("email verification and password recovery use hashed, scoped action tokens", async () => {
+  const migration = await readFile(path.join(root, "mysql", "migrations", "028_account_email_tokens.sql"), "utf8");
+  const api = await readFile(path.join(root, "server", "api.js"), "utf8");
+  const demo = await readFile(path.join(root, "server", "demo-api.js"), "utf8");
+  const mailer = await readFile(path.join(root, "server", "modules", "mailer.js"), "utf8");
+  const security = await readFile(path.join(root, "server", "modules", "account-tokens.js"), "utf8");
+  const auth = await readFile(path.join(root, "app", "screens", "AuthScreens.tsx"), "utf8");
+  const styles = await readFile(path.join(root, "app", "globals.css"), "utf8");
+  assert.match(migration, /email_verified_at DATETIME NULL/);
+  assert.match(migration, /CREATE TABLE account_action_tokens/);
+  assert.match(migration, /token_hash CHAR\(64\) NOT NULL/);
+  assert.match(migration, /ENUM\('email_verify', 'password_reset'\)/);
+  assert.match(security, /createHash\("sha256"\)/);
+  assert.match(security, /consumed_at IS NULL AND expires_at > UTC_TIMESTAMP\(\)/);
+  assert.match(api, /router\.post\("\/auth\/password-reset\/request"/);
+  assert.match(api, /router\.post\("\/auth\/password-reset\/confirm"/);
+  assert.match(api, /router\.post\("\/auth\/email-verification\/confirm"/);
+  assert.match(api, /DELETE FROM sessions WHERE user_id = \?/);
+  assert.match(api, /passwordRecoveryAllowed/);
+  assert.match(api, /Пароли не отправляются по e-mail/);
+  assert.match(mailer, /SMTP_HOST/);
+  assert.match(mailer, /SMTP_PASS/);
+  assert.doesNotMatch(mailer, /console\.warn\([^)]*error/);
+  assert.match(demo, /demoAccountActionTokens/);
+  assert.match(auth, /Восстановить пароль/);
+  assert.match(auth, /password-reset\/request/);
+  assert.match(auth, /password-reset\/confirm/);
+  assert.match(auth, /email-verification\/confirm/);
+  assert.match(styles, /\.auth-recovery-link/);
+});
+
+test("event forms, ContentHub glyph and community filters keep their scoped UI contracts", async () => {
+  const content = await readFile(path.join(root, "app", "components", "content", "ContentComponents.tsx"), "utf8");
+  const styles = await readFile(path.join(root, "app", "globals.css"), "utf8");
+  assert.match(content, /EventForm[\s\S]*className="modal-close"[\s\S]*onClick=\{onCancel\}/);
+  assert.match(content, /OccasionForm[\s\S]*className="modal-close"[\s\S]*onClick=\{onCancel\}/);
+  assert.match(styles, /width: 70%; height: 70%; font-size: 43px; font-weight: 400/);
+  assert.match(styles, /\.floating-create\.is-open \.floating-create-toggle \{ width: 62px; height: 62px; \}/);
+  assert.match(styles, /\.organization-directory-filters\.has-community-type \{ grid-template-columns: minmax\(0,180px\) minmax\(160px,1fr\); width: min\(440px,100%\); \}/);
+  assert.match(styles, /@media \(max-width:800px\) \{\s*\.organization-directory-filters\.has-community-type \{ grid-template-columns: minmax\(0,1fr\); width: 100%; \}/);
+});
+
 test("TOP3 хранится отдельным ранжированным слотом и обновляется атомарно", async () => {
   const migration = await readFile(path.join(root, "mysql", "migrations", "026_user_books_top3.sql"), "utf8");
   const api = await readFile(path.join(root, "server", "api.js"), "utf8");
@@ -100,6 +142,9 @@ test("Telegram alerts use a transactional outbox and environment-only credential
   assert.match(outbox, /available_at <= UTC_TIMESTAMP\(\)/);
   assert.match(outbox, /delivered_at = UTC_TIMESTAMP\(\)/);
   assert.match(outbox, /retryDelaySeconds/);
+  assert.match(outbox, /wake\(\)/);
+  assert.match(server, /response\.once\("finish"/);
+  assert.match(server, /telegramDispatcher\.wake\(\)/);
   for (const eventType of ["support_message", "event_pending", "occasion_pending", "organization_pending", "report_created"]) assert.match(api, new RegExp(`eventType: "${eventType}"`));
   assert.match(server, /telegramDispatcher\?\.stop\(\)/);
   assert.match(environment, /TELEGRAM_ALERTS_ENABLED=0/);

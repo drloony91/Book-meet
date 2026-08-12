@@ -11,6 +11,8 @@ import { nextTopRank, top3Eligibility } from "../server/modules/top3.js";
 import { createTelegramOutboxDispatcher, dispatchTelegramOutbox, shouldEnqueueSupportAlert, telegramAlertsEnabled, telegramAlertText } from "../server/modules/telegram-outbox.js";
 import { safeReturnTo } from "../app/lib/navigation-security.js";
 import { loadPublicCatalog } from "../server/modules/public-catalog.js";
+import { consumeAccountActionToken, createOpaqueActionToken, hashAccountActionToken, replaceAccountActionToken } from "../server/modules/account-tokens.js";
+import { mailerEnabled, sendAccountEmail } from "../server/modules/mailer.js";
 
 const root = path.resolve(import.meta.dirname, "..");
 
@@ -30,6 +32,33 @@ test("guest returnTo accepts only same-origin application paths", () => {
   assert.equal(safeReturnTo("https://evil.example/steal", origin), "/");
   assert.equal(safeReturnTo("//evil.example/steal", origin), "/");
   assert.equal(safeReturnTo("javascript:alert(1)", origin), "/");
+});
+
+test("account action tokens are opaque, purpose-scoped, expiring and single-use", async () => {
+  const rows = new Map();
+  const connection = { query: async (sql, values = []) => {
+    if (sql.startsWith("DELETE FROM account_action_tokens")) { for (const [key, value] of rows) if (value.userId === values[0] && value.purpose === values[1]) rows.delete(key); return [{ affectedRows: 1 }]; }
+    if (sql.startsWith("INSERT INTO account_action_tokens")) { rows.set(values[2], { id: values[2], userId: values[0], purpose: values[1], expired: false, consumed: false }); return [{ insertId: 1 }]; }
+    if (sql.includes("FROM account_action_tokens")) { const row = rows.get(values[0]); return [[row && row.purpose === values[1] && !row.expired && !row.consumed ? { id: row.id, user_id: row.userId } : undefined]]; }
+    if (sql.startsWith("UPDATE account_action_tokens SET consumed_at")) { const row = rows.get(values[0]); if (!row || row.consumed) return [{ affectedRows: 0 }]; row.consumed = true; return [{ affectedRows: 1 }]; }
+    throw new Error(`Unexpected token query: ${sql}`);
+  } };
+  const token = createOpaqueActionToken();
+  assert.match(token, /^[A-Za-z0-9_-]{40,}$/);
+  assert.notEqual(hashAccountActionToken(token), token);
+  await replaceAccountActionToken(connection, { userId: 42, purpose: "password_reset", token, ttlMinutes: 30 });
+  assert.equal(await consumeAccountActionToken(connection, { token, purpose: "email_verify" }), null);
+  assert.equal(await consumeAccountActionToken(connection, { token, purpose: "password_reset" }), 42);
+  assert.equal(await consumeAccountActionToken(connection, { token, purpose: "password_reset" }), null);
+  const expiredToken = createOpaqueActionToken();
+  await replaceAccountActionToken(connection, { userId: 42, purpose: "password_reset", token: expiredToken, ttlMinutes: 30 });
+  rows.get(hashAccountActionToken(expiredToken)).expired = true;
+  assert.equal(await consumeAccountActionToken(connection, { token: expiredToken, purpose: "password_reset" }), null);
+});
+
+test("mailer is an env-only safe no-op when SMTP is not configured", async () => {
+  assert.equal(mailerEnabled({}), false);
+  assert.deepEqual(await sendAccountEmail({ to: "person@example.com", subject: "test", text: "text" }, {}), { delivered: false, reason: "disabled" });
 });
 
 test("public catalog maps only the minimal read-only DTO", async () => {
@@ -128,6 +157,20 @@ test("Telegram dispatcher stops cleanly and delivered rows are not claimed twice
   dispatcher.stop();
   await dispatcher.tick();
   assert.equal(claimsAfterStop, 0);
+});
+
+test("Telegram dispatcher wakes promptly after a committed API mutation", async () => {
+  const environment = { TELEGRAM_ALERTS_ENABLED: "1", TELEGRAM_BOT_TOKEN: "token", TELEGRAM_CHAT_ID: "chat" };
+  let claims = 0;
+  const dispatcher = createTelegramOutboxDispatcher({
+    environment,
+    intervalMs: 60_000,
+    claimNext: async () => { claims += 1; return null; },
+  });
+  dispatcher.wake();
+  await new Promise((resolve) => setTimeout(resolve, 15));
+  dispatcher.stop();
+  assert.equal(claims, 1);
 });
 
 test("издательские социальные разрешения проверяются общим предикатом", () => {

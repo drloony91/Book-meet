@@ -64,6 +64,14 @@ async function start() {
     next();
   });
   app.use("/api", apiRateLimit);
+  app.use("/api", (request, response, next) => {
+    if (telegramDispatcher && !["GET", "HEAD", "OPTIONS"].includes(request.method)) {
+      response.once("finish", () => {
+        if (response.statusCode < 400) telegramDispatcher.wake();
+      });
+    }
+    next();
+  });
   app.use("/book-meet-return", (request, response, next) => {
     request.url = "/auth/google/callback";
     api(request, response, next);

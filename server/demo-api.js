@@ -4,6 +4,7 @@ import QRCode from "qrcode";
 import { generateRecoveryCodes, generateTotpSecret, hashRecoveryCode, recoveryCodeIndex, verifyTotp } from "./security.js";
 import { canCreateFriendRequest, canMessagePair } from "./modules/social-permissions.js";
 import { nextTopRank, top3Eligibility } from "./modules/top3.js";
+import { consumeAccountActionToken, createOpaqueActionToken, EMAIL_VERIFICATION_TTL_MINUTES, PASSWORD_RESET_TTL_MINUTES, replaceAccountActionToken } from "./modules/account-tokens.js";
 import { isPublicOccasion, isPublicUpcomingEvent } from "./modules/public-catalog.js";
 
 const router = Router();
@@ -12,7 +13,44 @@ const passwords = new Map([
   [1, process.env.TEST1_PASSWORD || "testtest1"],
   [2, process.env.PUBLISHER_TEST_PASSWORD || "publisher2026"],
 ]);
+const demoAccountActionTokens = new Map();
 let nextId = 100;
+
+function demoTokenConnection() {
+  return {
+    async query(sql, values = []) {
+      if (sql.startsWith("DELETE FROM account_action_tokens")) {
+        for (const [hash, entry] of demoAccountActionTokens) if (entry.userId === Number(values[0]) && entry.purpose === values[1]) demoAccountActionTokens.delete(hash);
+        return [{ affectedRows: 1 }];
+      }
+      if (sql.startsWith("INSERT INTO account_action_tokens")) {
+        const [userId, purpose, tokenHash, ttlMinutes] = values;
+        demoAccountActionTokens.set(tokenHash, { id: tokenHash, userId: Number(userId), purpose, expiresAt: Date.now() + Number(ttlMinutes) * 60_000, consumedAt: null });
+        return [{ insertId: 1 }];
+      }
+      if (sql.includes("FROM account_action_tokens")) {
+        const [tokenHash, purpose] = values;
+        const entry = demoAccountActionTokens.get(tokenHash);
+        return [[entry && entry.purpose === purpose && !entry.consumedAt && entry.expiresAt > Date.now() ? { id: entry.id, user_id: entry.userId } : undefined]];
+      }
+      if (sql.startsWith("UPDATE account_action_tokens SET consumed_at")) {
+        const entry = demoAccountActionTokens.get(values[0]);
+        if (!entry || entry.consumedAt) return [{ affectedRows: 0 }];
+        entry.consumedAt = Date.now();
+        return [{ affectedRows: 1 }];
+      }
+      throw new Error("Unsupported demo account token query");
+    },
+  };
+}
+
+async function replaceDemoActionToken(userId, purpose, token, ttlMinutes) {
+  return replaceAccountActionToken(demoTokenConnection(), { userId, purpose, token, ttlMinutes });
+}
+
+async function consumeDemoActionToken(token, purpose) {
+  return consumeAccountActionToken(demoTokenConnection(), { token, purpose });
+}
 
 const users = [
   {
@@ -210,7 +248,7 @@ router.post("/auth/login", (request, response) => {
   const password = String(request.body?.password ?? "");
   const code = String(request.body?.totp ?? "");
   const account = users.find((user) => user.email?.toLocaleLowerCase("en") === email);
-  if (!account || password !== passwords.get(account.id)) return response.status(401).json({ error: "Неверный e-mail или пароль" });
+  if (!account || account.passwordLoginEnabled === false || password !== passwords.get(account.id)) return response.status(401).json({ error: "Неверный e-mail или пароль" });
   if (account.suspension && (account.suspension.permanent || new Date(account.suspension.until).getTime() > Date.now())) return response.status(423).json({ suspended: true, ...account.suspension });
   if (account.totpEnabled && !code) return response.status(202).json({ requiresTotp: true });
   if (account.totpEnabled && !verifyTotp(account.totpSecret, code)) {
@@ -238,14 +276,45 @@ router.get("/cities", (request, response) => {
   response.json({ cities: demoCities.filter(([city]) => city.toLocaleLowerCase("ru").includes(query)).map(([name, country], index) => ({ id: index + 1, name, countryCode: "", country })) });
 });
 
-router.post("/auth/register", (request, response) => {
+router.post("/auth/register", async (request, response) => {
   const email = String(request.body?.email ?? "").trim().toLocaleLowerCase("en");
   const password = String(request.body?.password ?? "");
   if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) || password.length < 8) return response.status(400).json({ error: "Укажите корректный e-mail и пароль не короче 8 знаков" });
   if (users.some((user) => user.email?.toLocaleLowerCase("en") === email)) return response.status(409).json({ error: "Профиль с таким e-mail уже существует" });
   const displayName = email.split("@")[0];
-  const user = { id: nextId++, email, profileCompleted: false, username: displayName, initials: displayName.slice(0, 2).toLocaleUpperCase("ru"), color: "blue", joined: "сегодня", joinedAt: new Date().toISOString(), profile: { name: displayName, city: "", type: "Читатель", gender: "Не указан", bio: "", authorInfluences: "", writingThemes: "", weekend: "", joy: "", talk: "", strangerMessage: "", favoriteGenres: [], dislikedGenres: [] }, books: [], authorBooks: [], reviews: [], excerpts: [], wishBooks: [] };
-  users.push(user); passwords.set(user.id, password); const token = randomBytes(24).toString("hex"); sessions.set(token, user.id); response.setHeader("Set-Cookie", `book_meet_demo=${token}; Path=/; HttpOnly; SameSite=Lax`); response.status(201).json(bootstrap(user.id));
+  const user = { id: nextId++, email, emailVerifiedAt: undefined, passwordLoginEnabled: true, profileCompleted: false, username: displayName, initials: displayName.slice(0, 2).toLocaleUpperCase("ru"), color: "blue", joined: "сегодня", joinedAt: new Date().toISOString(), profile: { name: displayName, city: "", type: "Читатель", gender: "Не указан", bio: "", authorInfluences: "", writingThemes: "", weekend: "", joy: "", talk: "", strangerMessage: "", favoriteGenres: [], dislikedGenres: [] }, books: [], authorBooks: [], reviews: [], excerpts: [], wishBooks: [] };
+  const verificationToken = createOpaqueActionToken();
+  users.push(user); passwords.set(user.id, password); await replaceDemoActionToken(user.id, "email_verify", verificationToken, EMAIL_VERIFICATION_TTL_MINUTES); const token = randomBytes(24).toString("hex"); sessions.set(token, user.id); response.setHeader("Set-Cookie", `book_meet_demo=${token}; Path=/; HttpOnly; SameSite=Lax`); response.status(201).json(bootstrap(user.id));
+});
+
+router.post("/auth/email-verification/confirm", async (request, response) => {
+  const token = String(request.body?.token ?? "");
+  const userId = await consumeDemoActionToken(token, "email_verify");
+  const user = users.find((entry) => entry.id === userId);
+  if (!user) return response.status(400).json({ error: "Ссылка подтверждения недействительна или истекла" });
+  user.emailVerifiedAt = new Date().toISOString();
+  response.json({ verified: true });
+});
+
+router.post("/auth/password-reset/request", async (request, response) => {
+  const email = String(request.body?.email ?? "").trim().toLocaleLowerCase("en");
+  const account = users.find((user) => user.email?.toLocaleLowerCase("en") === email && !user.purged);
+  if (account && !account.googleSubject && account.passwordLoginEnabled !== false) {
+    await replaceDemoActionToken(account.id, "password_reset", createOpaqueActionToken(), PASSWORD_RESET_TTL_MINUTES);
+  }
+  response.json({ ok: true, message: "Если такой e-mail зарегистрирован, дальнейшие инструкции отправлены." });
+});
+
+router.post("/auth/password-reset/confirm", async (request, response) => {
+  const token = String(request.body?.token ?? "");
+  const password = String(request.body?.password ?? "");
+  if (password.length < 8) return response.status(400).json({ error: "Не удалось сохранить новый пароль. Проверьте ссылку и требования к паролю." });
+  const userId = await consumeDemoActionToken(token, "password_reset");
+  const account = users.find((user) => user.id === userId && !user.purged);
+  if (!account || account.googleSubject && account.passwordLoginEnabled === false) return response.status(400).json({ error: "Ссылка восстановления недействительна или истекла" });
+  passwords.set(account.id, password);
+  for (const [session, sessionUserId] of sessions) if (sessionUserId === account.id) sessions.delete(session);
+  response.json({ reset: true });
 });
 
 router.post("/auth/logout", (request, response) => {

@@ -13,6 +13,8 @@ import { previewRemoteCover, saveAvatar, saveCover, saveRemoteCover } from "./mo
 import { cleanUrl, eventPayload, knownCities, knownCity, occasionPayload } from "./modules/material-input.js";
 import { createLocationRouter } from "./modules/location-router.js";
 import { canCreateFriendRequest, canMessagePair } from "./modules/social-permissions.js";
+import { consumeAccountActionToken, createOpaqueActionToken, EMAIL_VERIFICATION_TTL_MINUTES, PASSWORD_RESET_TTL_MINUTES, replaceAccountActionToken } from "./modules/account-tokens.js";
+import { sendAccountEmail } from "./modules/mailer.js";
 import { enqueueTelegramAlert, shouldEnqueueSupportAlert } from "./modules/telegram-outbox.js";
 import { loadPublicCatalog } from "./modules/public-catalog.js";
 import { nextTopRank, top3Eligibility } from "./modules/top3.js";
@@ -23,6 +25,9 @@ const projectRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "
 const loginAttempts = new Map();
 const LOGIN_WINDOW_MS = 15 * 60 * 1000;
 const LOGIN_ATTEMPT_LIMIT = 10;
+const passwordRecoveryAttempts = new Map();
+const PASSWORD_RECOVERY_WINDOW_MS = 15 * 60 * 1000;
+const PASSWORD_RECOVERY_LIMIT = 5;
 const GOOGLE_CALLBACK_PATH = "/book-meet-return";
 const GOOGLE_JWKS_URL = "https://www.googleapis.com/oauth2/v3/certs";
 const GOOGLE_JWKS_FETCH_TIMEOUT_MS = 6_000;
@@ -55,6 +60,7 @@ async function purgeDeletedProfile(connection, userId) {
   const tombstone = `deleted-${userId}-${randomBytes(6).toString("hex")}`;
   await connection.query("DELETE FROM messages WHERE sender_user_id = ? OR recipient_user_id = ?", [userId, userId]);
   await connection.query("DELETE FROM sessions WHERE user_id = ?", [userId]);
+  await connection.query("DELETE FROM account_action_tokens WHERE user_id = ?", [userId]);
   await connection.query("DELETE FROM friend_requests WHERE from_user_id = ? OR to_user_id = ?", [userId, userId]);
   await connection.query("DELETE FROM friendships WHERE user_low_id = ? OR user_high_id = ?", [userId, userId]);
   await connection.query("DELETE FROM community_memberships WHERE community_user_id = ? OR member_user_id = ?", [userId, userId]);
@@ -198,6 +204,53 @@ async function createSession(connection, userId) {
 
 function appOrigin() {
   return new URL(process.env.APP_ORIGIN || "http://localhost:3000").origin;
+}
+
+function accountActionLink(parameter, token) {
+  const url = new URL(appOrigin());
+  url.searchParams.set(parameter, token);
+  return url.toString();
+}
+
+function passwordRecoveryAllowed(request, email) {
+  const now = Date.now();
+  const client = request.ip || request.socket.remoteAddress || "unknown";
+  const keys = [`ip:${client}`, `email:${email}`];
+  const buckets = keys.map((key) => {
+    const current = passwordRecoveryAttempts.get(key);
+    const next = !current || current.resetAt <= now ? { count: 0, resetAt: now + PASSWORD_RECOVERY_WINDOW_MS } : current;
+    passwordRecoveryAttempts.set(key, next);
+    return next;
+  });
+  if (buckets.some((bucket) => bucket.count >= PASSWORD_RECOVERY_LIMIT)) return false;
+  for (const bucket of buckets) bucket.count += 1;
+  return true;
+}
+
+async function sendVerificationEmail(email, token) {
+  return sendAccountEmail({
+    to: email,
+    subject: "Подтвердите e-mail в Book Meet",
+    text: `Вы зарегистрировались в Book Meet. Подтвердите e-mail по ссылке: ${accountActionLink("verify", token)}\n\nПароли не отправляются по e-mail и не содержатся в этом письме.`,
+  });
+}
+
+async function sendPasswordResetEmail(email, token) {
+  return sendAccountEmail({
+    to: email,
+    subject: "Восстановление пароля Book Meet",
+    text: `Чтобы задать новый пароль Book Meet, откройте ссылку: ${accountActionLink("reset", token)}\n\nЕсли это были не вы, просто проигнорируйте письмо. Пароли не отправляются по e-mail и не содержатся в этом письме.`,
+  });
+}
+
+async function sendGoogleAccountEmail(email, created = false) {
+  return sendAccountEmail({
+    to: email,
+    subject: created ? "Регистрация в Book Meet через Google" : "Восстановление доступа Book Meet",
+    text: created
+      ? "Ваш профиль Book Meet создан через Google. Для входа используйте кнопку Google. Пароли не отправляются по e-mail и не содержатся в этом письме."
+      : "Этот профиль Book Meet использует вход через Google. Пароль для него не устанавливается: войдите кнопкой Google. Пароли не отправляются по e-mail и не содержатся в этом письме.",
+  });
 }
 
 function googleJwksCachePath() {
@@ -407,7 +460,7 @@ async function findOrCreateGoogleUser(identity) {
         `UPDATE users SET ${subjectColumn} = COALESCE(${subjectColumn}, ?), email = COALESCE(email, ?), email_key = COALESCE(email_key, ?) WHERE id = ?`,
         [identity.subject, identity.email || null, identity.email ? normalizeEmail(identity.email) : null, account.id],
       );
-      return { userId: Number(account.id), created: false };
+      return { userId: Number(account.id), created: false, email: identity.email || "" };
     }
     const displayName = safeProfileName(identity.name, identity.username);
     const username = await uniqueInternalUsername(connection, identity.email?.split("@")[0] || identity.username || "google-reader");
@@ -415,8 +468,8 @@ async function findOrCreateGoogleUser(identity) {
     const colors = ["navy", "blue", "green", "red", "gold"];
     const passwordHash = await hashPassword(randomBytes(32).toString("base64url"));
     const [created] = await connection.query(
-      `INSERT INTO users (username, username_key, email, email_key, password_hash, ${subjectColumn}, initials, color, role, profile_completed)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'user', 0)`,
+      `INSERT INTO users (username, username_key, email, email_key, email_verified_at, password_hash, password_login_enabled, ${subjectColumn}, initials, color, role, profile_completed)
+       VALUES (?, ?, ?, ?, UTC_TIMESTAMP(), ?, 0, ?, ?, ?, 'user', 0)`,
       [username, normalizeIdentity(username), identity.email || null, identity.email ? normalizeEmail(identity.email) : null, passwordHash, identity.subject, initials, colors[Date.now() % colors.length]],
     );
     const userId = Number(created.insertId);
@@ -425,7 +478,7 @@ async function findOrCreateGoogleUser(identity) {
        VALUES (?, ?, '', NULL, 'Читатель', 'Не указан', '', '', '', '', '', '', '', '[]', '[]')`,
       [userId, displayName],
     );
-    return { userId, created: true };
+    return { userId, created: true, email: identity.email || "" };
   });
 }
 
@@ -934,10 +987,10 @@ router.post("/auth/login", asyncRoute(async (request, response) => {
   const totp = String(request.body?.totp ?? "");
   if (!isValidEmail(email) || !password) return response.status(400).json({ error: "Введите e-mail и пароль" });
   const [[account]] = await getPool().query(
-    "SELECT id, password_hash, totp_secret, totp_enabled, suspension_reason, suspended_until, suspended_permanently, deleted_at, deletion_expires_at, purged_at FROM users WHERE email_key = ? LIMIT 1",
+    "SELECT id, password_hash, password_login_enabled, totp_secret, totp_enabled, suspension_reason, suspended_until, suspended_permanently, deleted_at, deletion_expires_at, purged_at FROM users WHERE email_key = ? LIMIT 1",
     [email],
   );
-  if (!account || !(await verifyPassword(password, account.password_hash))) {
+  if (!account || !account.password_login_enabled || !(await verifyPassword(password, account.password_hash))) {
     loginAttempts.set(attempt.key, { count: attempt.count + 1, resetAt: attempt.resetAt });
     return response.status(401).json({ error: "Неверный e-mail или пароль" });
   }
@@ -1022,6 +1075,7 @@ const googleCallback = asyncRoute(async (request, response) => {
     email: normalizeEmail(tokenInfo.email),
     name: tokenInfo.name,
   });
+  if (identity.created && identity.email) await sendGoogleAccountEmail(identity.email, true);
   const token = await createSession(getPool(), identity.userId);
   response.setHeader("Set-Cookie", [
     sessionCookie(token, request),
@@ -1059,6 +1113,7 @@ router.post("/auth/google/credential", asyncRoute(async (request, response) => {
       email: normalizeEmail(tokenInfo.email),
       name: tokenInfo.name,
     });
+    if (identity.created && identity.email) await sendGoogleAccountEmail(identity.email, true);
     const token = await createSession(getPool(), identity.userId);
     response.setHeader("Set-Cookie", sessionCookie(token, request));
     response.json({ ok: true, registered: identity.created });
@@ -1074,6 +1129,7 @@ router.post("/auth/register", asyncRoute(async (request, response) => {
   const email = normalizeEmail(request.body?.email);
   const password = String(request.body?.password ?? "");
   if (!isValidEmail(email) || password.length < 8) return response.status(400).json({ error: "Укажите корректный e-mail и пароль не короче 8 знаков" });
+  const verificationToken = createOpaqueActionToken();
   const result = await withTransaction(async (connection) => {
     const [[duplicate]] = await connection.query("SELECT id FROM users WHERE email_key = ?", [email]);
     if (duplicate) throw Object.assign(new Error("Профиль с таким e-mail уже существует"), { statusCode: 409 });
@@ -1082,7 +1138,7 @@ router.post("/auth/register", asyncRoute(async (request, response) => {
     const initials = displayName.split(/\s+/).slice(0, 2).map((part) => part[0]).join("").toLocaleUpperCase("ru-RU").slice(0, 4) || "BM";
     const colors = ["navy", "blue", "green", "red", "gold"];
     const [created] = await connection.query(
-      "INSERT INTO users (username, username_key, email, email_key, password_hash, initials, color, role, profile_completed) VALUES (?, ?, ?, ?, ?, ?, ?, 'user', 0)",
+      "INSERT INTO users (username, username_key, email, email_key, email_verified_at, password_hash, password_login_enabled, initials, color, role, profile_completed) VALUES (?, ?, ?, ?, NULL, ?, 1, ?, ?, 'user', 0)",
       [username, normalizeIdentity(username), email, email, await hashPassword(password), initials, colors[Number(Date.now()) % colors.length]],
     );
     const userId = Number(created.insertId);
@@ -1092,10 +1148,61 @@ router.post("/auth/register", asyncRoute(async (request, response) => {
       [userId, displayName],
     );
     const token = await createSession(connection, userId);
+    await replaceAccountActionToken(connection, { userId, purpose: "email_verify", token: verificationToken, ttlMinutes: EMAIL_VERIFICATION_TTL_MINUTES });
     return { userId, token };
   });
   response.setHeader("Set-Cookie", sessionCookie(result.token, request));
+  await sendVerificationEmail(email, verificationToken);
   response.status(201).json(await loadBootstrap(result.userId));
+}));
+
+router.post("/auth/email-verification/confirm", asyncRoute(async (request, response) => {
+  const token = String(request.body?.token ?? "");
+  if (token.length < 32 || token.length > 200) return response.status(400).json({ error: "Ссылка подтверждения недействительна или истекла" });
+  const verified = await withTransaction(async (connection) => {
+    const userId = await consumeAccountActionToken(connection, { token, purpose: "email_verify" });
+    if (!userId) return false;
+    const [updated] = await connection.query("UPDATE users SET email_verified_at = COALESCE(email_verified_at, UTC_TIMESTAMP()) WHERE id = ? AND purged_at IS NULL", [userId]);
+    return Boolean(updated.affectedRows);
+  });
+  if (!verified) return response.status(400).json({ error: "Ссылка подтверждения недействительна или истекла" });
+  response.json({ verified: true });
+}));
+
+router.post("/auth/password-reset/request", asyncRoute(async (request, response) => {
+  const email = normalizeEmail(request.body?.email);
+  const generic = { ok: true, message: "Если такой e-mail зарегистрирован, дальнейшие инструкции отправлены." };
+  if (!isValidEmail(email) || !passwordRecoveryAllowed(request, email)) return response.json(generic);
+  const [[account]] = await getPool().query("SELECT id, email, google_subject, password_login_enabled, purged_at FROM users WHERE email_key = ? LIMIT 1", [email]);
+  if (!account || account.purged_at) return response.json(generic);
+  if (account.google_subject && !account.password_login_enabled) {
+    await sendGoogleAccountEmail(account.email, false);
+    return response.json(generic);
+  }
+  const resetToken = createOpaqueActionToken();
+  await withTransaction(async (connection) => {
+    const [[locked]] = await connection.query("SELECT id FROM users WHERE id = ? AND purged_at IS NULL FOR UPDATE", [account.id]);
+    if (locked) await replaceAccountActionToken(connection, { userId: Number(locked.id), purpose: "password_reset", token: resetToken, ttlMinutes: PASSWORD_RESET_TTL_MINUTES });
+  });
+  await sendPasswordResetEmail(account.email, resetToken);
+  response.json(generic);
+}));
+
+router.post("/auth/password-reset/confirm", asyncRoute(async (request, response) => {
+  const token = String(request.body?.token ?? "");
+  const password = String(request.body?.password ?? "");
+  if (token.length < 32 || token.length > 200 || password.length < 8) return response.status(400).json({ error: "Не удалось сохранить новый пароль. Проверьте ссылку и требования к паролю." });
+  const reset = await withTransaction(async (connection) => {
+    const userId = await consumeAccountActionToken(connection, { token, purpose: "password_reset" });
+    if (!userId) return false;
+    const [[account]] = await connection.query("SELECT google_subject, password_login_enabled, purged_at FROM users WHERE id = ? FOR UPDATE", [userId]);
+    if (!account || account.purged_at || (account.google_subject && !account.password_login_enabled)) return false;
+    await connection.query("UPDATE users SET password_hash = ?, password_login_enabled = 1 WHERE id = ?", [await hashPassword(password), userId]);
+    await connection.query("DELETE FROM sessions WHERE user_id = ?", [userId]);
+    return true;
+  });
+  if (!reset) return response.status(400).json({ error: "Ссылка восстановления недействительна или истекла" });
+  response.json({ reset: true });
 }));
 
 router.post("/auth/logout", asyncRoute(async (request, response) => {
