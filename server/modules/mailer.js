@@ -105,9 +105,12 @@ async function sendWithSocketSmtp({ to, subject, text }, config) {
   } else if (!config.secure && !isLocal) {
     throw new Error("SMTP server does not support STARTTLS");
   }
-  if (!/AUTH(?:=|\s)/i.test(hello.line)) throw new Error("SMTP authentication unavailable");
-  const auth = Buffer.from(`\u0000${config.auth.user}\u0000${config.auth.pass}`, "utf8").toString("base64");
-  await smtpCommand(socket, next, `AUTH PLAIN ${auth}`, [235]);
+  if (/AUTH(?:=|\s)/i.test(hello.line)) {
+    const auth = Buffer.from(`\u0000${config.auth.user}\u0000${config.auth.pass}`, "utf8").toString("base64");
+    await smtpCommand(socket, next, `AUTH PLAIN ${auth}`, [235]);
+  } else if (!isLocal) {
+    throw new Error("SMTP authentication unavailable");
+  }
   const sender = smtpAddress(config.from);
   const recipient = smtpAddress(to);
   await smtpCommand(socket, next, `MAIL FROM:<${sender}>`);
