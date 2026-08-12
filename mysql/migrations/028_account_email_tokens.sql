@@ -1,12 +1,12 @@
 ALTER TABLE users
-  ADD COLUMN email_verified_at DATETIME NULL AFTER email_key,
-  ADD COLUMN password_login_enabled TINYINT(1) NOT NULL DEFAULT 1 AFTER password_hash;
+  ADD COLUMN IF NOT EXISTS email_verified_at DATETIME NULL AFTER email_key,
+  ADD COLUMN IF NOT EXISTS password_login_enabled TINYINT(1) NOT NULL DEFAULT 1 AFTER password_hash;
 
 -- Existing accounts keep their current ability to sign in; verification is only pending for new password registrations.
 UPDATE users
    SET email_verified_at = COALESCE(email_verified_at, created_at, UTC_TIMESTAMP());
 
-CREATE TABLE account_action_tokens (
+CREATE TABLE IF NOT EXISTS account_action_tokens (
   id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
   user_id BIGINT UNSIGNED NOT NULL,
   purpose ENUM('email_verify', 'password_reset') NOT NULL,
