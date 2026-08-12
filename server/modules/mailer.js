@@ -1,5 +1,3 @@
-import nodemailer from "nodemailer";
-
 function mailConfiguration(environment = process.env) {
   const port = Number(environment.SMTP_PORT || 587);
   if (!environment.SMTP_HOST || !environment.SMTP_USER || !environment.SMTP_PASS || !environment.MAIL_FROM || !Number.isInteger(port) || port < 1 || port > 65535) return null;
@@ -14,6 +12,7 @@ export async function sendAccountEmail({ to, subject, text }, environment = proc
   const config = mailConfiguration(environment);
   if (!config) return { delivered: false, reason: "disabled" };
   try {
+    const { default: nodemailer } = await import("nodemailer");
     const transport = nodemailer.createTransport({ host: config.host, port: config.port, secure: config.secure, auth: config.auth });
     await transport.sendMail({ from: config.from, to, subject, text });
     return { delivered: true };
