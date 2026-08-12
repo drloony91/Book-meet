@@ -143,6 +143,11 @@ const users = [
 ];
 
 const state = {
+  // Demo keeps the catalogue separately from personal libraries as production does.
+  catalogBooks: [
+    ...users.flatMap((user) => [...(user.books ?? []), ...(user.authorBooks ?? [])]),
+    { id: 24, catalogBookId: 24, author: "Айгерим Жансугурова", title: "Точки на карте", genres: ["Современная проза"], annotation: "Каталожная книга без записи в личной библиотеке.", pages: "", format: "Бумажная", durationHours: "", durationMinutes: "", rating: 0, review: "", coverTone: "mint", links: [] },
+  ],
   messages: {},
   friendRequests: [],
   friendships: [],
@@ -217,7 +222,7 @@ function bootstrap(userId) {
     };
     return { ...user, books: (user.books ?? []).filter((item) => adultStatus === "adult" || !item.isAdult), authorBooks: (user.authorBooks ?? []).filter((item) => adultStatus === "adult" || !item.isAdult), reviews: (user.reviews ?? []).filter((item) => adultStatus === "adult" || !item.isAdult), excerpts: (user.excerpts ?? []).filter((item) => adultStatus === "adult" || !item.isAdult), blockedByMe: relatedBlocks.some((block) => block.blockerId === userId && block.blockedId === user.id), profile, wishBooks: (user.wishBooks ?? []).map((item) => privateVisible ? { ...item, productUrl: user.id === userId ? item.productUrl : undefined, privateVisible: true } : { id: item.id, ownerId: item.ownerId, catalogBookId: item.catalogBookId, author: item.author, title: item.title, genres: item.genres, annotation: item.annotation, coverUrl: item.coverUrl, coverTone: item.coverTone, marketplace: item.marketplace, reservedByUserId: item.reservedByUserId, privateVisible: false }) };
   });
-  return structuredClone({ activeUserId: userId, profileCompleted: viewer?.profileCompleted !== false, adultAccess: { status: adultStatus, restricted }, users: visibleUsers, ...state, blocks: relatedBlocks, blockedByUserIds, reports: viewer?.isAdmin ? state.reports : [], events: state.events.filter((item) => (viewer?.isAdmin || adultStatus === "adult" || !item.isAdult) && (viewer?.isAdmin || item.status === "published" || item.creatorId === userId)), occasions: state.occasions.filter((item) => (viewer?.isAdmin || adultStatus === "adult" || !item.isAdult) && (viewer?.isAdmin || item.creatorId === userId || item.status === "published" && (item.targetGender === "Все" || item.targetGender === viewer?.profile.gender) && (item.targetProfileType === "Все" || item.targetProfileType === viewer?.profile.type))) });
+  return structuredClone({ activeUserId: userId, profileCompleted: viewer?.profileCompleted !== false, adultAccess: { status: adultStatus, restricted }, users: visibleUsers, ...state, books: state.catalogBooks.filter((item) => adultStatus === "adult" || !item.isAdult), blocks: relatedBlocks, blockedByUserIds, reports: viewer?.isAdmin ? state.reports : [], events: state.events.filter((item) => (viewer?.isAdmin || adultStatus === "adult" || !item.isAdult) && (viewer?.isAdmin || item.status === "published" || item.creatorId === userId)), occasions: state.occasions.filter((item) => (viewer?.isAdmin || adultStatus === "adult" || !item.isAdult) && (viewer?.isAdmin || item.creatorId === userId || item.status === "published" && (item.targetGender === "Все" || item.targetGender === viewer?.profile.gender) && (item.targetProfileType === "Все" || item.targetProfileType === viewer?.profile.type))) });
 }
 
 function conversationKey(first, second) {
@@ -675,23 +680,22 @@ router.patch("/users/me/profile-complete", (request, response) => {
 router.get("/books/catalog", (request, response) => {
   const viewer = users.find((user) => user.id === request.demoUserId);
   const adultViewer = Boolean(viewer?.isAdmin || Number(viewer?.profile.age ?? -1) >= 18);
-  const entries = users.flatMap((owner) => [...owner.books, ...(owner.authorBooks ?? [])].map((book) => ({ book, owner })));
   const unique = new Map();
-  for (const { book, owner } of entries) {
+  for (const book of state.catalogBooks) {
     if (book.isAdult && !adultViewer) continue;
     const key = book.catalogBookId ?? book.isbn ?? `${book.author}|${book.title}`.toLocaleLowerCase("ru");
     const current = unique.get(key);
     const popularity = users.filter((user) => user.books.some((item) => (item.catalogBookId ?? item.id) === (book.catalogBookId ?? book.id))).length;
-    if (!current || popularity > current.popularity) unique.set(key, { ...book, addedAt: book.addedAt ?? owner.joinedAt ?? new Date().toISOString(), popularity });
+    if (!current || popularity > current.popularity) unique.set(key, { ...book, addedAt: book.addedAt ?? new Date().toISOString(), popularity });
   }
   response.json({ books: [...unique.values()] });
 });
 
 router.get("/books", (request, response) => {
   const query = String(request.query.q ?? "").trim().toLocaleLowerCase("ru");
-  const books = users.flatMap((user) => [...user.books, ...(user.authorBooks ?? [])]);
-  const unique = [...new Map(books.map((book) => [book.isbn || `${book.author}|${book.title}`.toLocaleLowerCase("ru"), book])).values()];
-  response.json({ books: query ? unique.filter((book) => `${book.author} ${book.title} ${book.isbn ?? ""}`.toLocaleLowerCase("ru").includes(query)).slice(0, 8) : [] });
+  const viewer = users.find((user) => user.id === request.demoUserId);
+  const adultViewer = Boolean(viewer?.isAdmin || Number(viewer?.profile.age ?? -1) >= 18);
+  response.json({ books: query ? state.catalogBooks.filter((book) => (adultViewer || !book.isAdult) && `${book.author} ${book.title} ${book.isbn ?? ""}`.toLocaleLowerCase("ru").includes(query)).slice(0, 8) : [] });
 });
 
 router.post("/books", (request, response) => {
@@ -711,7 +715,7 @@ router.post("/books", (request, response) => {
       }
     } catch (error) { return response.status(400).json({ error: error.message }); }
   }
-  const allBooks = users.flatMap((entry) => [...entry.books, ...(entry.authorBooks ?? [])]);
+  const allBooks = state.catalogBooks;
   const normalizedIsbn = String(payload.isbn ?? "").replace(/\D/g, "");
   const sourceUrls = (payload.links ?? []).map((link) => String(link.url ?? ""));
   const exact = allBooks.find((item) => (normalizedIsbn && String(item.isbn ?? "").replace(/\D/g, "") === normalizedIsbn)
@@ -733,6 +737,9 @@ router.post("/books", (request, response) => {
   const target = payload.isAuthor ? (user.authorBooks ??= []) : user.books;
   const index = target.findIndex((item) => item.id === id);
   if (index >= 0) target[index] = book; else target.unshift(book);
+  const catalogIndex = state.catalogBooks.findIndex((item) => item.id === id);
+  if (catalogIndex >= 0) state.catalogBooks[catalogIndex] = { ...state.catalogBooks[catalogIndex], ...book, rating: 0, review: "", readingStatus: undefined, topRank: undefined };
+  else state.catalogBooks.push({ ...book, rating: 0, review: "", readingStatus: undefined, topRank: undefined });
   response.json({ ok: true, bookId: id, topRank });
 });
 
@@ -1097,9 +1104,10 @@ router.patch("/social/messages/:targetId/read", (request, response) => {
 router.post("/events", (request, response) => {
   const creator = users.find((user) => user.id === request.demoUserId);
   const linkedBookIds = Array.from(new Set((request.body.linkedBookIds ?? []).map(Number).filter(Boolean)));
-  const catalog = users.flatMap((user) => [...user.books, ...(user.authorBooks ?? [])]);
+  const catalog = state.catalogBooks;
   const linkedBooks = linkedBookIds.map((id) => catalog.find((book) => book.id === id)).filter(Boolean).map((book) => ({ id: book.id, title: book.title, author: book.author, annotation: book.annotation, coverUrl: book.coverUrl, coverTone: book.coverTone }));
-  const event = { id: nextId++, creatorId: request.demoUserId, title: String(request.body.title), summary: String(request.body.summary), description: String(request.body.description), isAdult: Boolean(request.body.isAdult), date: String(request.body.date), time: String(request.body.time), city: String(request.body.city), address: String(request.body.address), mapUrl: String(request.body.mapUrl ?? ""), detailsUrl: String(request.body.detailsUrl ?? ""), linkedBookIds, linkedBooks, linkedBookId: linkedBookIds[0], bookTitle: linkedBooks[0]?.title, bookAuthor: linkedBooks[0]?.author, bookAnnotation: linkedBooks[0]?.annotation, bookCoverUrl: linkedBooks[0]?.coverUrl, bookCoverTone: linkedBooks[0]?.coverTone, status: "pending", moderationNote: "", organizerName: creator?.isAdmin ? "" : creator?.profile.name, createdAt: new Date().toISOString() };
+  const event = { id: nextId++, creatorId: request.demoUserId, title: String(request.body.title), summary: String(request.body.summary), description: String(request.body.description), isAdult: Boolean(request.body.isAdult), date: String(request.body.date), time: String(request.body.time), city: String(request.body.city), cityId: ["Казахстан", "Онлайн"].includes(String(request.body.city)) ? undefined : Number(request.body.cityId) || undefined, address: String(request.body.address), mapUrl: String(request.body.mapUrl ?? ""), detailsUrl: String(request.body.detailsUrl ?? ""), linkedBookIds, linkedBooks, linkedBookId: linkedBookIds[0], bookTitle: linkedBooks[0]?.title, bookAuthor: linkedBooks[0]?.author, bookAnnotation: linkedBooks[0]?.annotation, bookCoverUrl: linkedBooks[0]?.coverUrl, bookCoverTone: linkedBooks[0]?.coverTone, status: "pending", moderationNote: "", organizerName: creator?.isAdmin ? "" : creator?.profile.name, createdAt: new Date().toISOString() };
+  if (!event.city || (!["Казахстан", "Онлайн"].includes(event.city) && !event.address)) return response.status(400).json({ error: "Укажите место события" });
   state.events.push(event);
   notification(request.demoUserId, request.demoUserId, "event_submitted", "Событие на модерации", `Событие «${event.title}» отправлено на модерацию.`, { materialKind: "event", materialId: event.id });
   response.status(201).json({ event });
@@ -1156,13 +1164,13 @@ router.patch("/admin/events/:id", (request, response) => {
 router.post("/occasions", (request, response) => {
   const creator = users.find((user) => user.id === request.demoUserId);
   if (["Издатель", "Сообщество"].includes(creator?.profile.type)) return response.status(403).json({ error: "Организационные профили не могут создавать поводы познакомиться" });
-  const catalog = users.flatMap((user) => [...user.books, ...(user.authorBooks ?? [])]);
+  const catalog = state.catalogBooks;
   const linkedBook = catalog.find((book) => book.id === Number(request.body.linkedBookId));
-  const occasion = { id: nextId++, creatorId: request.demoUserId, type: request.body.type, primaryText: String(request.body.primaryText ?? ""), audienceText: String(request.body.audienceText ?? ""), isAdult: Boolean(request.body.isAdult), targetGender: request.body.targetGender, targetCities: structuredClone(request.body.targetCities ?? []), targetProfileType: request.body.targetProfileType, meetingDate: request.body.type === "invite" ? String(request.body.meetingDate ?? "") : undefined, meetingStartTime: request.body.type === "invite" ? String(request.body.meetingStartTime ?? "") || undefined : undefined, meetingEndTime: request.body.type === "invite" ? String(request.body.meetingEndTime ?? "") || undefined : undefined, meetingCity: request.body.type === "invite" ? String(request.body.meetingCity ?? request.body.targetCities?.[0] ?? "") : undefined, meetingCityId: Number(request.body.meetingCityId) || undefined, meetingAddress: request.body.type === "invite" ? String(request.body.meetingAddress ?? "") : undefined, meetingMapUrl: request.body.type === "invite" ? String(request.body.meetingMapUrl ?? "") : undefined, linkedBookId: linkedBook?.id, linkedBooks: linkedBook ? [{ id: linkedBook.id, title: linkedBook.title, author: linkedBook.author, annotation: linkedBook.annotation, coverUrl: linkedBook.coverUrl, coverTone: linkedBook.coverTone }] : [], status: "pending", moderationNote: "", creatorName: creator?.profile.name ?? "", createdAt: new Date().toISOString() };
+  const occasion = { id: nextId++, creatorId: request.demoUserId, type: request.body.type, primaryText: String(request.body.primaryText ?? ""), audienceText: String(request.body.audienceText ?? ""), isAdult: Boolean(request.body.isAdult), targetGender: request.body.targetGender, targetCities: structuredClone(request.body.targetCities ?? []), targetProfileType: request.body.targetProfileType, meetingDate: request.body.type === "invite" ? String(request.body.meetingDate ?? "") : undefined, meetingStartTime: request.body.type === "invite" ? String(request.body.meetingStartTime ?? "") || undefined : undefined, meetingEndTime: request.body.type === "invite" ? String(request.body.meetingEndTime ?? "") || undefined : undefined, meetingCity: request.body.type === "invite" ? String(request.body.meetingCity ?? request.body.targetCities?.[0] ?? "") : undefined, meetingCityId: ["Казахстан", "Онлайн"].includes(String(request.body.meetingCity)) ? undefined : Number(request.body.meetingCityId) || undefined, meetingAddress: request.body.type === "invite" ? String(request.body.meetingAddress ?? "") : undefined, meetingMapUrl: request.body.type === "invite" ? String(request.body.meetingMapUrl ?? "") : undefined, linkedBookId: linkedBook?.id, linkedBooks: linkedBook ? [{ id: linkedBook.id, title: linkedBook.title, author: linkedBook.author, annotation: linkedBook.annotation, coverUrl: linkedBook.coverUrl, coverTone: linkedBook.coverTone }] : [], status: "pending", moderationNote: "", creatorName: creator?.profile.name ?? "", createdAt: new Date().toISOString() };
   if (!occasion.type || !occasion.primaryText || !occasion.audienceText) return response.status(400).json({ error: "Заполните все поля повода для знакомства" });
   if (occasion.type === "invite" && (!/^\d{4}-\d{2}-\d{2}$/.test(occasion.meetingDate) || occasion.meetingDate <= new Date().toISOString().slice(0, 10))) return response.status(400).json({ error: "Выберите будущую дату встречи" });
   if (occasion.type === "invite" && occasion.meetingEndTime && !occasion.meetingStartTime) return response.status(400).json({ error: "Время завершения можно указать только после времени начала" });
-  if (occasion.type === "invite" && (!occasion.meetingCity || !occasion.meetingAddress)) return response.status(400).json({ error: "Укажите место встречи" });
+  if (occasion.type === "invite" && occasion.meetingCity && !["Казахстан", "Онлайн"].includes(occasion.meetingCity) && !occasion.meetingAddress) return response.status(400).json({ error: "Укажите место встречи" });
   if (occasion.type === "discuss" && !occasion.linkedBookId) return response.status(400).json({ error: "Выберите книгу для обсуждения" });
   state.occasions.push(occasion);
   notification(request.demoUserId, request.demoUserId, "event_submitted", "Повод на модерации", "Повод для знакомства отправлен на модерацию.", { materialKind: "occasion", materialId: occasion.id });

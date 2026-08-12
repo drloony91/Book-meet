@@ -1699,7 +1699,8 @@ router.post("/occasions", asyncRoute(async (request, response) => {
     if (access.isPublisher) throw Object.assign(new Error("Организационные профили не могут создавать поводы познакомиться"), { statusCode: 403 });
     const cities = await knownCities(connection, payload.targetCities);
     payload.targetCities = cities.map((city) => city.name);
-    if (payload.type === "invite") { payload.meetingCity = cities[0].name; payload.meetingCityId = cities[0].id; }
+    if (payload.meetingCity) payload.meetingCityId = cities.find((city) => city.name === payload.meetingCity)?.id;
+    if (payload.type === "invite" && cities[0]) { payload.meetingCity = cities[0].name; payload.meetingCityId = cities[0].id; }
     const linkedBooks = payload.linkedBookId ? await linkedBookPreviews(connection, [payload.linkedBookId]) : [];
     const [[creator]] = await connection.query("SELECT display_name FROM profiles WHERE user_id = ?", [userId]);
     const [created] = await connection.query(
@@ -1727,7 +1728,8 @@ router.patch("/occasions/:id", asyncRoute(async (request, response) => {
     await assertAdultMaterialAllowed(connection, userId, payload.isAdult);
     const cities = await knownCities(connection, payload.targetCities);
     payload.targetCities = cities.map((city) => city.name);
-    if (payload.type === "invite") { payload.meetingCity = cities[0].name; payload.meetingCityId = cities[0].id; }
+    if (payload.meetingCity) payload.meetingCityId = cities.find((city) => city.name === payload.meetingCity)?.id;
+    if (payload.type === "invite" && cities[0]) { payload.meetingCity = cities[0].name; payload.meetingCityId = cities[0].id; }
     const linkedBooks = payload.linkedBookId ? await linkedBookPreviews(connection, [payload.linkedBookId]) : [];
     const [[current]] = await connection.query("SELECT status, created_at FROM occasions WHERE id = ? AND creator_user_id = ? FOR UPDATE", [occasionId, userId]);
     if (!current) throw Object.assign(new Error("Повод не найден"), { statusCode: 404 });
@@ -1768,7 +1770,8 @@ router.patch("/admin/occasions/:id", asyncRoute(async (request, response) => {
       const payload = occasionPayload(request.body?.occasion);
       const cities = await knownCities(connection, payload.targetCities);
       payload.targetCities = cities.map((city) => city.name);
-      if (payload.type === "invite") { payload.meetingCity = cities[0].name; payload.meetingCityId = cities[0].id; }
+      if (payload.meetingCity) payload.meetingCityId = cities.find((city) => city.name === payload.meetingCity)?.id;
+      if (payload.type === "invite" && cities[0]) { payload.meetingCity = cities[0].name; payload.meetingCityId = cities[0].id; }
       const linkedBooks = payload.linkedBookId ? await linkedBookPreviews(connection, [payload.linkedBookId]) : [];
       await connection.query(
         `UPDATE occasions SET occasion_type = ?, primary_text = ?, audience_text = ?, is_adult = ?, target_gender = ?, target_cities = ?, target_profile_type = ?, meeting_date = ?, meeting_start_time = ?, meeting_end_time = ?, meeting_city = ?, meeting_city_id = ?, meeting_address = ?, meeting_map_url = ?, book_id = ? WHERE id = ?`,

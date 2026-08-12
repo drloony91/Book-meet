@@ -3019,6 +3019,7 @@ select {
 
 .guest-login-button { white-space: nowrap; }
 .auth-recovery-link { border: 0; padding: 3px 0; color: var(--blue); background: transparent; cursor: pointer; font: inherit; font-size: 12px; font-weight: 700; text-decoration: underline; text-underline-offset: 3px; }
+.auth-provider-actions + .auth-recovery-link { display: block; margin-top: 8px; }
 .account-action-book { width: min(520px, calc(100vw - 28px)); min-height: 0; }
 .account-action-book .login-book-spread { display: block; }
 .account-action-book .login-book-page { width: 100%; min-height: 0; }

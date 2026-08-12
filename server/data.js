@@ -506,11 +506,38 @@ export async function loadBootstrap(userId, options = {}) {
     const typeMatch = row.target_profile_type === "Все" || row.target_profile_type === currentUser?.profile.type;
     return genderMatch && typeMatch;
   });
+  // Keep the canonical catalogue independent from user_books: a linked material
+  // must still resolve after its last library relation has been removed.
+  const [catalogRows] = includeCatalog ? await pool.query(
+    `SELECT b.id, b.creator_user_id, b.author, b.title, b.isbn, b.publisher, b.genres,
+            b.annotation, b.is_adult, b.cover_path, b.cover_tone, b.flip_url
+       FROM books b
+      WHERE ? = 1 OR b.is_adult = 0
+      ORDER BY b.title_key, b.author_key`,
+    [adultStatus === "adult" ? 1 : 0],
+  ) : [[]];
+  const catalogIds = catalogRows.map((row) => Number(row.id));
+  const [catalogLinkRows] = catalogIds.length ? await pool.query(
+    `SELECT id, book_id, action, label, url FROM book_links
+      WHERE book_id IN (${catalogIds.map(() => "?").join(",")})
+      ORDER BY id`,
+    catalogIds,
+  ) : [[]];
+  const catalogBooks = catalogRows.map((row) => ({
+    id: Number(row.id), creatorUserId: row.creator_user_id ? Number(row.creator_user_id) : undefined,
+    catalogBookId: Number(row.id), author: row.author, title: row.title, isbn: row.isbn ?? undefined,
+    publisher: row.publisher ?? undefined, genres: parseJson(row.genres), annotation: row.annotation ?? "",
+    pages: "", format: "Бумажная", durationHours: "", durationMinutes: "", rating: 0, review: "",
+    isAdult: Boolean(row.is_adult), coverUrl: row.cover_path ?? undefined, coverTone: row.cover_tone ?? "blue",
+    flipUrl: row.flip_url ?? undefined,
+    links: catalogLinkRows.filter((link) => Number(link.book_id) === Number(row.id)).map((link) => ({ id: Number(link.id), action: link.action, label: link.label, url: link.url })),
+  }));
   return {
     activeUserId: Number(userId),
     profileCompleted: Boolean(accountState?.profile_completed),
     adultAccess: { status: adultStatus, restricted: restrictedAdultMaterials },
     users: usersWithWishlists,
+    books: catalogBooks,
     blocks: blockRows.map((row) => ({ blockerId: Number(row.blocker_user_id), blockedId: Number(row.blocked_user_id), createdAt: new Date(row.created_at).toISOString() })),
     blockedByUserIds: blockRows.filter((row) => Number(row.blocked_user_id) === Number(userId)).map((row) => Number(row.blocker_user_id)),
     reports: reportRows.map((row) => ({ id: Number(row.id), reporterId: Number(row.reporter_user_id), reporterName: row.reporter_name, targetKind: row.target_kind, targetId: Number(row.target_id), targetUserId: row.target_user_id ? Number(row.target_user_id) : undefined, targetUserName: row.target_user_name ?? undefined, targetTitle: row.target_title, reason: row.reason, status: row.status, createdAt: new Date(row.created_at).toISOString(), commentText: row.comment_text ?? undefined, materialKind: row.comment_material_kind ?? undefined, materialId: row.comment_material_id ? Number(row.comment_material_id) : undefined, conversationMessages: conversationByReport.get(Number(row.id)) })),

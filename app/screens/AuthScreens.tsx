@@ -213,8 +213,8 @@ export function LoginScreen({ onLogin, onRegister, initialError = "" }: { onLogi
       </form>
       <div className="auth-provider-actions">
         {providers.google ? <div className="google-provider-button" ref={googleButtonRef} /> : <span>Google-вход будет доступен после добавления ключей сервиса.</span>}
-        {formMode === "login" && <button className="auth-recovery-link" type="button" onClick={() => { setAccountAction("recovery"); setActionNotice(""); }}>Восстановить пароль</button>}
       </div>
+      {formMode === "login" && <button className="auth-recovery-link" type="button" onClick={() => { setAccountAction("recovery"); setActionNotice(""); }}>Восстановить пароль</button>}
       <div className="mobile-auth-invitation">
         <h2>{formMode === "login" ? "Вы у нас впервые?" : "Уже есть профиль?"}</h2>
         <button className="outline-button auth-switch-button" type="button" onClick={() => changeMode(formMode === "login" ? "register" : "login")}>{formMode === "login" ? "Регистрация" : "Войти"}</button>

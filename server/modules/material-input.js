@@ -1,5 +1,8 @@
 import { normalizeIdentity } from "../security.js";
 
+export const SPECIAL_LOCATIONS = new Set(["Казахстан", "Онлайн"]);
+export const isSpecialLocation = (value) => SPECIAL_LOCATIONS.has(String(value ?? "").trim());
+
 export const CYRILLIC_CITY_PATTERN = /^[А-ЯЁа-яёІіҢңҒғҮүҰұҚқӨөҺһӘәЎўЇїЄєҐґЏџЉљЊњЋћЌќ\s.'’()-]+$/u;
 
 export function cleanUrl(value) {
@@ -26,7 +29,7 @@ export function eventPayload(body = {}) {
     linkedBookId,
     linkedBookIds,
   };
-  if (!payload.title || !payload.summary || !payload.description || !payload.date || !payload.time || !payload.city || !payload.address) {
+  if (!payload.title || !payload.summary || !payload.description || !payload.date || !payload.time || !payload.city || !isSpecialLocation(payload.city) && !payload.address) {
     throw Object.assign(new Error("Заполните название, краткое и полное описание, дату, время, город и адрес"), { statusCode: 400 });
   }
   if (!/^\d{4}-\d{2}-\d{2}$/.test(payload.date) || !/^\d{2}:\d{2}$/.test(payload.time)) {
@@ -60,7 +63,7 @@ export function occasionPayload(body = {}) {
   }
   if (targetCities.some((city) => !CYRILLIC_CITY_PATTERN.test(city))) throw Object.assign(new Error("Выберите города из списка на кириллице"), { statusCode: 400 });
   if (type === "invite") {
-    if (!meetingCity || !meetingAddress || !CYRILLIC_CITY_PATTERN.test(meetingCity)) {
+    if (meetingCity && (!CYRILLIC_CITY_PATTERN.test(meetingCity) || !isSpecialLocation(meetingCity) && !meetingAddress)) {
       throw Object.assign(new Error("Укажите город и адрес или название места встречи"), { statusCode: 400 });
     }
     if (!/^\d{4}-\d{2}-\d{2}$/.test(meetingDate) || meetingDate <= new Date().toISOString().slice(0, 10)) {
@@ -74,11 +77,12 @@ export function occasionPayload(body = {}) {
     }
   }
   if (type === "discuss" && !linkedBookId) throw Object.assign(new Error("Выберите книгу для обсуждения"), { statusCode: 400 });
-  return { type, primaryText, audienceText, isAdult: Boolean(body.isAdult), targetGender, targetCities: type === "invite" ? [meetingCity] : targetCities, targetProfileType, meetingDate: meetingDate || undefined, meetingStartTime: meetingStartTime || undefined, meetingEndTime: meetingEndTime || undefined, meetingCity: meetingCity || undefined, meetingCityId, meetingAddress: meetingAddress || undefined, meetingMapUrl: meetingMapUrl || undefined, linkedBookId };
+  return { type, primaryText, audienceText, isAdult: Boolean(body.isAdult), targetGender, targetCities: type === "invite" && meetingCity ? [meetingCity] : targetCities, targetProfileType, meetingDate: meetingDate || undefined, meetingStartTime: meetingStartTime || undefined, meetingEndTime: meetingEndTime || undefined, meetingCity: meetingCity || undefined, meetingCityId, meetingAddress: meetingAddress || undefined, meetingMapUrl: meetingMapUrl || undefined, linkedBookId };
 }
 
 export async function knownCity(connection, name, preferredId) {
   const cleanName = String(name ?? "").trim();
+  if (isSpecialLocation(cleanName)) return { id: undefined, name: cleanName };
   if (!cleanName || !CYRILLIC_CITY_PATTERN.test(cleanName)) throw Object.assign(new Error("Выберите город из списка на кириллице"), { statusCode: 400 });
   const sql = preferredId
     ? `SELECT c.id, ? AS selected_name FROM cities c

@@ -105,6 +105,12 @@ export function catalogFromUsers(users: DemoUser[]) {
   return all.filter((book, index) => all.findIndex((item) => item.id === book.id || (book.isbn && item.isbn === book.isbn) || (item.title.toLowerCase() === book.title.toLowerCase() && item.author.toLowerCase() === book.author.toLowerCase())) === index);
 }
 
+/** The database catalogue is authoritative; user libraries only enrich it for legacy data. */
+export function catalogFromSources(books: Array<LibraryBook | AuthorBook>, users: DemoUser[]) {
+  const all = [...books, ...catalogFromUsers(users)];
+  return all.filter((book, index) => all.findIndex((item) => item.id === book.id || (book.isbn && item.isbn === book.isbn) || (item.title.toLowerCase() === book.title.toLowerCase() && item.author.toLowerCase() === book.author.toLowerCase())) === index);
+}
+
 export function reviewReadingItemById(users: DemoUser[], id: number): ReadingItem | null {
   for (const user of users) {
     const review = user.reviews.find((item) => item.id === id);
@@ -121,14 +127,14 @@ export function excerptReadingItemById(users: DemoUser[], id: number): ReadingIt
   return null;
 }
 
-export function resolveCanonicalBook(book: LibraryBook | AuthorBook, users: DemoUser[]): LibraryBook | AuthorBook {
+export function resolveCanonicalBook(book: LibraryBook | AuthorBook, users: DemoUser[], catalog: Array<LibraryBook | AuthorBook> = []): LibraryBook | AuthorBook {
   const sameBook = (item: LibraryBook | AuthorBook) => item.id === book.id || Boolean(book.isbn && item.isbn === book.isbn) || (item.title.toLowerCase() === book.title.toLowerCase() && item.author.toLowerCase() === book.author.toLowerCase());
   const writerBook = users.flatMap((user) => user.authorBooks ?? []).find(sameBook);
   if (writerBook) {
     const links = [...writerBook.links, ...(book.links ?? [])].filter((link, index, all) => all.findIndex((item) => item.url === link.url) === index);
     return { ...book, ...writerBook, links } as LibraryBook & AuthorBook;
   }
-  return catalogFromUsers(users).find(sameBook) ?? book;
+  return catalogFromSources(catalog, users).find(sameBook) ?? book;
 }
 
 export function formatKazakhstanPhone(value: string) {

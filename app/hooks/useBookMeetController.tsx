@@ -48,6 +48,7 @@ import { ModalIconActions } from "../components/modals/ModalIconActions";
 import { SafetyCenter, openReportDialog } from "../components/safety/SafetyCenter";
 import {
   catalogFromUsers,
+  catalogFromSources,
   eventTimestamp,
   excerptReadingItemById,
   formatKazakhstanPhone,
@@ -103,6 +104,7 @@ import type {
 
 export function useBookMeetController() {
   const [users, setUsers] = useState<DemoUser[]>([]);
+  const [catalogBooks, setCatalogBooks] = useState<Array<LibraryBook | AuthorBook>>([]);
   const [activeUserId, setActiveUserId] = useState<number | null>(null);
   const [authLoading, setAuthLoading] = useState(true);
   const [authTransition, setAuthTransition] = useState(false);
@@ -153,6 +155,7 @@ export function useBookMeetController() {
   const [deletedRecovery, setDeletedRecovery] = useState<{ daysRemaining: number } | null>(null);
   const profileSaveQueue = useRef<Promise<void>>(Promise.resolve());
   const currentUser = users.find((user) => user.id === activeUserId) ?? null;
+  const catalog = useMemo(() => catalogFromSources(catalogBooks, users), [catalogBooks, users]);
   const visibleUsers = users.filter((user) => currentUser?.isAdmin || user.id === activeUserId || !user.blockedByMe);
   const routeDataRef = useRef({ users, activeUserId, friendships, communityMemberships, notifications, events, occasions, adultAccess });
   routeDataRef.current = { users, activeUserId, friendships, communityMemberships, notifications, events, occasions, adultAccess };
@@ -344,14 +347,14 @@ export function useBookMeetController() {
   const allExcerpts: Excerpt[] = visibleUsers.flatMap((user) => (user.excerpts ?? []).map((excerpt) => ({ id: excerpt.id, ownerId: user.id, text: excerpt.previewText || excerpt.text.slice(0, 500), fullText: excerpt.text || excerpt.previewText, bodyHtml: excerpt.bodyHtml, linkedBookId: excerpt.bookId, linkedBookIds: excerpt.bookIds, title: excerpt.bookTitle || "Публикация", author: user.profile.name, genre: "", createdAt: excerpt.createdAt, createdAtValue: excerpt.createdAtValue, isAdult: excerpt.isAdult })));
   const allPublisherNews = visibleUsers.flatMap((user) => user.publisherNews ?? []);
   const shareItems = useMemo<ChatShareItem[]>(() => {
-    const books: ChatShareItem[] = catalogFromUsers(users).map((book) => ({ kind: "book", id: book.id, title: book.title, subtitle: book.author, preview: book.annotation, imageUrl: book.coverUrl, path: `/books/${book.id}` }));
+    const books: ChatShareItem[] = catalog.map((book) => ({ kind: "book", id: book.id, title: book.title, subtitle: book.author, preview: book.annotation, imageUrl: book.coverUrl, path: `/books/${book.id}` }));
     const people: ChatShareItem[] = users.filter((user) => !user.isAdmin).map((user) => ({ kind: "user", id: user.id, title: user.profile.name, subtitle: `${user.profile.type} · ${user.profile.city}`, preview: user.profile.bio, imageUrl: user.avatarUrl, path: `/users/${user.id}` }));
     const eventItems: ChatShareItem[] = events.filter((item) => item.status === "published").map((item) => ({ kind: "event", id: item.id, title: item.title, subtitle: `${item.city} · ${item.date}`, preview: item.summary, imageUrl: item.bookCoverUrl, path: `/events/${item.id}` }));
-    const reviewItems: ChatShareItem[] = users.flatMap((user) => user.reviews.map((review) => ({ kind: "review" as const, id: review.id, title: review.bookTitle, subtitle: `Рецензия · ${user.profile.name}`, preview: review.preview, imageUrl: catalogFromUsers(users).find((book) => book.id === review.bookId)?.coverUrl, path: `/reviews/${review.id}` })));
-    const excerptItems: ChatShareItem[] = users.flatMap((user) => (user.excerpts ?? []).map((excerpt) => ({ kind: "excerpt" as const, id: excerpt.id, title: excerpt.bookTitle || "Публикация", subtitle: user.profile.name, preview: excerpt.previewText, imageUrl: catalogFromUsers(users).find((book) => book.id === excerpt.bookId)?.coverUrl, path: `/blog/${excerpt.id}` })));
+    const reviewItems: ChatShareItem[] = users.flatMap((user) => user.reviews.map((review) => ({ kind: "review" as const, id: review.id, title: review.bookTitle, subtitle: `Рецензия · ${user.profile.name}`, preview: review.preview, imageUrl: catalog.find((book) => book.id === review.bookId)?.coverUrl, path: `/reviews/${review.id}` })));
+    const excerptItems: ChatShareItem[] = users.flatMap((user) => (user.excerpts ?? []).map((excerpt) => ({ kind: "excerpt" as const, id: excerpt.id, title: excerpt.bookTitle || "Публикация", subtitle: user.profile.name, preview: excerpt.previewText, imageUrl: catalog.find((book) => book.id === excerpt.bookId)?.coverUrl, path: `/blog/${excerpt.id}` })));
     const occasionItems: ChatShareItem[] = occasions.filter((item) => item.status === "published").map((item) => ({ kind: "occasion", id: item.id, title: item.primaryText.slice(0, 72), subtitle: `${item.targetCities.join(", ")} · ${item.creatorName}`, preview: item.audienceText, path: `/meet/${item.id}` }));
     return [...books, ...people, ...eventItems, ...reviewItems, ...excerptItems, ...occasionItems];
-  }, [users, events, occasions]);
+  }, [catalog, users, events, occasions]);
   const homeReviews = currentUser ? allReviews : [];
   const homeExcerpts = currentUser ? allExcerpts : [];
   const currentNotifications = currentUser ? notifications.filter((notification) => notification.userId === currentUser.id).sort((a, b) => b.id - a.id) : [];
@@ -387,6 +390,7 @@ export function useBookMeetController() {
 
   function applyBootstrap(data: BootstrapData) {
     setUsers(data.users);
+    setCatalogBooks(data.books ?? []);
     setActiveUserId(data.activeUserId);
     setMessages(data.messages ?? {});
     setFriendRequests(data.friendRequests ?? []);
@@ -411,7 +415,7 @@ export function useBookMeetController() {
     } catch (error) {
       if (!(error instanceof BootstrapRequestError) || error.status !== 423) throw error;
       setSuspension({ permanent: Boolean(error.data.permanent), until: typeof error.data.until === "string" ? error.data.until : undefined, reason: typeof error.data.reason === "string" ? error.data.reason : "" });
-      setUsers([]);
+      setUsers([]); setCatalogBooks([]);
       setActiveUserId(null);
     }
   }
@@ -478,7 +482,7 @@ export function useBookMeetController() {
     const addCatalogBook = (event: Event) => {
       if (!currentUser || ["Издатель", "Сообщество"].includes(currentUser.profile.type)) return;
       const bookId = Number((event as CustomEvent<{ bookId?: number }>).detail?.bookId);
-      const catalogBook = catalogFromUsers(users).find((book) => (book.catalogBookId ?? book.id) === bookId);
+      const catalogBook = catalog.find((book) => (book.catalogBookId ?? book.id) === bookId);
       if (!catalogBook || currentUser.books.some((book) => (book.catalogBookId ?? book.id) === bookId)) return;
       setCatalogBookToAdd({ ...catalogBook, id: bookId, catalogBookId: bookId, rating: 0, review: "", readingStatus: "want", topRank: undefined });
       setSelectedBook(null);
@@ -487,7 +491,7 @@ export function useBookMeetController() {
     window.addEventListener("bookmeet:create-excerpt", createExcerpt);
     window.addEventListener("bookmeet:add-catalog-book", addCatalogBook);
     return () => { window.removeEventListener("bookmeet:create-review", createReview); window.removeEventListener("bookmeet:create-excerpt", createExcerpt); window.removeEventListener("bookmeet:add-catalog-book", addCatalogBook); };
-  }, [currentUser, users]);
+  }, [currentUser, catalog]);
 
   async function saveCatalogBookToLibrary(book: LibraryBook) {
     if (!currentUser) return;
@@ -932,7 +936,7 @@ export function useBookMeetController() {
 
   async function logout() {
     await apiFetch("/api/auth/logout", { method: "POST", credentials: "same-origin" }).catch(() => undefined);
-    setUsers([]); setActiveUserId(null); setMessages({}); setFriendRequests([]); setFriendships([]); setCommunityMemberships([]); setFollows([]); setNotifications([]); setLikes({}); setEvents([]); setOccasions([]); setBlocks([]); setBlockedByUserIds([]); setReports([]); setSuspension(null); setCommenters({}); setSelectedFriend(null); setChatExpanded(false);
+    setUsers([]); setCatalogBooks([]); setActiveUserId(null); setMessages({}); setFriendRequests([]); setFriendships([]); setCommunityMemberships([]); setFollows([]); setNotifications([]); setLikes({}); setEvents([]); setOccasions([]); setBlocks([]); setBlockedByUserIds([]); setReports([]); setSuspension(null); setCommenters({}); setSelectedFriend(null); setChatExpanded(false);
     navigateMainView("home", { replace: true }); setNotificationsOpen(false); setProfileAction(null); setNewlyRegistered(false); setGuestAuthOpen(false); setAuthTransition(false);
     loadPublicCatalog().then(setPublicCatalog).catch((error) => setStartupError(error instanceof Error ? error.message : "Не удалось загрузить публичный каталог"));
   }
@@ -990,7 +994,7 @@ export function useBookMeetController() {
     setChatExpanded(nextExpanded);
   };
   const openChatAttachment = (attachment: ChatAttachment) => {
-    if (attachment.kind === "book") setSelectedBook(catalogFromUsers(users).find((book) => book.id === attachment.id) ?? null);
+    if (attachment.kind === "book") setSelectedBook(catalog.find((book) => book.id === attachment.id) ?? null);
     else if (attachment.kind === "user") openUserProfile(attachment.id);
     else if (attachment.kind === "event") setSelectedEvent(events.find((item) => item.id === attachment.id) ?? null);
     else if (attachment.kind === "review") setSelectedMaterial(reviewReadingItemById(users, attachment.id));
@@ -1001,16 +1005,16 @@ export function useBookMeetController() {
   const upcomingEvents = events.filter((item) => eventTimestamp(item) > eventClock);
   const visibleHomeEvents = upcomingEvents.filter((item) => item.creatorId === currentUser.id && item.status !== "rejected" || item.status === "published").sort((a, b) => eventTimestamp(a) - eventTimestamp(b));
   const visibleHomeOccasions = occasions.filter((item) => item.creatorId === currentUser.id && item.status !== "rejected" || item.status === "published" && (item.targetGender === "Все" || item.targetGender === currentUser.profile.gender) && (item.targetProfileType === "Все" || item.targetProfileType === currentUser.profile.type));
-  const materialDirectoryProps = { reviews: allReviews, excerpts: allExcerpts, publisherNews: allPublisherNews, currentUser, users: visibleUsers, likes, commenters, onToggleLike: toggleLike, onComment: addComment, onOpenUser: openUserProfile, relationshipFor, isFollowing: followsUser, onAddFriend: sendFriendRequest, onFollow: followUser };
+  const materialDirectoryProps = { reviews: allReviews, excerpts: allExcerpts, publisherNews: allPublisherNews, currentUser, users: visibleUsers, catalog, likes, commenters, onToggleLike: toggleLike, onComment: addComment, onOpenUser: openUserProfile, relationshipFor, isFollowing: followsUser, onAddFriend: sendFriendRequest, onFollow: followUser };
   const directoryShell = (content: ReactNode) => <div className="directory-page-shell"><button className="back-button directory-home-button" type="button" onClick={goHome}>← На главную</button>{content}</div>;
   const workspaceContent = view === "reviews"
     ? directoryShell(<MaterialsDirectoryPage kind="review" onCreate={() => startCreating("review")} {...materialDirectoryProps} />)
     : view === "publications"
       ? directoryShell(<MaterialsDirectoryPage kind="excerpt" onCreate={() => startCreating("excerpt")} {...materialDirectoryProps} />)
       : view === "events"
-        ? <EventsDirectoryPage events={upcomingEvents} currentUser={currentUser} users={users} onHome={goHome} onCreate={startEventCreation} onEdit={setEditingEvent} onOpenUser={openUserProfile} />
+        ? <EventsDirectoryPage events={upcomingEvents} currentUser={currentUser} users={users} catalog={catalog} onHome={goHome} onCreate={startEventCreation} onEdit={setEditingEvent} onOpenUser={openUserProfile} />
         : view === "occasions"
-          ? <OccasionsDirectoryPage occasions={occasions} currentUser={currentUser} users={visibleUsers} onHome={goHome} onCreate={startOccasionCreation} onEdit={setEditingOccasion} onOpenUser={openUserProfile} />
+          ? <OccasionsDirectoryPage occasions={occasions} currentUser={currentUser} users={visibleUsers} catalog={catalog} onHome={goHome} onCreate={startOccasionCreation} onEdit={setEditingOccasion} onOpenUser={openUserProfile} />
           : view === "users"
             ? directoryShell(<UsersDirectoryPage currentUser={currentUser} users={visibleUsers} onOpenUser={openUserProfile} />)
             : view === "publishing"
@@ -1022,7 +1026,7 @@ export function useBookMeetController() {
             : view === "partners"
               ? directoryShell(<SimpleDirectoryPage kind="partners" />)
             : view === "chat" ? <ChatScreen />
-              : <HomeContent reviews={homeReviews} excerpts={homeExcerpts} publisherNews={allPublisherNews} events={visibleHomeEvents} occasions={visibleHomeOccasions} currentUserType={currentUser.profile.type === "Писатель" ? "writer" : currentUser.profile.type === "Блогер" ? "blogger" : "reader"} onOpenUser={openUserProfile} onCreateEvent={startEventCreation} onEditEvent={setEditingEvent} onCreateOccasion={startOccasionCreation} onEditOccasion={setEditingOccasion} onCreateReview={() => startCreating("review")} onCreateExcerpt={() => startCreating("excerpt")} onNavigate={navigateMainView} currentUserName={currentUser.profile.name} currentUser={currentUser} users={visibleUsers} likes={likes} onToggleLike={toggleLike} onComment={addComment} relationshipFor={relationshipFor} isFollowing={followsUser} onAddFriend={sendFriendRequest} onFollow={followUser} />;
+              : <HomeContent reviews={homeReviews} excerpts={homeExcerpts} publisherNews={allPublisherNews} events={visibleHomeEvents} occasions={visibleHomeOccasions} catalog={catalog} currentUserType={currentUser.profile.type === "Писатель" ? "writer" : currentUser.profile.type === "Блогер" ? "blogger" : "reader"} onOpenUser={openUserProfile} onCreateEvent={startEventCreation} onEditEvent={setEditingEvent} onCreateOccasion={startOccasionCreation} onEditOccasion={setEditingOccasion} onCreateReview={() => startCreating("review")} onCreateExcerpt={() => startCreating("excerpt")} onNavigate={navigateMainView} currentUserName={currentUser.profile.name} currentUser={currentUser} users={visibleUsers} likes={likes} onToggleLike={toggleLike} onComment={addComment} relationshipFor={relationshipFor} isFollowing={followsUser} onAddFriend={sendFriendRequest} onFollow={followUser} />;
 
   return (
     <div className="app-shell">
@@ -1070,25 +1074,25 @@ export function useBookMeetController() {
 
       {selectedFriend && !chatExpanded && (!currentRoute.overlay || currentRoute.overlay.kind === "chat") && <div className={`chat-popup-layer ${mobileFriendsOpen ? "mobile-friends-visible" : ""}`}><div className="chat-popup">{chat}</div></div>}
 
-      {selectedBook && <UnifiedBookModal book={selectedBook} users={visibleUsers} events={events} retainWhenInactive onClose={() => setSelectedBook(null)} onReport={currentUser.isAdmin || selectedBook.creatorUserId === currentUser.id || users.some((user) => user.id === currentUser.id && (user.authorBooks ?? []).some((book) => book.id === selectedBook.id)) ? undefined : () => openReportDialog({ kind: "book", id: selectedBook.id })} onOpenUser={openUserProfile} onOpenEvent={(event) => setSelectedEvent(event)} onOpenReview={(review, user) => { setSelectedMaterial({ id: review.id, kind: "review", title: review.bookTitle, author: user.profile.name, text: review.fullText, bodyHtml: review.bodyHtml, linkedBookId: review.bookId, ownerId: user.id, createdAt: review.createdAt, preview: review.preview, bookAuthor: review.bookAuthor, rating: review.rating }); }} />}
-      {selectedMaterial && <ReadingModal item={selectedMaterial} currentUser={currentUser} users={visibleUsers} likedUserIds={likes[`${selectedMaterial.kind}-${selectedMaterial.id}`] ?? []} onToggleLike={() => toggleLike(selectedMaterial)} onComment={(text) => addComment(selectedMaterial, text)} onOpenUser={openUserProfile} onClose={() => setSelectedMaterial(null)} onReport={selectedMaterial.ownerId !== currentUser.id && !currentUser.isAdmin ? () => openReportDialog({ kind: selectedMaterial.kind, id: selectedMaterial.id }) : undefined} onEdit={currentUser.isAdmin || selectedMaterial.ownerId === currentUser.id ? () => void editReadingMaterial(selectedMaterial, currentUser) : undefined} onDelete={currentUser.isAdmin || selectedMaterial.ownerId === currentUser.id ? () => void deleteReadingMaterial(selectedMaterial, currentUser) : undefined} />}
+      {selectedBook && <UnifiedBookModal book={selectedBook} users={visibleUsers} catalog={catalog} events={events} retainWhenInactive onClose={() => setSelectedBook(null)} onReport={currentUser.isAdmin || selectedBook.creatorUserId === currentUser.id || users.some((user) => user.id === currentUser.id && (user.authorBooks ?? []).some((book) => book.id === selectedBook.id)) ? undefined : () => openReportDialog({ kind: "book", id: selectedBook.id })} onOpenUser={openUserProfile} onOpenEvent={(event) => setSelectedEvent(event)} onOpenReview={(review, user) => { setSelectedMaterial({ id: review.id, kind: "review", title: review.bookTitle, author: user.profile.name, text: review.fullText, bodyHtml: review.bodyHtml, linkedBookId: review.bookId, ownerId: user.id, createdAt: review.createdAt, preview: review.preview, bookAuthor: review.bookAuthor, rating: review.rating }); }} />}
+      {selectedMaterial && <ReadingModal item={selectedMaterial} currentUser={currentUser} users={visibleUsers} catalog={catalog} likedUserIds={likes[`${selectedMaterial.kind}-${selectedMaterial.id}`] ?? []} onToggleLike={() => toggleLike(selectedMaterial)} onComment={(text) => addComment(selectedMaterial, text)} onOpenUser={openUserProfile} onClose={() => setSelectedMaterial(null)} onReport={selectedMaterial.ownerId !== currentUser.id && !currentUser.isAdmin ? () => openReportDialog({ kind: selectedMaterial.kind, id: selectedMaterial.id }) : undefined} onEdit={currentUser.isAdmin || selectedMaterial.ownerId === currentUser.id ? () => void editReadingMaterial(selectedMaterial, currentUser) : undefined} onDelete={currentUser.isAdmin || selectedMaterial.ownerId === currentUser.id ? () => void deleteReadingMaterial(selectedMaterial, currentUser) : undefined} />}
       {adminEditingMaterial && <AdminCatalogEditor item={adminEditingMaterial} users={users} onClose={() => setAdminEditingMaterial(null)} onSave={async (payload) => { const response = await fetch(`/api/admin/materials/${adminEditingMaterial.kind}/${adminEditingMaterial.id}`, { method: "PATCH", credentials: "same-origin", headers: { "content-type": "application/json" }, body: JSON.stringify(payload) }); const data = await response.json().catch(() => ({})) as { error?: string }; if (!response.ok) { window.alert(data.error ?? "Не удалось сохранить изменения"); return; } setAdminEditingMaterial(null); await refreshBootstrap(); }} />}
       {detailNotification && <NotificationDetail notification={detailNotification} actor={users.find((user) => user.id === detailNotification.actorId)} isFollowing={follows.some((follow) => follow.followerId === currentUser.id && follow.targetId === detailNotification.actorId)} onClose={() => setDetailNotification(null)} onFollow={() => followUser(detailNotification.actorId)} />}
-      {quickMaterialAction === "review" && <ReviewEditor catalog={catalogFromUsers(users)} onClose={() => setQuickMaterialAction(null)} onSave={(review) => { const nextUser = { ...currentUser, reviews: [review, ...currentUser.reviews] }; setQuickMaterialAction(null); void handleUserChange(nextUser); }} />}
-      {quickMaterialAction === "excerpt" && <PublicationEditor catalog={catalogFromUsers(users)} onClose={() => setQuickMaterialAction(null)} onSave={(excerpt) => { const nextUser = { ...currentUser, excerpts: [excerpt, ...(currentUser.excerpts ?? [])] }; setQuickMaterialAction(null); void handleUserChange(nextUser); }} />}
-      {eventFormOpen && <div className="modal-backdrop" onMouseDown={() => setEventFormOpen(false)}><section className="event-editor-modal" onMouseDown={(event) => event.stopPropagation()}><EventForm catalog={catalogFromUsers(users)} onCreateBook={() => { setEventFormOpen(false); startCreating("book"); }} onCancel={() => setEventFormOpen(false)} onSave={createEvent} /></section></div>}
-      {editingEvent && <div className="modal-backdrop" onMouseDown={() => setEditingEvent(null)}><section className="event-editor-modal" onMouseDown={(event) => event.stopPropagation()}><EventForm initial={editingEvent} catalog={catalogFromUsers(users)} onCreateBook={() => { setEditingEvent(null); startCreating("book"); }} submitLabel="Отправить повторно" onCancel={() => setEditingEvent(null)} onSave={resubmitEvent} /></section></div>}
+      {quickMaterialAction === "review" && <ReviewEditor catalog={catalog} onClose={() => setQuickMaterialAction(null)} onSave={(review) => { const nextUser = { ...currentUser, reviews: [review, ...currentUser.reviews] }; setQuickMaterialAction(null); void handleUserChange(nextUser); }} />}
+      {quickMaterialAction === "excerpt" && <PublicationEditor catalog={catalog} onClose={() => setQuickMaterialAction(null)} onSave={(excerpt) => { const nextUser = { ...currentUser, excerpts: [excerpt, ...(currentUser.excerpts ?? [])] }; setQuickMaterialAction(null); void handleUserChange(nextUser); }} />}
+      {eventFormOpen && <div className="modal-backdrop" onMouseDown={() => setEventFormOpen(false)}><section className="event-editor-modal" onMouseDown={(event) => event.stopPropagation()}><EventForm catalog={catalog} onCreateBook={() => { setEventFormOpen(false); startCreating("book"); }} onCancel={() => setEventFormOpen(false)} onSave={createEvent} /></section></div>}
+      {editingEvent && <div className="modal-backdrop" onMouseDown={() => setEditingEvent(null)}><section className="event-editor-modal" onMouseDown={(event) => event.stopPropagation()}><EventForm initial={editingEvent} catalog={catalog} onCreateBook={() => { setEditingEvent(null); startCreating("book"); }} submitLabel="Отправить повторно" onCancel={() => setEditingEvent(null)} onSave={resubmitEvent} /></section></div>}
       {selectedEvent && <EventModal item={selectedEvent} users={visibleUsers} currentUserId={currentUser.id} currentUser={currentUser} onOpenUser={openUserProfile} onReport={selectedEvent.creatorId !== currentUser.id && !currentUser.isAdmin ? () => openReportDialog({ kind: "event", id: selectedEvent.id }) : undefined} onOpenBook={(bookId) => {
-        setSelectedBook(catalogFromUsers(users).find((book) => book.id === (bookId ?? selectedEvent.linkedBookId)) ?? null);
+        setSelectedBook(catalog.find((book) => book.id === (bookId ?? selectedEvent.linkedBookId)) ?? null);
       }} onClose={() => setSelectedEvent(null)} />}
-      {occasionFormOpen && <div className="modal-backdrop" onMouseDown={() => setOccasionFormOpen(false)}><section className="event-editor-modal" onMouseDown={(event) => event.stopPropagation()}><OccasionForm catalog={catalogFromUsers(users)} onCancel={() => setOccasionFormOpen(false)} onSave={createOccasion} /></section></div>}
-      {editingOccasion && <div className="modal-backdrop" onMouseDown={() => setEditingOccasion(null)}><section className="event-editor-modal" onMouseDown={(event) => event.stopPropagation()}><OccasionForm initial={editingOccasion} catalog={catalogFromUsers(users)} submitLabel="Отправить повторно" onCancel={() => setEditingOccasion(null)} onSave={resubmitOccasion} /></section></div>}
-      {selectedOccasion && <OccasionModal item={selectedOccasion} currentUser={currentUser} users={visibleUsers} onReport={selectedOccasion.creatorId !== currentUser.id && !currentUser.isAdmin ? () => openReportDialog({ kind: "occasion", id: selectedOccasion.id }) : undefined} onOpenUser={openUserProfile} onOpenBook={(bookId) => { setSelectedBook(catalogFromUsers(users).find((book) => book.id === bookId) ?? null); }} onClose={() => setSelectedOccasion(null)} />}
+      {occasionFormOpen && <div className="modal-backdrop" onMouseDown={() => setOccasionFormOpen(false)}><section className="event-editor-modal" onMouseDown={(event) => event.stopPropagation()}><OccasionForm catalog={catalog} onCancel={() => setOccasionFormOpen(false)} onSave={createOccasion} /></section></div>}
+      {editingOccasion && <div className="modal-backdrop" onMouseDown={() => setEditingOccasion(null)}><section className="event-editor-modal" onMouseDown={(event) => event.stopPropagation()}><OccasionForm initial={editingOccasion} catalog={catalog} submitLabel="Отправить повторно" onCancel={() => setEditingOccasion(null)} onSave={resubmitOccasion} /></section></div>}
+      {selectedOccasion && <OccasionModal item={selectedOccasion} currentUser={currentUser} users={visibleUsers} onReport={selectedOccasion.creatorId !== currentUser.id && !currentUser.isAdmin ? () => openReportDialog({ kind: "occasion", id: selectedOccasion.id }) : undefined} onOpenUser={openUserProfile} onOpenBook={(bookId) => { setSelectedBook(catalog.find((book) => book.id === bookId) ?? null); }} onClose={() => setSelectedOccasion(null)} />}
       {roleRestrictionNotice && <div className="modal-backdrop" onMouseDown={() => setRoleRestrictionNotice(null)}><section className="simple-warning-modal" role="dialog" aria-modal="true" onMouseDown={(event) => event.stopPropagation()}><h2>{roleRestrictionNotice === "review" ? "Рецензии могут писать только читатели и блогеры" : roleRestrictionNotice === "excerpt" ? "Публикации могут создавать только писатели и блогеры" : roleRestrictionNotice === "occasion" ? "Организационные профили не могут создавать поводы познакомиться" : "Профиль организации ожидает официального подтверждения"}</h2><button className="primary-button" type="button" autoFocus onClick={() => setRoleRestrictionNotice(null)}>Закрыть</button></section></div>}
       {profileUser && profileUser.id !== currentUser.id && <UserProfileModal user={profileUser} viewer={currentUser} users={visibleUsers} profileFriends={profileFriendUsers} events={events} occasions={occasions} likes={likes} friendCount={profileFriendUsers.length} relationship={relationshipToProfile} incomingMessage={friendRequests.find((request) => request.status === "pending" && request.fromId === profileUser.id && request.toId === currentUser.id)?.message} isFollowing={(currentUser.profile.type === "Издатель" || profileUser.profile.type === "Издатель" ? false : isFriendPair(currentUser.id, profileUser.id)) || follows.some((follow) => follow.followerId === currentUser.id && follow.targetId === profileUser.id)} canMessage={Boolean(currentUser.isAdmin || profileUser.isAdmin || currentUser.profile.type === "Издатель" || profileUser.profile.type === "Издатель")} blockedByMe={Boolean(profileUser.blockedByMe || currentUser.isAdmin && profileUser.suspension)} onClose={() => setProfileUserId(null)} onAddFriend={(message) => sendFriendRequest(profileUser.id, message)} onCancelFriendRequest={() => cancelFriendRequest(profileUser.id)} onAccept={() => acceptFriend(profileUser.id)} onReject={(comment) => rejectFriend(profileUser.id, comment)} onRemoveFriend={() => removeFriend(profileUser.id)} onOpenChat={() => openChat(profileUser.id)} onFollow={() => followUser(profileUser.id)} onUnfollow={() => unfollowUser(profileUser.id)} onBlock={() => blockUser(profileUser.id)} onUnblock={() => unblockUser(profileUser.id)} onReport={currentUser.isAdmin ? undefined : () => openReportDialog({ kind: "user", id: profileUser.id })} onToggleLike={toggleLike} onComment={addComment} onOpenUser={openUserProfile} />}
       {blockedProfileNotice && <div className="nested-modal-backdrop" onMouseDown={() => setBlockedProfileNotice(false)}><section className="confirm-social-modal" role="alertdialog" aria-modal="true" onMouseDown={(event) => event.stopPropagation()}><h2>Кажется, с вами не хотят общаться</h2><button className="primary-button" type="button" autoFocus onClick={() => setBlockedProfileNotice(false)}>Ок</button></section></div>}
       {adultRestrictionNotice && <div className="nested-modal-backdrop"><section className="adult-restriction-modal" role="alertdialog" aria-modal="true" aria-labelledby="adult-restriction-title"><span className="adult-restriction-mark" aria-hidden="true">18+</span><h2 id="adult-restriction-title">Материал предназначен для лиц старше 18 лет</h2>{adultRestrictionNotice === "missing" && <p>Пожалуйста, укажите дату рождения в профиле, чтобы система могла определить ваш возраст.</p>}<div className="form-actions">{adultRestrictionNotice === "missing" ? <><button className="primary-button" type="button" onClick={() => leaveRestrictedMaterial(true)}>Перейти в профиль</button><button className="outline-button" type="button" onClick={() => leaveRestrictedMaterial(false)}>Выйти</button></> : <button className="primary-button" type="button" autoFocus onClick={() => leaveRestrictedMaterial(false)}>Ок</button>}</div></section></div>}
-      {catalogBookToAdd && <BookEditor book={catalogBookToAdd} catalog={catalogFromUsers(users)} top3Count={currentUser.books.filter((item) => item.topRank).length} onClose={() => setCatalogBookToAdd(null)} onSave={(book) => void saveCatalogBookToLibrary(book)} />}
+      {catalogBookToAdd && <BookEditor book={catalogBookToAdd} catalog={catalog} top3Count={currentUser.books.filter((item) => item.topRank).length} onClose={() => setCatalogBookToAdd(null)} onSave={(book) => void saveCatalogBookToLibrary(book)} />}
       <SafetyCenter onChanged={() => void refreshBootstrap()} />
     </div>
   );
