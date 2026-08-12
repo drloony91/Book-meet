@@ -1,4 +1,6 @@
 import { spawn } from "node:child_process";
+import net from "node:net";
+import tls from "node:tls";
 
 function mailConfiguration(environment = process.env) {
   const port = Number(environment.SMTP_PORT || 587);
@@ -36,6 +38,87 @@ function sendWithLocalMta({ to, subject, text }, config, environment) {
   });
 }
 
+function smtpAddress(value) {
+  const address = value.match(/<([^>]+)>/)?.[1] || value;
+  if (!/^[^\s<>@]+@[^\s<>@]+$/.test(address)) throw new Error("Invalid SMTP address");
+  return address;
+}
+
+function connectSmtp(config) {
+  return new Promise((resolve, reject) => {
+    const isLocal = config.host === "localhost" || config.host === "127.0.0.1";
+    const timeout = setTimeout(() => reject(new Error("SMTP connection timed out")), 10_000);
+    const ready = (socket) => { clearTimeout(timeout); resolve(socket); };
+    const failed = (error) => { clearTimeout(timeout); reject(error); };
+    const socket = config.secure
+      ? tls.connect({ host: config.host, port: config.port, servername: config.host, rejectUnauthorized: !isLocal }, () => ready(socket))
+      : net.createConnection({ host: config.host, port: config.port }, () => ready(socket));
+    socket.once("error", failed);
+  });
+}
+
+function smtpReplies(socket) {
+  let buffer = "";
+  const replies = [];
+  const waiters = [];
+  let error;
+  const flush = () => {
+    while (replies.length && waiters.length) waiters.shift().resolve(replies.shift());
+    if (error) while (waiters.length) waiters.shift().reject(error);
+  };
+  socket.setEncoding("utf8");
+  socket.on("data", (chunk) => {
+    buffer += chunk;
+    const lines = buffer.split("\r\n");
+    buffer = lines.pop() || "";
+    for (const line of lines) if (/^\d{3} /.test(line)) replies.push({ code: Number(line.slice(0, 3)), line });
+    flush();
+  });
+  socket.once("error", (value) => { error = value; flush(); });
+  socket.once("close", () => { if (!error) { error = new Error("SMTP connection closed"); flush(); } });
+  return () => new Promise((resolve, reject) => {
+    if (replies.length) return resolve(replies.shift());
+    if (error) return reject(error);
+    waiters.push({ resolve, reject });
+  });
+}
+
+async function smtpCommand(socket, next, command, accepted = [250]) {
+  socket.write(`${command}\r\n`, "utf8");
+  const reply = await next();
+  if (!accepted.includes(reply.code)) throw new Error(`SMTP command failed: ${reply.code}`);
+  return reply;
+}
+
+async function sendWithSocketSmtp({ to, subject, text }, config) {
+  const isLocal = config.host === "localhost" || config.host === "127.0.0.1";
+  let socket = await connectSmtp(config);
+  let next = smtpReplies(socket);
+  if ((await next()).code !== 220) throw new Error("SMTP greeting failed");
+  let hello = await smtpCommand(socket, next, "EHLO bookmeet.club");
+  if (!config.secure && /STARTTLS/i.test(hello.line)) {
+    await smtpCommand(socket, next, "STARTTLS", [220]);
+    socket = tls.connect({ socket, servername: config.host, rejectUnauthorized: !isLocal });
+    next = smtpReplies(socket);
+    await new Promise((resolve, reject) => { socket.once("secureConnect", resolve); socket.once("error", reject); });
+    hello = await smtpCommand(socket, next, "EHLO bookmeet.club");
+  } else if (!config.secure && !isLocal) {
+    throw new Error("SMTP server does not support STARTTLS");
+  }
+  if (!/AUTH(?:=|\s)/i.test(hello.line)) throw new Error("SMTP authentication unavailable");
+  const auth = Buffer.from(`\u0000${config.auth.user}\u0000${config.auth.pass}`, "utf8").toString("base64");
+  await smtpCommand(socket, next, `AUTH PLAIN ${auth}`, [235]);
+  const sender = smtpAddress(config.from);
+  const recipient = smtpAddress(to);
+  await smtpCommand(socket, next, `MAIL FROM:<${sender}>`);
+  await smtpCommand(socket, next, `RCPT TO:<${recipient}>`);
+  await smtpCommand(socket, next, "DATA", [354]);
+  const body = Buffer.from(text, "utf8").toString("base64").match(/.{1,76}/g)?.join("\r\n") || "";
+  socket.write([`From: ${config.from}`, `To: ${recipient}`, `Subject: ${mimeHeader(subject)}`, "MIME-Version: 1.0", "Content-Type: text/plain; charset=UTF-8", "Content-Transfer-Encoding: base64", "", body, ".", ""].join("\r\n"), "utf8");
+  if ((await next()).code !== 250) throw new Error("SMTP message rejected");
+  try { await smtpCommand(socket, next, "QUIT", [221]); } finally { socket.end(); }
+}
+
 export async function sendAccountEmail({ to, subject, text }, environment = process.env) {
   const config = mailConfiguration(environment);
   if (!config) return { delivered: false, reason: "disabled" };
@@ -46,12 +129,17 @@ export async function sendAccountEmail({ to, subject, text }, environment = proc
     return { delivered: true };
   } catch {
     try {
-      await sendWithLocalMta({ to, subject, text }, config, environment);
-      return { delivered: true, transport: "local_mta" };
+      await sendWithSocketSmtp({ to, subject, text }, config);
+      return { delivered: true, transport: "smtp_socket" };
     } catch {
-      // Never log recipients, action links, SMTP credentials or transport errors.
-      console.warn("Account email delivery failed; check SMTP or local MTA configuration.");
-      return { delivered: false, reason: "failed" };
+      try {
+        await sendWithLocalMta({ to, subject, text }, config, environment);
+        return { delivered: true, transport: "local_mta" };
+      } catch {
+        // Never log recipients, action links, SMTP credentials or transport errors.
+        console.warn("Account email delivery failed; check SMTP or local MTA configuration.");
+        return { delivered: false, reason: "failed" };
+      }
     }
   }
 }
