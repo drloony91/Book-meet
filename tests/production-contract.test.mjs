@@ -82,8 +82,8 @@ test("guest bootstrap публичен до requireUser и не содержит
   assert.match(loader, /p\.publisher_status = 'approved'/);
   assert.doesNotMatch(loader, /messages|notifications|friend_requests|friendships|user_blocks|reports|publisher_legal|publisher_bin|email/);
   assert.match(guest, /Вход\/Регистрация/);
-  assert.match(guest, /Найти друзей/);
-  assert.match(guest, /Книжный повод/);
+  assert.match(guest, /onFindFriends=\{authenticate\}/);
+  assert.match(guest, /onCreateOccasion=\{authenticate\}/);
   assert.match(controller, /loadPublicCatalog/);
   assert.match(controller, /bookmeet:returnTo/);
 });

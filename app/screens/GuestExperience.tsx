@@ -3,14 +3,14 @@
 import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { EmptyContentState } from "../components/common/EmptyContentState";
 import { ContentHubControls } from "../components/content/ContentHubControls";
-import { EventCard, MaterialPreviewCard } from "../components/content/ContentComponents";
+import { EventCard, MaterialPreviewCard, OccasionCard } from "../components/content/ContentComponents";
 import { BookMeetHeader, WorkspaceScreen } from "../components/layout/AppLayout";
 import type { Friend } from "../components/chat/types";
 import { safeReturnTo } from "../lib/navigation-security";
 import type { MainView } from "../navigation/routes";
 import { AllBooksDirectoryPage, SimpleDirectoryPage } from "./ContentScreens";
 import { PublicOrganizationDirectoryPage } from "./UsersDirectoryScreen";
-import type { BookEvent, PublicCatalogData, PublicCatalogEvent, PublicCatalogMaterial, ReadingItem } from "../types/domain";
+import type { BookEvent, Occasion, PublicCatalogData, PublicCatalogEvent, PublicCatalogMaterial, PublicCatalogOccasion, ReadingItem } from "../types/domain";
 
 type GuestView = "home" | "books" | "publishing" | "communities" | "partners";
 
@@ -30,24 +30,30 @@ function bookEvent(item: PublicCatalogEvent): BookEvent {
   return { id: item.id, creatorId: 0, title: item.title, summary: item.summary, description: item.summary, date: item.date, time: item.time, city: item.city, address: item.address, mapUrl: "", detailsUrl: "", status: "published", createdAt: item.createdAt ?? `${item.date}T${item.time || "00:00"}:00` };
 }
 
+function occasion(item: PublicCatalogOccasion): Occasion {
+  return { id: item.id, creatorId: 0, type: item.type, primaryText: item.primaryText, audienceText: item.audienceText, targetGender: "Все", targetCities: item.targetCities, targetProfileType: "Все", meetingDate: item.meetingDate, meetingStartTime: item.meetingStartTime, meetingEndTime: item.meetingEndTime, meetingCity: item.meetingCity, meetingAddress: item.meetingAddress, status: "published", creatorName: "", createdAt: item.createdAt ?? "" };
+}
+
 type GuestHubView = "home" | "events" | "reviews" | "publications" | "occasions";
 
 function GuestHome({ data, authenticate, onNavigate }: { data: PublicCatalogData; authenticate: () => void; onNavigate: (view: GuestHubView) => void }) {
   const materials = useMemo(() => data.materials.map((source) => ({ source, item: readingItem(source) })), [data.materials]);
   const events = useMemo(() => data.events.map(bookEvent), [data.events]);
+  const occasions = useMemo(() => data.occasions.map(occasion), [data.occasions]);
   const feed = useMemo(() => [
     ...materials.map((entry) => ({ kind: "material" as const, time: Date.parse(entry.source.createdAt ?? "") || entry.source.id, entry })),
     ...events.map((item) => ({ kind: "event" as const, time: Date.parse(item.createdAt) || item.id, item })),
-  ].sort((first, second) => second.time - first.time), [events, materials]);
+    ...occasions.map((item) => ({ kind: "occasion" as const, time: Date.parse(item.createdAt) || item.id, item })),
+  ].sort((first, second) => second.time - first.time), [events, materials, occasions]);
   const reviews = materials.filter(({ source }) => source.kind === "review");
   const blog = materials.filter(({ source }) => source.kind !== "review");
-  const materialCard = ({ source, item }: (typeof materials)[number], index: number) => <MaterialPreviewCard key={`${source.kind}-${source.id}`} item={item} index={index} kindLabel={source.kind === "publisher_news" ? "Новость издательства" : undefined} onOpen={authenticate} onOpenUser={() => undefined} onOpenAuthor={authenticate} />;
+  const materialCard = ({ source, item }: (typeof materials)[number], index: number) => <MaterialPreviewCard key={`${source.kind}-${source.id}`} item={item} index={index} owner={source.owner} kindLabel={source.kind === "publisher_news" ? "Новость издательства" : undefined} onOpen={authenticate} onOpenUser={() => undefined} onOpenAuthor={authenticate} />;
   return <main className="content-scroll home-content home-mode-feed">
-    <section className="content-section home-feed">{feed.map((entry, index) => entry.kind === "event" ? <EventCard key={`event-${entry.item.id}`} item={entry.item} own={false} onOpen={authenticate} /> : materialCard(entry.entry, index))}{!feed.length && <EmptyContentState />}</section>
+    <section className="content-section home-feed">{feed.map((entry, index) => entry.kind === "event" ? <EventCard key={`event-${entry.item.id}`} item={entry.item} own={false} onOpen={authenticate} /> : entry.kind === "occasion" ? <OccasionCard key={`occasion-${entry.item.id}`} item={entry.item} own={false} onOpen={authenticate} /> : materialCard(entry.entry, index))}{!feed.length && <EmptyContentState />}</section>
     <section className="content-section events-section"><div className="section-heading"><button className="home-section-link" type="button" onClick={() => onNavigate("events")}>Книжные события</button></div>{events.length ? <div className="events-grid">{events.slice(0, 2).map((item) => <EventCard key={item.id} item={item} own={false} onOpen={authenticate} />)}</div> : <EmptyContentState />}</section>
     <section className="content-section"><div className="section-heading"><button className="home-section-link" type="button" onClick={() => onNavigate("reviews")}>Рецензии</button></div>{reviews.length ? <div className="excerpt-grid review-material-grid">{reviews.map(materialCard)}</div> : <EmptyContentState />}</section>
     <section className="content-section"><div className="section-heading"><button className="home-section-link" type="button" onClick={() => onNavigate("publications")}>Публикации блога</button></div>{blog.length ? <div className="excerpt-grid">{blog.map(materialCard)}</div> : <EmptyContentState />}</section>
-    <section className="content-section occasions-section"><div className="section-heading"><button className="home-section-link" type="button" onClick={() => onNavigate("occasions")}>Поводы познакомиться</button></div><EmptyContentState /></section>
+    <section className="content-section occasions-section"><div className="section-heading"><button className="home-section-link" type="button" onClick={() => onNavigate("occasions")}>Поводы познакомиться</button></div>{occasions.length ? <div className="occasion-grid home-occasion-grid">{occasions.slice(0, 2).map((item) => <OccasionCard key={item.id} item={item} own={false} onOpen={authenticate} />)}</div> : <EmptyContentState />}</section>
   </main>;
 }
 
@@ -56,8 +62,8 @@ function GuestHubDirectory({ view, data, authenticate }: { view: Exclude<GuestHu
   const heading = view === "events" ? "Книжные события" : view === "reviews" ? "Рецензии" : view === "publications" ? "Публикации" : "Поводы познакомиться";
   return <main className="content-scroll directory-page"><div className="directory-heading"><div><h1>{heading}</h1></div></div>
     {view === "events" && (data.events.length ? <div className="events-grid">{data.events.map((item) => <EventCard key={item.id} item={bookEvent(item)} own={false} onOpen={authenticate} />)}</div> : <EmptyContentState />)}
-    {(view === "reviews" || view === "publications") && (materials.length ? <div className={`excerpt-grid ${view === "reviews" ? "review-material-grid" : ""}`}>{materials.map((source, index) => <MaterialPreviewCard key={`${source.kind}-${source.id}`} item={readingItem(source)} index={index} kindLabel={source.kind === "publisher_news" ? "Новость издательства" : undefined} onOpen={authenticate} onOpenUser={() => undefined} onOpenAuthor={authenticate} />)}</div> : <EmptyContentState />)}
-    {view === "occasions" && <EmptyContentState />}
+    {(view === "reviews" || view === "publications") && (materials.length ? <div className={`excerpt-grid ${view === "reviews" ? "review-material-grid" : ""}`}>{materials.map((source, index) => <MaterialPreviewCard key={`${source.kind}-${source.id}`} item={readingItem(source)} index={index} owner={source.owner} kindLabel={source.kind === "publisher_news" ? "Новость издательства" : undefined} onOpen={authenticate} onOpenUser={() => undefined} onOpenAuthor={authenticate} />)}</div> : <EmptyContentState />)}
+    {view === "occasions" && (data.occasions.length ? <div className="occasion-grid">{data.occasions.map((item) => <OccasionCard key={item.id} item={occasion(item)} own={false} onOpen={authenticate} />)}</div> : <EmptyContentState />)}
   </main>;
 }
 

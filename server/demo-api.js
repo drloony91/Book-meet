@@ -4,6 +4,7 @@ import QRCode from "qrcode";
 import { generateRecoveryCodes, generateTotpSecret, hashRecoveryCode, recoveryCodeIndex, verifyTotp } from "./security.js";
 import { canCreateFriendRequest, canMessagePair } from "./modules/social-permissions.js";
 import { nextTopRank, top3Eligibility } from "./modules/top3.js";
+import { isPublicOccasion, isPublicUpcomingEvent } from "./modules/public-catalog.js";
 
 const router = Router();
 const sessions = new Map();
@@ -284,13 +285,14 @@ router.get("/public/catalog", (_request, response) => {
     .filter((book) => !book.isAdult)
     .map((book) => [book.catalogBookId ?? book.id, { id: book.catalogBookId ?? book.id, author: book.author, title: book.title, isbn: book.isbn, publisher: book.publisher, genres: book.genres ?? [], annotation: book.annotation ?? "", coverUrl: book.coverUrl, coverTone: book.coverTone ?? "blue", addedAt: book.createdAtValue ?? new Date().toISOString(), popularity: users.filter((user) => user.books.some((item) => (item.catalogBookId ?? item.id) === (book.catalogBookId ?? book.id))).length }])).values()];
   const materials = users.flatMap((owner) => [
-    ...(owner.reviews ?? []).filter((item) => !item.isAdult).map((item) => ({ id: item.id, kind: "review", title: item.bookTitle, preview: item.preview, ownerName: owner.profile.name, createdAt: item.createdAtValue ?? new Date().toISOString() })),
-    ...(owner.excerpts ?? []).filter((item) => !item.isAdult).map((item) => ({ id: item.id, kind: "excerpt", title: item.bookTitle || "Публикация", preview: item.previewText, ownerName: owner.profile.name, createdAt: item.createdAtValue ?? new Date().toISOString() })),
-    ...(["Издатель", "Сообщество"].includes(owner.profile.type) && owner.profile.publisherStatus === "approved" ? (owner.publisherNews ?? []).filter((item) => !item.isAdult).map((item) => ({ id: item.id, kind: "publisher_news", title: item.title, preview: item.previewText, ownerName: owner.profile.name, createdAt: item.createdAtValue ?? new Date().toISOString() })) : []),
+    ...(owner.reviews ?? []).filter((item) => !item.isAdult).map((item) => ({ id: item.id, kind: "review", title: item.bookTitle, preview: item.preview, ownerName: owner.profile.name, owner: { id: owner.id, name: owner.profile.name, initials: owner.initials, color: owner.color, avatarUrl: owner.avatarUrl }, createdAt: item.createdAtValue ?? new Date().toISOString() })),
+    ...(owner.excerpts ?? []).filter((item) => !item.isAdult).map((item) => ({ id: item.id, kind: "excerpt", title: item.bookTitle || "Публикация", preview: item.previewText, ownerName: owner.profile.name, owner: { id: owner.id, name: owner.profile.name, initials: owner.initials, color: owner.color, avatarUrl: owner.avatarUrl }, createdAt: item.createdAtValue ?? new Date().toISOString() })),
+    ...(["Издатель", "Сообщество"].includes(owner.profile.type) && owner.profile.publisherStatus === "approved" ? (owner.publisherNews ?? []).filter((item) => !item.isAdult).map((item) => ({ id: item.id, kind: "publisher_news", title: item.title, preview: item.previewText, ownerName: owner.profile.name, owner: { id: owner.id, name: owner.profile.name, initials: owner.initials, color: owner.color, avatarUrl: owner.avatarUrl }, createdAt: item.createdAtValue ?? new Date().toISOString() })) : []),
   ]).sort((first, second) => Date.parse(second.createdAt) - Date.parse(first.createdAt));
-  const events = state.events.filter((item) => item.status === "published" && !item.isAdult).map((item) => ({ id: item.id, title: item.title, summary: item.summary, date: item.date, time: item.time, city: item.city, address: item.address, createdAt: item.createdAt }));
+  const events = state.events.filter(isPublicUpcomingEvent).map((item) => ({ id: item.id, title: item.title, summary: item.summary, date: item.date, time: item.time, city: item.city, address: item.address, createdAt: item.createdAt }));
+  const occasions = state.occasions.filter(isPublicOccasion).map((item) => ({ id: item.id, type: item.type, primaryText: item.primaryText, audienceText: item.audienceText, targetCities: item.targetCities ?? [], meetingDate: item.meetingDate, meetingStartTime: item.meetingStartTime, meetingEndTime: item.meetingEndTime, meetingCity: item.meetingCity, meetingAddress: item.meetingAddress, createdAt: item.createdAt }));
   const organizations = users.filter((user) => ["Издатель", "Сообщество"].includes(user.profile.type) && user.profile.publisherStatus === "approved").map((user) => ({ id: user.id, name: user.profile.name, city: user.profile.city, type: user.profile.type, bio: user.profile.bio, communityType: user.profile.communityType, initials: user.initials, color: user.color, avatarUrl: user.avatarUrl }));
-  response.json({ books, materials, events, organizations });
+  response.json({ books, materials, events, occasions, organizations });
 });
 
 router.post("/auth/deleted-profile/restore", (request, response) => {

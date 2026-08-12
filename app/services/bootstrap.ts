@@ -29,6 +29,7 @@ export async function loadPublicCatalog(): Promise<PublicCatalogData> {
     books: data.books ?? [],
     materials: data.materials ?? [],
     events: data.events ?? [],
+    occasions: data.occasions ?? [],
     organizations: data.organizations ?? [],
   };
 }

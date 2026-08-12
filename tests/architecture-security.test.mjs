@@ -35,17 +35,37 @@ test("guest returnTo accepts only same-origin application paths", () => {
 test("public catalog maps only the minimal read-only DTO", async () => {
   const results = [
     [[{ id: 1, author: "Автор", title: "Книга", genres: "[]", annotation: "Текст", cover_tone: "blue", created_at: "2026-01-01", popularity: 2 }]],
-    [[{ id: 2, kind: "review", title: "Книга", preview: "Отзыв", owner_name: "Читатель", created_at: "2026-01-02", private_email: "hidden@example.com" }]],
+    [[{ id: 2, kind: "review", title: "Книга", preview: "Отзыв", owner_id: 8, owner_name: "Читатель", owner_initials: "ЧТ", owner_color: "mint", owner_avatar_path: "/uploads/reader.jpg", created_at: "2026-01-02", private_email: "hidden@example.com" }]],
     [[]],
     [[]],
-    [[{ id: 3, title: "Событие", summary: "Описание", event_date: "2026-08-20", event_time: "18:00", city: "Алматы", address: "Адрес", created_at: "2026-01-03" }]],
+    [[
+      { id: 3, title: "Событие", summary: "Описание", event_date: new Date("2026-08-20T00:00:00Z"), event_time: "18:00", city: "Алматы", address: "Адрес", created_at: "2026-01-03" },
+      { id: 30, title: "Прошедшее", summary: "", event_date: "2026-08-10", event_time: "18:00", city: "Алматы", address: "", created_at: "2026-01-03" },
+    ]],
+    [[
+      { id: 5, occasion_type: "meet", primary_text: "Поговорим о книгах", audience_text: "Ищу собеседника", target_cities: '["Астана"]', target_gender: "Все", target_profile_type: "Все", status: "published", is_adult: 0, created_at: "2026-01-04" },
+      { id: 6, occasion_type: "meet", primary_text: "Только для читателей", audience_text: "", target_cities: "[]", target_gender: "Все", target_profile_type: "Читатель", status: "published", is_adult: 0, created_at: "2026-01-04" },
+      { id: 7, occasion_type: "meet", primary_text: "18+", audience_text: "", target_cities: "[]", target_gender: "Все", target_profile_type: "Все", status: "published", is_adult: 1, created_at: "2026-01-04" },
+    ]],
     [[{ id: 4, initials: "КК", color: "blue", display_name: "Клуб", city: "Астана", profile_type: "Сообщество", bio: "О клубе", community_type: "Книжный клуб", publisher_bin: "secret" }]],
   ];
-  const data = await loadPublicCatalog({ query: async () => results.shift() });
-  assert.deepEqual(Object.keys(data.materials[0]).sort(), ["createdAt", "id", "kind", "ownerName", "preview", "title"]);
+  const data = await loadPublicCatalog({ query: async () => results.shift() }, { now: new Date("2026-08-12T12:00:00Z") });
+  assert.deepEqual(Object.keys(data.materials[0]).sort(), ["createdAt", "id", "kind", "owner", "ownerName", "preview", "title"]);
+  assert.deepEqual(Object.keys(data.materials[0].owner).sort(), ["avatarUrl", "color", "id", "initials", "name"]);
   assert.deepEqual(Object.keys(data.organizations[0]).sort(), ["avatarUrl", "bio", "city", "color", "communityType", "id", "initials", "name", "type"].sort());
+  assert.equal(data.events.length, 1);
+  assert.equal(data.events[0].date, "2026-08-20");
+  assert.equal(data.occasions.length, 1);
+  assert.deepEqual(Object.keys(data.occasions[0]).sort(), ["audienceText", "createdAt", "id", "meetingAddress", "meetingCity", "meetingDate", "meetingEndTime", "meetingStartTime", "primaryText", "targetCities", "type"]);
   assert.equal("private_email" in data.materials[0], false);
+  assert.equal("private_email" in data.materials[0].owner, false);
   assert.equal("publisher_bin" in data.organizations[0], false);
+});
+
+test("demo public catalog reuses the safe event and occasion policies", async () => {
+  const demo = await readFile(path.join(root, "server", "demo-api.js"), "utf8");
+  assert.match(demo, /state\.events\.filter\(isPublicUpcomingEvent\)/);
+  assert.match(demo, /state\.occasions\.filter\(isPublicOccasion\)/);
 });
 
 test("Telegram outbox filters admin replies and delivers without payload leakage", async () => {
