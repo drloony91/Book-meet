@@ -2,7 +2,7 @@ import { Router } from "express";
 import { loadBootstrap } from "../data.js";
 
 const sectionKeys = {
-  session: ["activeUserId", "profileCompleted"],
+  session: ["activeUserId", "profileCompleted", "linkedProfile"],
   catalog: ["activeUserId", "adultAccess", "users", "events", "occasions"],
   social: ["activeUserId", "blocks", "blockedByUserIds", "friendRequests", "friendships", "communityMemberships", "follows", "notifications", "messages", "likes"],
   moderation: ["activeUserId", "reports"],

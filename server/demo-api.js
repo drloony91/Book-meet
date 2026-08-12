@@ -143,6 +143,7 @@ const users = [
 ];
 
 const state = {
+  linkedProfiles: [],
   // Demo keeps the catalogue separately from personal libraries as production does.
   catalogBooks: [
     ...users.flatMap((user) => [...(user.books ?? []), ...(user.authorBooks ?? [])]),
@@ -222,7 +223,10 @@ function bootstrap(userId) {
     };
     return { ...user, books: (user.books ?? []).filter((item) => adultStatus === "adult" || !item.isAdult), authorBooks: (user.authorBooks ?? []).filter((item) => adultStatus === "adult" || !item.isAdult), reviews: (user.reviews ?? []).filter((item) => adultStatus === "adult" || !item.isAdult), excerpts: (user.excerpts ?? []).filter((item) => adultStatus === "adult" || !item.isAdult), blockedByMe: relatedBlocks.some((block) => block.blockerId === userId && block.blockedId === user.id), profile, wishBooks: (user.wishBooks ?? []).map((item) => privateVisible ? { ...item, productUrl: user.id === userId ? item.productUrl : undefined, privateVisible: true } : { id: item.id, ownerId: item.ownerId, catalogBookId: item.catalogBookId, author: item.author, title: item.title, genres: item.genres, annotation: item.annotation, coverUrl: item.coverUrl, coverTone: item.coverTone, marketplace: item.marketplace, reservedByUserId: item.reservedByUserId, privateVisible: false }) };
   });
-  return structuredClone({ activeUserId: userId, profileCompleted: viewer?.profileCompleted !== false, adultAccess: { status: adultStatus, restricted }, users: visibleUsers, ...state, books: state.catalogBooks.filter((item) => adultStatus === "adult" || !item.isAdult), blocks: relatedBlocks, blockedByUserIds, reports: viewer?.isAdmin ? state.reports : [], events: state.events.filter((item) => (viewer?.isAdmin || adultStatus === "adult" || !item.isAdult) && (viewer?.isAdmin || item.status === "published" || item.creatorId === userId)), occasions: state.occasions.filter((item) => (viewer?.isAdmin || adultStatus === "adult" || !item.isAdult) && (viewer?.isAdmin || item.creatorId === userId || item.status === "published" && (item.targetGender === "Все" || item.targetGender === viewer?.profile.gender) && (item.targetProfileType === "Все" || item.targetProfileType === viewer?.profile.type))) });
+  const link = state.linkedProfiles.find((item) => item.personalUserId === userId || item.communityUserId === userId);
+  const linked = link ? users.find((item) => item.id === (link.personalUserId === userId ? link.communityUserId : link.personalUserId)) : undefined;
+  const { linkedProfiles: _linkedProfiles, ...publicState } = state;
+  return structuredClone({ activeUserId: userId, profileCompleted: viewer?.profileCompleted !== false, adultAccess: { status: adultStatus, restricted }, users: visibleUsers, ...publicState, linkedProfile: linked ? { id: linked.id, name: linked.profile.name, type: linked.profile.type, avatarUrl: linked.avatarUrl, profileCompleted: linked.profileCompleted !== false } : undefined, books: state.catalogBooks.filter((item) => adultStatus === "adult" || !item.isAdult), blocks: relatedBlocks, blockedByUserIds, reports: viewer?.isAdmin ? state.reports : [], events: state.events.filter((item) => (viewer?.isAdmin || adultStatus === "adult" || !item.isAdult) && (viewer?.isAdmin || item.status === "published" || item.creatorId === userId)), occasions: state.occasions.filter((item) => (viewer?.isAdmin || adultStatus === "adult" || !item.isAdult) && (viewer?.isAdmin || item.creatorId === userId || item.status === "published" && (item.targetGender === "Все" || item.targetGender === viewer?.profile.gender) && (item.targetProfileType === "Все" || item.targetProfileType === viewer?.profile.type))) });
 }
 
 function conversationKey(first, second) {
@@ -399,6 +403,62 @@ router.post("/auth/deleted-profile/new", (request, response) => {
 });
 
 router.use(requireUser);
+
+const personalLinkTypes = new Set(["Читатель", "Писатель", "Блогер"]);
+function demoLinkPair(personalId, communityId) {
+  const personal = users.find((item) => item.id === personalId);
+  const community = users.find((item) => item.id === communityId);
+  if (!personal || !community || personal.id === community.id || !personalLinkTypes.has(personal.profile.type) || community.profile.type !== "Сообщество" || personal.deletedAt || community.deletedAt || personal.purged || community.purged || personal.suspension || community.suspension) throw Object.assign(new Error("Связать можно только активный личный профиль и сообщество"), { statusCode: 409 });
+  if (state.linkedProfiles.some((item) => [item.personalUserId, item.communityUserId].includes(personalId) || [item.personalUserId, item.communityUserId].includes(communityId))) throw Object.assign(new Error("Один из профилей уже связан"), { statusCode: 409 });
+}
+
+router.post("/linked-profiles/create", async (request, response) => {
+  const email = String(request.body?.email ?? "").trim().toLocaleLowerCase("en");
+  const password = String(request.body?.password ?? "");
+  const name = String(request.body?.name ?? "Новое сообщество").trim().slice(0, 120) || "Новое сообщество";
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) || password.length < 8) return response.status(400).json({ error: "Укажите e-mail и пароль не короче 8 символов" });
+  if (users.some((item) => item.email?.toLocaleLowerCase("en") === email)) return response.status(409).json({ error: "Этот e-mail уже используется" });
+  const community = { id: nextId++, email, passwordLoginEnabled: true, profileCompleted: false, username: name, initials: name.slice(0, 2).toLocaleUpperCase("ru"), color: "blue", joined: "сегодня", joinedAt: new Date().toISOString(), profile: { name, city: "", type: "Сообщество", gender: "Не указан", publisherStatus: "draft", bio: "", authorInfluences: "", writingThemes: "", weekend: "", joy: "", talk: "", strangerMessage: "", favoriteGenres: [], dislikedGenres: [] }, books: [], authorBooks: [], reviews: [], excerpts: [], wishBooks: [] };
+  users.push(community);
+  try { demoLinkPair(request.demoUserId, community.id); } catch (error) { users.pop(); return response.status(error.statusCode ?? 400).json({ error: error.message }); }
+  passwords.set(community.id, password); state.linkedProfiles.push({ personalUserId: request.demoUserId, communityUserId: community.id });
+  await replaceDemoActionToken(community.id, "email_verify", createOpaqueActionToken(), EMAIL_VERIFICATION_TTL_MINUTES);
+  response.status(201).json({ linkedProfile: { id: community.id, name, type: "Сообщество", profileCompleted: false }, created: true });
+});
+
+router.post("/linked-profiles/attach", (request, response) => {
+  const email = String(request.body?.email ?? "").trim().toLocaleLowerCase("en");
+  const password = String(request.body?.password ?? "");
+  const code = String(request.body?.totp ?? "");
+  const community = users.find((item) => item.email?.toLocaleLowerCase("en") === email);
+  if (!community || community.passwordLoginEnabled === false || passwords.get(community.id) !== password) return response.status(401).json({ error: "Не удалось подтвердить профиль сообщества" });
+  if (community.totpEnabled && !code) return response.status(202).json({ requiresTotp: true });
+  if (community.totpEnabled && !verifyTotp(community.totpSecret, code)) {
+    const recoveryIndex = recoveryCodeIndex(community.totpRecoveryCodes ?? [], code);
+    if (recoveryIndex < 0) return response.status(401).json({ error: "Неверный одноразовый код" });
+    community.totpRecoveryCodes.splice(recoveryIndex, 1);
+  }
+  try { demoLinkPair(request.demoUserId, community.id); } catch (error) { return response.status(error.statusCode ?? 400).json({ error: error.message }); }
+  state.linkedProfiles.push({ personalUserId: request.demoUserId, communityUserId: community.id });
+  response.json({ linked: true, communityId: community.id });
+});
+
+router.post("/linked-profiles/switch", (request, response) => {
+  const link = state.linkedProfiles.find((item) => item.personalUserId === request.demoUserId || item.communityUserId === request.demoUserId);
+  if (!link) return response.status(404).json({ error: "Связанный профиль не найден" });
+  const targetId = link.personalUserId === request.demoUserId ? link.communityUserId : link.personalUserId;
+  const target = users.find((item) => item.id === targetId);
+  if (!target || target.deletedAt || target.purged || target.suspension) return response.status(409).json({ error: "Связанный профиль недоступен" });
+  const token = randomBytes(24).toString("hex"); sessions.delete(cookieValue(request, "book_meet_demo")); sessions.set(token, targetId);
+  response.setHeader("Set-Cookie", `book_meet_demo=${token}; Path=/; HttpOnly; SameSite=Lax`);
+  response.json(bootstrap(targetId));
+});
+
+router.delete(["/linked-profiles", "/linked-profiles/unlink"], (request, response) => {
+  const index = state.linkedProfiles.findIndex((item) => item.personalUserId === request.demoUserId || item.communityUserId === request.demoUserId);
+  if (index < 0) return response.status(404).json({ error: "Связанный профиль не найден" });
+  state.linkedProfiles.splice(index, 1); response.json({ unlinked: true });
+});
 
 router.use((request, response, next) => {
   if (["GET", "HEAD", "OPTIONS"].includes(request.method)

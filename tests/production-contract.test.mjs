@@ -70,13 +70,37 @@ test("email verification and password recovery use hashed, scoped action tokens"
   assert.match(styles, /\.auth-recovery-link/);
 });
 
+test("linked community profiles have a strict one-to-one, session-safe contract", async () => {
+  const migration = await readFile(path.join(root, "mysql", "migrations", "029_linked_profiles.sql"), "utf8");
+  const api = await readFile(path.join(root, "server", "api.js"), "utf8");
+  const demo = await readFile(path.join(root, "server", "demo-api.js"), "utf8");
+  const data = await readFile(path.join(root, "server", "data.js"), "utf8");
+  const profile = await readFile(path.join(root, "app", "screens", "ProfileScreens.tsx"), "utf8");
+  assert.match(migration, /PRIMARY KEY \(personal_user_id\)/);
+  assert.match(migration, /UNIQUE KEY uq_linked_profiles_community \(community_user_id\)/);
+  assert.match(migration, /CHECK \(personal_user_id <> community_user_id\)/);
+  for (const route of ["/linked-profiles/create", "/linked-profiles/attach", "/linked-profiles/google", "/linked-profiles/switch"]) assert.match(api, new RegExp(`router\\.post\\("${route.replaceAll("/", "\\/")}`));
+  assert.match(api, /DELETE FROM sessions WHERE token_hash = \?/);
+  assert.match(api, /verifyGoogleIdToken\(credential\)/);
+  assert.match(api, /PERSONAL_LINK_TYPES/);
+  assert.match(data, /linkedProfile: linkedProfileRow/);
+  assert.match(demo, /const \{ linkedProfiles: _linkedProfiles, \.\.\.publicState \} = state/);
+  assert.match(demo, /router\.post\("\/linked-profiles\/switch"/);
+  assert.match(profile, /Привязать сообщество/);
+  assert.match(profile, /Привязанный профиль/);
+  assert.match(profile, /linked-profiles\/google/);
+});
+
 test("event forms, ContentHub glyph and community filters keep their scoped UI contracts", async () => {
   const content = await readFile(path.join(root, "app", "components", "content", "ContentComponents.tsx"), "utf8");
   const styles = await readFile(path.join(root, "app", "globals.css"), "utf8");
   assert.match(content, /EventForm[\s\S]*className="modal-close"[\s\S]*onClick=\{onCancel\}/);
   assert.match(content, /OccasionForm[\s\S]*className="modal-close"[\s\S]*onClick=\{onCancel\}/);
-  assert.match(styles, /width: 70%; height: 70%; font-size: 43px; font-weight: 400/);
-  assert.match(styles, /\.floating-create\.is-open \.floating-create-toggle \{ width: 62px; height: 62px; \}/);
+  assert.match(styles, /\.floating-create-toggle span,[\s\S]*width: 70%;[\s\S]*height: 70%;[\s\S]*font-size: 0;/);
+  assert.match(styles, /\.floating-create-toggle span::before,[\s\S]*\.floating-create-toggle span::after[\s\S]*background: currentColor/);
+  assert.match(styles, /\.floating-create\.is-open \.floating-create-toggle \{ width: 31px; height: 31px; \}/);
+  assert.match(styles, /\.floating-create\.is-open \.floating-create-toggle span \{ transform: rotate\(135deg\); \}/);
+  assert.match(styles, /@media \(max-width:800px\)[\s\S]*\.floating-create\.is-open \.floating-create-toggle \{ width: 28px; height: 28px; \}/);
   assert.match(styles, /\.organization-directory-filters\.has-community-type \{ grid-template-columns: minmax\(0,180px\) minmax\(160px,1fr\); width: min\(440px,100%\); \}/);
   assert.match(styles, /@media \(max-width:800px\) \{\s*\.organization-directory-filters\.has-community-type \{ grid-template-columns: minmax\(0,1fr\); width: 100%; \}/);
 });

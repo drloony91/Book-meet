@@ -48,7 +48,7 @@ export function ContentHubControls({ view, profileType, showSwitch = true, onNav
         {!publisher && <button type="button" onClick={() => choose(onOccasion)}>Предложить повод</button>}
         {publisher && <button type="button" onClick={() => choose(onPublisherNews)}>Опубликовать новость</button>}
       </div>
-      <button className="floating-create-toggle" type="button" aria-expanded={open} aria-label={open ? "Закрыть меню создания" : "Создать материал"} onClick={() => setOpen((value) => !value)}><span>+</span></button>
+      <button className="floating-create-toggle" type="button" aria-expanded={open} aria-label={open ? "Закрыть меню создания" : "Создать материал"} onClick={() => setOpen((value) => !value)}><span aria-hidden="true">+</span></button>
     </div>
   </>;
 }

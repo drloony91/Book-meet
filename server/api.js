@@ -1328,6 +1328,119 @@ router.get("/admin/statistics", asyncRoute(async (request, response) => {
 
 router.use(asyncRoute(requireUser));
 
+const PERSONAL_LINK_TYPES = new Set(["Читатель", "Писатель", "Блогер"]);
+
+async function assertLinkedProfilePair(connection, personalUserId, communityUserId) {
+  if (!personalUserId || !communityUserId || Number(personalUserId) === Number(communityUserId)) throw Object.assign(new Error("Нельзя связать этот профиль"), { statusCode: 400 });
+  const [rows] = await connection.query(
+    `SELECT u.id, u.deleted_at, u.purged_at, u.suspended_permanently, u.suspended_until, p.profile_type
+       FROM users u JOIN profiles p ON p.user_id = u.id WHERE u.id IN (?, ?) FOR UPDATE`, [personalUserId, communityUserId],
+  );
+  const personal = rows.find((row) => Number(row.id) === Number(personalUserId));
+  const community = rows.find((row) => Number(row.id) === Number(communityUserId));
+  if (!personal || !community || !PERSONAL_LINK_TYPES.has(personal.profile_type) || community.profile_type !== "Сообщество") throw Object.assign(new Error("Связать можно только личный профиль и сообщество"), { statusCode: 409 });
+  if ([personal, community].some((row) => row.deleted_at || row.purged_at || row.suspended_permanently || row.suspended_until && new Date(row.suspended_until).getTime() > Date.now())) throw Object.assign(new Error("Один из профилей недоступен"), { statusCode: 409 });
+  const [[existing]] = await connection.query("SELECT personal_user_id, community_user_id FROM linked_profiles WHERE personal_user_id IN (?, ?) OR community_user_id IN (?, ?) FOR UPDATE", [personalUserId, communityUserId, personalUserId, communityUserId]);
+  if (existing) throw Object.assign(new Error("Один из профилей уже связан"), { statusCode: 409 });
+}
+
+async function linkedCounterpart(connection, userId) {
+  const [[row]] = await connection.query("SELECT CASE WHEN personal_user_id = ? THEN community_user_id ELSE personal_user_id END AS id FROM linked_profiles WHERE personal_user_id = ? OR community_user_id = ? LIMIT 1 FOR UPDATE", [userId, userId, userId]);
+  return row ? Number(row.id) : null;
+}
+
+router.post("/linked-profiles/create", asyncRoute(async (request, response) => {
+  const personalId = request.bookMeetUser.id;
+  const email = normalizeEmail(request.body?.email);
+  const password = String(request.body?.password ?? "");
+  const name = safeProfileName(request.body?.name, "Новое сообщество");
+  if (!isValidEmail(email) || password.length < 8) return response.status(400).json({ error: "Укажите e-mail и пароль не короче 8 символов" });
+  const verificationToken = createOpaqueActionToken();
+  const result = await withTransaction(async (connection) => {
+    const [[duplicate]] = await connection.query("SELECT id FROM users WHERE email_key = ? FOR UPDATE", [email]);
+    if (duplicate) throw Object.assign(new Error("Этот e-mail уже используется"), { statusCode: 409 });
+    const username = await uniqueInternalUsername(connection, email.split("@")[0]);
+    const [created] = await connection.query("INSERT INTO users (username, username_key, email, email_key, email_verified_at, password_hash, password_login_enabled, initials, color, role, profile_completed) VALUES (?, ?, ?, ?, NULL, ?, 1, ?, 'blue', 'user', 0)", [username, normalizeIdentity(username), email, email, await hashPassword(password), name.slice(0, 4).toLocaleUpperCase("ru") || "BM"]);
+    const communityId = Number(created.insertId);
+    await connection.query("INSERT INTO profiles (user_id, display_name, city, city_id, profile_type, gender, publisher_status, bio, author_influences, writing_themes, weekend, joy, talk, stranger_message, favorite_genres, disliked_genres) VALUES (?, ?, '', NULL, 'Сообщество', 'Не указан', 'draft', '', '', '', '', '', '', '', '[]', '[]')", [communityId, name]);
+    await assertLinkedProfilePair(connection, personalId, communityId);
+    await connection.query("INSERT INTO linked_profiles (personal_user_id, community_user_id) VALUES (?, ?)", [personalId, communityId]);
+    await replaceAccountActionToken(connection, { userId: communityId, purpose: "email_verify", token: verificationToken, ttlMinutes: EMAIL_VERIFICATION_TTL_MINUTES });
+    return { communityId };
+  });
+  await sendVerificationEmail(email, verificationToken);
+  response.status(201).json({ linkedProfile: { id: result.communityId, name, type: "Сообщество", profileCompleted: false }, created: true });
+}));
+
+router.post("/linked-profiles/attach", asyncRoute(async (request, response) => {
+  const personalId = request.bookMeetUser.id;
+  const email = normalizeEmail(request.body?.email);
+  const password = String(request.body?.password ?? "");
+  const totp = String(request.body?.totp ?? "");
+  const result = await withTransaction(async (connection) => {
+    const [[target]] = await connection.query("SELECT id, password_hash, password_login_enabled, totp_secret, totp_enabled FROM users WHERE email_key = ? FOR UPDATE", [email]);
+    if (!target || !target.password_login_enabled || !(await verifyPassword(password, target.password_hash))) throw Object.assign(new Error("Не удалось подтвердить профиль сообщества"), { statusCode: 401 });
+    if (target.totp_enabled && !totp) return { requiresTotp: true };
+    if (target.totp_enabled && !verifyTotp(target.totp_secret, totp) && !(await consumeRecoveryCode(target.id, totp))) throw Object.assign(new Error("Неверный одноразовый код"), { statusCode: 401 });
+    await assertLinkedProfilePair(connection, personalId, Number(target.id));
+    await connection.query("INSERT INTO linked_profiles (personal_user_id, community_user_id) VALUES (?, ?)", [personalId, target.id]);
+    return { id: Number(target.id) };
+  });
+  if (result.requiresTotp) return response.status(202).json(result);
+  response.json({ linked: true, communityId: result.id });
+}));
+
+router.post("/linked-profiles/google", asyncRoute(async (request, response) => {
+  if (!process.env.GOOGLE_CLIENT_ID) return response.status(503).json({ error: "Google-вход пока не настроен" });
+  const credential = String(request.body?.credential ?? "");
+  const mode = request.body?.mode === "create" ? "create" : "attach";
+  if (!credential || credential.length > 16_000) return response.status(400).json({ error: "Google не передал данные для подтверждения" });
+  let identity;
+  try { identity = await verifyGoogleIdToken(credential); } catch { return response.status(401).json({ error: "Google не подтвердил данные входа" }); }
+  const result = await withTransaction(async (connection) => {
+    const personalId = request.bookMeetUser.id;
+    let [[target]] = await connection.query("SELECT id FROM users WHERE google_subject = ? OR email_key = ? LIMIT 1 FOR UPDATE", [identity.sub, normalizeEmail(identity.email)]);
+    if (!target && mode === "attach") throw Object.assign(new Error("Профиль сообщества не найден"), { statusCode: 404 });
+    if (target && mode === "create") throw Object.assign(new Error("Этот Google-аккаунт уже зарегистрирован. Выберите привязку существующего профиля"), { statusCode: 409 });
+    let created = false;
+    if (!target) {
+      const name = safeProfileName(request.body?.name || identity.name, "Новое сообщество");
+      const username = await uniqueInternalUsername(connection, identity.email?.split("@")[0] || "community");
+      const [insertResult] = await connection.query("INSERT INTO users (username, username_key, email, email_key, email_verified_at, password_hash, password_login_enabled, google_subject, initials, color, role, profile_completed) VALUES (?, ?, ?, ?, UTC_TIMESTAMP(), ?, 0, ?, ?, 'blue', 'user', 0)", [username, normalizeIdentity(username), normalizeEmail(identity.email), normalizeEmail(identity.email), await hashPassword(randomBytes(32).toString("base64url")), identity.sub, name.slice(0, 4).toLocaleUpperCase("ru") || "BM"]);
+      const communityId = Number(insertResult.insertId);
+      await connection.query("INSERT INTO profiles (user_id, display_name, city, city_id, profile_type, gender, publisher_status, bio, author_influences, writing_themes, weekend, joy, talk, stranger_message, favorite_genres, disliked_genres) VALUES (?, ?, '', NULL, 'Сообщество', 'Не указан', 'draft', '', '', '', '', '', '', '', '[]', '[]')", [communityId, name]);
+      target = { id: communityId };
+      created = true;
+    }
+    await assertLinkedProfilePair(connection, personalId, Number(target.id));
+    await connection.query("INSERT INTO linked_profiles (personal_user_id, community_user_id) VALUES (?, ?)", [personalId, target.id]);
+    return { communityId: Number(target.id), created };
+  });
+  if (result.created) await sendGoogleAccountEmail(normalizeEmail(identity.email), true).catch(() => undefined);
+  response.json({ linked: true, ...result });
+}));
+
+router.post("/linked-profiles/switch", asyncRoute(async (request, response) => {
+  const token = await withTransaction(async (connection) => {
+    const targetId = await linkedCounterpart(connection, request.bookMeetUser.id);
+    if (!targetId) throw Object.assign(new Error("Связанный профиль не найден"), { statusCode: 404 });
+    const [[target]] = await connection.query("SELECT deleted_at, purged_at, suspended_permanently, suspended_until FROM users WHERE id = ? FOR UPDATE", [targetId]);
+    if (!target || target.deleted_at || target.purged_at || target.suspended_permanently || target.suspended_until && new Date(target.suspended_until).getTime() > Date.now()) {
+      throw Object.assign(new Error("Связанный профиль недоступен"), { statusCode: 409 });
+    }
+    await connection.query("DELETE FROM sessions WHERE token_hash = ?", [request.bookMeetUser.tokenHash]);
+    return { token: await createSession(connection, targetId), targetId };
+  });
+  response.setHeader("Set-Cookie", sessionCookie(token.token, request));
+  response.json(await loadBootstrap(token.targetId));
+}));
+
+router.delete(["/linked-profiles", "/linked-profiles/unlink"], asyncRoute(async (request, response) => {
+  const [result] = await getPool().query("DELETE FROM linked_profiles WHERE personal_user_id = ? OR community_user_id = ?", [request.bookMeetUser.id, request.bookMeetUser.id]);
+  if (!result.affectedRows) return response.status(404).json({ error: "Связанный профиль не найден" });
+  response.json({ unlinked: true });
+}));
+
 router.get("/realtime", (request, response) => {
   response.status(200);
   response.setHeader("Content-Type", "text/event-stream");

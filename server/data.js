@@ -293,6 +293,14 @@ export async function loadBootstrap(userId, options = {}) {
   const hiddenUserIds = new Set(blockRows.flatMap((row) => [Number(row.blocker_user_id), Number(row.blocked_user_id)]).filter((id) => id !== Number(userId)));
   const users = includeCatalog ? await loadUsers(pool, userId) : [];
   const currentUser = users.find((user) => user.id === Number(userId)) ?? account;
+  const [[linkedProfileRow]] = await pool.query(
+    `SELECT target.id, target.profile_completed, target.avatar_path, profile.display_name, profile.profile_type
+       FROM linked_profiles links
+       JOIN users target ON target.id = CASE WHEN links.personal_user_id = ? THEN links.community_user_id ELSE links.personal_user_id END
+       JOIN profiles profile ON profile.user_id = target.id
+      WHERE links.personal_user_id = ? OR links.community_user_id = ?
+      LIMIT 1`, [userId, userId, userId],
+  );
   const viewerAge = ageFromBirthDate(accountState?.birth_date);
   const adultStatus = currentUser?.isAdmin || Number(viewerAge ?? -1) >= 18 ? "adult" : viewerAge === null ? "missing" : "minor";
   const [adultRestrictedRows] = includeCatalog && adultStatus !== "adult" ? await pool.query(
@@ -537,6 +545,7 @@ export async function loadBootstrap(userId, options = {}) {
     profileCompleted: Boolean(accountState?.profile_completed),
     adultAccess: { status: adultStatus, restricted: restrictedAdultMaterials },
     users: usersWithWishlists,
+    linkedProfile: linkedProfileRow ? { id: Number(linkedProfileRow.id), name: linkedProfileRow.display_name, type: linkedProfileRow.profile_type, avatarUrl: linkedProfileRow.avatar_path ?? undefined, profileCompleted: Boolean(linkedProfileRow.profile_completed) } : undefined,
     books: catalogBooks,
     blocks: blockRows.map((row) => ({ blockerId: Number(row.blocker_user_id), blockedId: Number(row.blocked_user_id), createdAt: new Date(row.created_at).toISOString() })),
     blockedByUserIds: blockRows.filter((row) => Number(row.blocked_user_id) === Number(userId)).map((row) => Number(row.blocker_user_id)),
