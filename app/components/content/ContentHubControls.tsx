@@ -1,13 +1,14 @@
 import { useEffect, useRef, useState } from "react";
 import type { MainView, RoutableMainView } from "../../navigation/routes";
 import type { UserProfileData } from "../../types/domain";
+import { useI18n, type Translate } from "../../i18n";
 
-const sections: Array<{ view: RoutableMainView; label: string }> = [
-  { view: "home", label: "Лента" },
-  { view: "events", label: "События" },
-  { view: "reviews", label: "Рецензии" },
-  { view: "publications", label: "Блог" },
-  { view: "occasions", label: "Поводы" },
+const sections = (t: Translate): Array<{ view: RoutableMainView; label: string }> => [
+  { view: "home", label: t("content.feed") },
+  { view: "events", label: t("content.events") },
+  { view: "reviews", label: t("content.reviews") },
+  { view: "publications", label: t("content.blog") },
+  { view: "occasions", label: t("content.occasionsShort") },
 ];
 
 export function ContentHubControls({ view, profileType, showSwitch = true, onNavigate, onEvent, onReview, onPublication, onOccasion, onPublisherNews }: {
@@ -21,6 +22,8 @@ export function ContentHubControls({ view, profileType, showSwitch = true, onNav
   onOccasion: () => void;
   onPublisherNews: () => void;
 }) {
+  const { t } = useI18n();
+  const localizedSections = sections(t);
   const [open, setOpen] = useState(false);
   const rootRef = useRef<HTMLDivElement>(null);
   useEffect(() => {
@@ -36,19 +39,19 @@ export function ContentHubControls({ view, profileType, showSwitch = true, onNav
   const blogger = normalizedProfileType === "Блогер";
   const publisher = normalizedProfileType === "Издатель" || normalizedProfileType === "Сообщество";
   return <>
-    {showSwitch && <nav className="content-hub-switch" aria-label="Разделы главной страницы">
-      <span className={`content-hub-indicator at-${sections.findIndex((item) => item.view === view)}`} aria-hidden="true" />
-      {sections.map((item) => <button key={item.view} className={view === item.view ? "active" : ""} type="button" onClick={() => onNavigate(item.view)}>{item.label}</button>)}
+    {showSwitch && <nav className="content-hub-switch" aria-label={t("content.homeSections")}>
+      <span className={`content-hub-indicator at-${localizedSections.findIndex((item) => item.view === view)}`} aria-hidden="true" />
+      {localizedSections.map((item) => <button key={item.view} className={view === item.view ? "active" : ""} type="button" onClick={() => onNavigate(item.view)}>{item.label}</button>)}
     </nav>}
     <div ref={rootRef} className={`floating-create ${open ? "is-open" : ""}`}>
       <div className="floating-create-menu" aria-hidden={!open}>
-        <button type="button" data-material-action="event" onClick={() => choose(onEvent)}>Добавить событие</button>
-        {(reader || blogger) && <button type="button" data-material-action="review" onClick={() => choose(onReview)}>Написать рецензию</button>}
-        {!publisher && (normalizedProfileType === "Писатель" || blogger) && <button type="button" onClick={() => choose(onPublication)}>Создать публикацию</button>}
-        {!publisher && <button type="button" onClick={() => choose(onOccasion)}>Предложить повод</button>}
-        {publisher && <button type="button" onClick={() => choose(onPublisherNews)}>Опубликовать новость</button>}
+        <button type="button" data-material-action="event" onClick={() => choose(onEvent)}>{t("content.createEvent")}</button>
+        {(reader || blogger) && <button type="button" data-material-action="review" onClick={() => choose(onReview)}>{t("content.createReview")}</button>}
+        {!publisher && (normalizedProfileType === "Писатель" || blogger) && <button type="button" onClick={() => choose(onPublication)}>{t("content.createPublication")}</button>}
+        {!publisher && <button type="button" onClick={() => choose(onOccasion)}>{t("content.createOccasion")}</button>}
+        {publisher && <button type="button" onClick={() => choose(onPublisherNews)}>{t("content.publishNews")}</button>}
       </div>
-      <button className="floating-create-toggle" type="button" aria-expanded={open} aria-label={open ? "Закрыть меню создания" : "Создать материал"} onClick={() => setOpen((value) => !value)}><span aria-hidden="true">+</span></button>
+      <button className="floating-create-toggle" type="button" aria-expanded={open} aria-label={open ? t("content.closeCreateMenu") : t("content.createMaterial")} onClick={() => setOpen((value) => !value)}><span aria-hidden="true">+</span></button>
     </div>
   </>;
 }

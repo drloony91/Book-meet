@@ -8,7 +8,7 @@ export function sortLibraryBooks(books: LibraryBook[]) {
   }).map(({ book }) => book);
 }
 
-export function sanitizeRichHtml(value: string) {
+export function sanitizeRichHtml(value: string, inlineImageAlt: string) {
   if (typeof document === "undefined" || !value) return "";
   const template = document.createElement("template");
   template.innerHTML = value;
@@ -35,7 +35,7 @@ export function sanitizeRichHtml(value: string) {
       for (const attribute of Array.from(element.attributes)) element.removeAttribute(attribute.name);
       if (element.tagName === "IMG" && imageSource.startsWith("data:image/")) {
         element.setAttribute("src", imageSource);
-        element.setAttribute("alt", "Изображение в тексте");
+        element.setAttribute("alt", inlineImageAlt);
         element.setAttribute("contenteditable", "false");
         element.style.width = /^\d{1,3}(?:\.\d+)?%$/.test(imageWidth) ? imageWidth : "100%";
         element.style.maxWidth = "100%";
@@ -54,8 +54,8 @@ export function sanitizeRichHtml(value: string) {
   return template.innerHTML;
 }
 
-export function renderRichHtml(value: string, books: Array<LibraryBook | AuthorBook> = []) {
-  const clean = sanitizeRichHtml(value);
+export function renderRichHtml(value: string, books: Array<LibraryBook | AuthorBook>, labels: { inlineImageAlt: string; noAnnotation: string }) {
+  const clean = sanitizeRichHtml(value, labels.inlineImageAlt);
   if (typeof document === "undefined" || !clean || !books.length) return clean;
   const template = document.createElement("template");
   template.innerHTML = clean;
@@ -74,7 +74,7 @@ export function renderRichHtml(value: string, books: Array<LibraryBook | AuthorB
     const author = document.createElement("small");
     author.textContent = book.author;
     const annotation = document.createElement("p");
-    annotation.textContent = book.annotation || "Аннотация пока не добавлена.";
+    annotation.textContent = book.annotation || labels.noAnnotation;
     copy.append(title, author, annotation);
     card.append(cover, copy);
   });
@@ -130,10 +130,10 @@ export function reviewReadingItemById(users: DemoUser[], id: number): ReadingIte
   return null;
 }
 
-export function excerptReadingItemById(users: DemoUser[], id: number): ReadingItem | null {
+export function excerptReadingItemById(users: DemoUser[], id: number, fallbackTitle: string): ReadingItem | null {
   for (const user of users) {
     const excerpt = (user.excerpts ?? []).find((item) => item.id === id);
-    if (excerpt) return { id: excerpt.id, kind: "excerpt", title: excerpt.bookTitle || "Публикация", author: user.profile.name, text: excerpt.text, preview: excerpt.previewText, bodyHtml: excerpt.bodyHtml, linkedBookId: excerpt.bookId, linkedBookIds: excerpt.bookIds, ownerId: user.id, createdAt: excerpt.createdAt, isAdult: excerpt.isAdult };
+    if (excerpt) return { id: excerpt.id, kind: "excerpt", title: excerpt.bookTitle || fallbackTitle, author: user.profile.name, text: excerpt.text, preview: excerpt.previewText, bodyHtml: excerpt.bodyHtml, linkedBookId: excerpt.bookId, linkedBookIds: excerpt.bookIds, ownerId: user.id, createdAt: excerpt.createdAt, isAdult: excerpt.isAdult };
   }
   return null;
 }

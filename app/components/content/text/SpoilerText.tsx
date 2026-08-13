@@ -1,6 +1,8 @@
 import { Fragment, useRef, useState } from "react";
+import { useI18n } from "../../../i18n";
 
 function SpoilerChunk({ children }: { children: string }) {
+  const { t } = useI18n();
   const [revealed, setRevealed] = useState(false);
   const reveal = () => setRevealed(true);
 
@@ -9,7 +11,8 @@ function SpoilerChunk({ children }: { children: string }) {
       className={`spoiler ${revealed ? "is-revealed" : ""}`}
       role="button"
       tabIndex={0}
-      title="Открыть спойлер"
+      title={t("editor.openSpoiler")}
+      data-spoiler-label={t("editor.openSpoiler")}
       onClick={reveal}
       onKeyDown={(event) => {
         if (event.key === "Enter" || event.key === " ") reveal();
@@ -47,6 +50,7 @@ export function SpoilerTextarea({
   required?: boolean;
   placeholder?: string;
 }) {
+  const { t } = useI18n();
   const ref = useRef<HTMLTextAreaElement>(null);
   const [hint, setHint] = useState(false);
 
@@ -76,10 +80,10 @@ export function SpoilerTextarea({
   return (
     <div className="spoiler-textarea">
       <div className="comment-format-toolbar">
-        <button type="button" onClick={toggleSpoiler} title="Скрыть под спойлер">
-          ▦ Скрыть под спойлер
+        <button type="button" onClick={toggleSpoiler} title={t("editor.spoiler")}>
+          ▦ {t("editor.spoiler")}
         </button>
-        {hint && <span>Выделите текст для скрытия под спойлер</span>}
+        {hint && <span>{t("editor.selectSpoiler")}</span>}
       </div>
       <textarea
         ref={ref}

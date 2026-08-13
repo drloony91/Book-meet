@@ -8,8 +8,8 @@ import { NotificationDetail, NotificationsMenu } from "../components/notificatio
 import {
   appRouteFromPathname,
   initialMainView,
+  mainViewTitle,
   mainViewPaths,
-  mainViewTitles,
   notifyAppNavigation,
   normalizedPathname,
   useCurrentAppRoute,
@@ -100,8 +100,11 @@ import type {
   UserReview,
   WishBook,
 } from "../types/domain";
+import { localizedApiError, useI18n } from "../i18n";
 
 export function useBookMeetController() {
+  const { t, formatDate, formatNumber } = useI18n();
+  const localizedViewTitle = (target: MainView) => target === "profile" ? `${t("profile.my")} — Book Meet` : mainViewTitle(target, t);
   const [users, setUsers] = useState<DemoUser[]>([]);
   const [catalogBooks, setCatalogBooks] = useState<Array<LibraryBook | AuthorBook>>([]);
   const [activeUserId, setActiveUserId] = useState<number | null>(null);
@@ -244,7 +247,7 @@ export function useBookMeetController() {
           if (mayChat) {
             setSelectedFriend({
               id: chatUser.id,
-              name: chatUser.isAdmin && !viewer.isAdmin ? "Служба поддержки" : chatUser.profile.name,
+              name: chatUser.isAdmin && !viewer.isAdmin ? t("chat.support") : chatUser.profile.name,
               type: chatUser.profile.type,
               city: chatUser.profile.city,
               initials: chatUser.initials,
@@ -257,7 +260,7 @@ export function useBookMeetController() {
               bio: chatUser.profile.bio,
               books: chatUser.profile.favoriteGenres.join(", "),
             });
-            document.title = `${chatUser.isAdmin && !viewer.isAdmin ? "Служба поддержки" : chatUser.profile.name} — Диалоги Book Meet`;
+            document.title = `${chatUser.isAdmin && !viewer.isAdmin ? t("chat.support") : chatUser.profile.name} — ${t("header.chats")} Book Meet`;
           }
         }
         return;
@@ -266,19 +269,19 @@ export function useBookMeetController() {
       const backgroundRoute = route.overlay && overlayState.backgroundPath ? appRouteFromPathname(overlayState.backgroundPath) : null;
       setView(backgroundRoute?.view ?? route.view);
       if (!route.overlay) {
-        document.title = route.view === "profile" ? "Мой профиль — Book Meet" : mainViewTitles[route.view];
+        document.title = route.view === "profile" ? `${t("profile.my")} — Book Meet` : localizedViewTitle(route.view);
         return;
       }
       const adultKind = route.overlay.kind === "book" || route.overlay.kind === "review" || route.overlay.kind === "excerpt" || route.overlay.kind === "event" || route.overlay.kind === "occasion" ? route.overlay.kind : null;
       if (adultKind && routeData.adultAccess.status !== "adult" && routeData.adultAccess.restricted[adultKind]?.includes(route.overlay.id)) {
         setAdultRestrictionNotice(routeData.adultAccess.status);
-        document.title = "Материал 18+ — Book Meet";
+        document.title = `${t("content.adultMaterial")} — Book Meet`;
         return;
       }
       if (route.overlay.kind === "user") setProfileUserId(routeData.users.find((user) => user.id === route.overlay!.id && !user.isAdmin)?.id ?? null);
       if (route.overlay.kind === "book") setSelectedBook(routeData.catalog.find((book) => book.id === route.overlay!.id) ?? null);
       if (route.overlay.kind === "review") setSelectedMaterial(reviewReadingItemById(routeData.users, route.overlay.id));
-      if (route.overlay.kind === "excerpt") setSelectedMaterial(excerptReadingItemById(routeData.users, route.overlay.id));
+      if (route.overlay.kind === "excerpt") setSelectedMaterial(excerptReadingItemById(routeData.users, route.overlay.id, t("content.publications")));
       if (route.overlay.kind === "event") setSelectedEvent(routeData.events.find((item) => item.id === route.overlay!.id) ?? null);
       if (route.overlay.kind === "occasion") setSelectedOccasion(routeData.occasions.find((item) => item.id === route.overlay!.id) ?? null);
       if (route.overlay.kind === "notification") setDetailNotification(routeData.notifications.find((item) => item.id === route.overlay!.id) ?? null);
@@ -286,15 +289,15 @@ export function useBookMeetController() {
     restoreRoute();
     window.addEventListener("popstate", restoreRoute);
     return () => window.removeEventListener("popstate", restoreRoute);
-  }, [activeUserId]);
+  }, [activeUserId, t]);
 
   useEffect(() => {
     if (view === "profile") {
-      document.title = "Мой профиль — Book Meet";
+      document.title = `${t("profile.my")} — Book Meet`;
       return;
     }
-    if (!appRouteFromPathname(window.location.pathname).overlay) document.title = mainViewTitles[view];
-  }, [view]);
+    if (!appRouteFromPathname(window.location.pathname).overlay) document.title = localizedViewTitle(view);
+  }, [view, t]);
 
   useEffect(() => {
     const openEditor = (event: Event) => {
@@ -305,7 +308,7 @@ export function useBookMeetController() {
         const source = detail.kind === "review" ? owner?.reviews.find((item) => item.id === detail.id) : owner?.excerpts?.find((item) => item.id === detail.id);
         if (owner && source) {
           setSelectedMaterial(null);
-          setAdminEditingMaterial({ id: detail.id, kind: detail.kind, title: detail.kind === "review" ? (source as UserReview).bookTitle : (source as UserExcerpt).bookTitle || "Публикация", subtitle: owner.profile.name, text: detail.kind === "review" ? (source as UserReview).preview : (source as UserExcerpt).previewText, source: { ...source, ownerId: owner.id, ownerName: owner.profile.name } });
+          setAdminEditingMaterial({ id: detail.id, kind: detail.kind, title: detail.kind === "review" ? (source as UserReview).bookTitle : (source as UserExcerpt).bookTitle || t("content.publications"), subtitle: owner.profile.name, text: detail.kind === "review" ? (source as UserReview).preview : (source as UserExcerpt).previewText, source: { ...source, ownerId: owner.id, ownerName: owner.profile.name } });
         }
         return;
       }
@@ -338,20 +341,20 @@ export function useBookMeetController() {
   const friendRows: Friend[] = [...new Map([...currentFriendUsers, ...currentMembershipUsers, ...conversationUsers].map((user) => [user.id, user])).values()].map((user) => {
     const conversation = currentUser ? messages[conversationKey(currentUser.id, user.id)] ?? [] : [];
     const last = [...conversation].reverse().find((message) => !message.system);
-    return { id: user.id, name: user.profile.name, type: user.profile.type, city: user.profile.city, initials: user.initials, avatarUrl: user.avatarUrl, color: user.color, online: Boolean(user.online), unread: conversation.filter((message) => message.unread && !message.mine && !message.system).length || undefined, lastMessage: last?.text || (last?.attachment ? "Вложение" : user.profile.type === "Сообщество" || currentUser?.profile.type === "Сообщество" ? "Участник сообщества" : "Теперь вы друзья"), time: last?.time ?? "сейчас", bio: user.profile.bio, books: user.profile.favoriteGenres.join(", ") };
+    return { id: user.id, name: user.profile.name, type: user.profile.type, city: user.profile.city, initials: user.initials, avatarUrl: user.avatarUrl, color: user.color, online: Boolean(user.online), unread: conversation.filter((message) => message.unread && !message.mine && !message.system).length || undefined, lastMessage: last?.text || (last?.attachment ? t("chat.attachment") : user.profile.type === "Сообщество" || currentUser?.profile.type === "Сообщество" ? t("chat.communityMember") : t("notification.friendshipStarted")), time: last?.time ?? t("common.now"), bio: user.profile.bio, books: user.profile.favoriteGenres.join(", ") };
   });
-  const supportRow: Friend[] = currentUser && !currentUser.isAdmin && adminUser && !friendRows.some((friend) => friend.id === adminUser.id) ? (() => { const conversation = messages[conversationKey(currentUser.id, adminUser.id)] ?? []; const last = [...conversation].reverse().find((message) => !message.system); return [{ id: adminUser.id, name: "Служба поддержки", type: adminUser.profile.type, city: adminUser.profile.city, initials: "✓", color: "navy", online: Boolean(adminUser.online), support: true, unread: conversation.filter((message) => message.unread && !message.mine && !message.system).length || undefined, lastMessage: last?.text ?? "Мы всегда на связи", time: last?.time ?? "", bio: "Официальная служба поддержки Book Meet", books: "" }]; })() : [];
-  const adminSupportRows: Friend[] = currentUser?.isAdmin ? users.filter((user) => user.id !== currentUser.id && !friendIds.includes(user.id) && Object.prototype.hasOwnProperty.call(messages, conversationKey(currentUser.id, user.id))).map((user) => { const conversation = messages[conversationKey(currentUser.id, user.id)] ?? []; const last = [...conversation].reverse().find((message) => !message.system); return { id: user.id, name: user.profile.name, type: user.profile.type, city: user.profile.city, initials: user.initials, avatarUrl: user.avatarUrl, color: user.color, online: Boolean(user.online), supportCase: true, unread: conversation.filter((message) => message.unread && !message.mine && !message.system).length || undefined, lastMessage: last?.text || (last?.attachment ? "Вложение" : "Обращение в поддержку"), time: last?.time ?? "", bio: user.profile.bio, books: user.profile.favoriteGenres.join(", ") }; }) : [];
-  const currentFriends: Friend[] = currentUser?.isAdmin ? [...friendRows, ...adminSupportRows] : [...friendRows.filter((friend) => friend.id !== adminUser?.id), ...(currentUser && adminUser ? (friendRows.some((friend) => friend.id === adminUser.id) ? friendRows.filter((friend) => friend.id === adminUser.id).map((friend) => ({ ...friend, name: "Служба поддержки", support: true })) : supportRow) : [])];
+  const supportRow: Friend[] = currentUser && !currentUser.isAdmin && adminUser && !friendRows.some((friend) => friend.id === adminUser.id) ? (() => { const conversation = messages[conversationKey(currentUser.id, adminUser.id)] ?? []; const last = [...conversation].reverse().find((message) => !message.system); return [{ id: adminUser.id, name: t("chat.support"), type: adminUser.profile.type, city: adminUser.profile.city, initials: "✓", color: "navy", online: Boolean(adminUser.online), support: true, unread: conversation.filter((message) => message.unread && !message.mine && !message.system).length || undefined, lastMessage: last?.text ?? t("chat.alwaysHelp"), time: last?.time ?? "", bio: t("chat.officialSupport"), books: "" }]; })() : [];
+  const adminSupportRows: Friend[] = currentUser?.isAdmin ? users.filter((user) => user.id !== currentUser.id && !friendIds.includes(user.id) && Object.prototype.hasOwnProperty.call(messages, conversationKey(currentUser.id, user.id))).map((user) => { const conversation = messages[conversationKey(currentUser.id, user.id)] ?? []; const last = [...conversation].reverse().find((message) => !message.system); return { id: user.id, name: user.profile.name, type: user.profile.type, city: user.profile.city, initials: user.initials, avatarUrl: user.avatarUrl, color: user.color, online: Boolean(user.online), supportCase: true, unread: conversation.filter((message) => message.unread && !message.mine && !message.system).length || undefined, lastMessage: last?.text || (last?.attachment ? t("chat.attachment") : t("chat.supportRequest")), time: last?.time ?? "", bio: user.profile.bio, books: user.profile.favoriteGenres.join(", ") }; }) : [];
+  const currentFriends: Friend[] = currentUser?.isAdmin ? [...friendRows, ...adminSupportRows] : [...friendRows.filter((friend) => friend.id !== adminUser?.id), ...(currentUser && adminUser ? (friendRows.some((friend) => friend.id === adminUser.id) ? friendRows.filter((friend) => friend.id === adminUser.id).map((friend) => ({ ...friend, name: t("chat.support"), support: true })) : supportRow) : [])];
   const allReviews: Review[] = visibleUsers.flatMap((user, userIndex) => user.reviews.map((review, reviewIndex) => ({ id: review.id, ownerId: user.id, quote: review.preview, fullText: review.fullText, bodyHtml: review.bodyHtml, linkedBookId: review.bookId, book: `«${review.bookTitle}»`, author: review.bookAuthor, user: user.profile.name, rating: String(review.rating), tone: ["blue", "green", "red"][(userIndex + reviewIndex) % 3], createdAt: review.createdAt, createdAtValue: review.createdAtValue, isAdult: review.isAdult })));
-  const allExcerpts: Excerpt[] = visibleUsers.flatMap((user) => (user.excerpts ?? []).map((excerpt) => ({ id: excerpt.id, ownerId: user.id, text: excerpt.previewText || excerpt.text.slice(0, 500), fullText: excerpt.text || excerpt.previewText, bodyHtml: excerpt.bodyHtml, linkedBookId: excerpt.bookId, linkedBookIds: excerpt.bookIds, title: excerpt.bookTitle || "Публикация", author: user.profile.name, genre: "", createdAt: excerpt.createdAt, createdAtValue: excerpt.createdAtValue, isAdult: excerpt.isAdult })));
+  const allExcerpts: Excerpt[] = visibleUsers.flatMap((user) => (user.excerpts ?? []).map((excerpt) => ({ id: excerpt.id, ownerId: user.id, text: excerpt.previewText || excerpt.text.slice(0, 500), fullText: excerpt.text || excerpt.previewText, bodyHtml: excerpt.bodyHtml, linkedBookId: excerpt.bookId, linkedBookIds: excerpt.bookIds, title: excerpt.bookTitle || t("content.publications"), author: user.profile.name, genre: "", createdAt: excerpt.createdAt, createdAtValue: excerpt.createdAtValue, isAdult: excerpt.isAdult })));
   const allPublisherNews = visibleUsers.flatMap((user) => user.publisherNews ?? []);
   const shareItems = useMemo<ChatShareItem[]>(() => {
     const books: ChatShareItem[] = catalog.map((book) => ({ kind: "book", id: book.id, title: book.title, subtitle: book.author, preview: book.annotation, imageUrl: book.coverUrl, path: `/books/${book.id}` }));
     const people: ChatShareItem[] = users.filter((user) => !user.isAdmin).map((user) => ({ kind: "user", id: user.id, title: user.profile.name, subtitle: `${user.profile.type} · ${user.profile.city}`, preview: user.profile.bio, imageUrl: user.avatarUrl, path: `/users/${user.id}` }));
     const eventItems: ChatShareItem[] = events.filter((item) => item.status === "published").map((item) => ({ kind: "event", id: item.id, title: item.title, subtitle: `${item.city} · ${item.date}`, preview: item.summary, imageUrl: item.bookCoverUrl, path: `/events/${item.id}` }));
-    const reviewItems: ChatShareItem[] = users.flatMap((user) => user.reviews.map((review) => ({ kind: "review" as const, id: review.id, title: review.bookTitle, subtitle: `Рецензия · ${user.profile.name}`, preview: review.preview, imageUrl: catalog.find((book) => book.id === review.bookId)?.coverUrl, path: `/reviews/${review.id}` })));
-    const excerptItems: ChatShareItem[] = users.flatMap((user) => (user.excerpts ?? []).map((excerpt) => ({ kind: "excerpt" as const, id: excerpt.id, title: excerpt.bookTitle || "Публикация", subtitle: user.profile.name, preview: excerpt.previewText, imageUrl: catalog.find((book) => book.id === excerpt.bookId)?.coverUrl, path: `/blog/${excerpt.id}` })));
+    const reviewItems: ChatShareItem[] = users.flatMap((user) => user.reviews.map((review) => ({ kind: "review" as const, id: review.id, title: review.bookTitle, subtitle: `${t("content.reviews")} · ${user.profile.name}`, preview: review.preview, imageUrl: catalog.find((book) => book.id === review.bookId)?.coverUrl, path: `/reviews/${review.id}` })));
+    const excerptItems: ChatShareItem[] = users.flatMap((user) => (user.excerpts ?? []).map((excerpt) => ({ kind: "excerpt" as const, id: excerpt.id, title: excerpt.bookTitle || t("content.publications"), subtitle: user.profile.name, preview: excerpt.previewText, imageUrl: catalog.find((book) => book.id === excerpt.bookId)?.coverUrl, path: `/blog/${excerpt.id}` })));
     const occasionItems: ChatShareItem[] = occasions.filter((item) => item.status === "published").map((item) => ({ kind: "occasion", id: item.id, title: item.primaryText.slice(0, 72), subtitle: `${item.targetCities.join(", ")} · ${item.creatorName}`, preview: item.audienceText, path: `/meet/${item.id}` }));
     return [...books, ...people, ...eventItems, ...reviewItems, ...excerptItems, ...occasionItems];
   }, [catalog, users, events, occasions]);
@@ -379,7 +382,7 @@ export function useBookMeetController() {
         const backgroundRoute = appRouteFromPathname(state.backgroundPath);
         window.history.replaceState({ bookMeetView: backgroundRoute.view }, "", state.backgroundPath);
         setView(backgroundRoute.view);
-        document.title = backgroundRoute.view === "profile" ? "Мой профиль — Book Meet" : mainViewTitles[backgroundRoute.view];
+        document.title = backgroundRoute.view === "profile" ? `${t("profile.my")} — Book Meet` : localizedViewTitle(backgroundRoute.view);
       }
       setSelectedFriend(null);
       setChatExpanded(false);
@@ -428,7 +431,7 @@ export function useBookMeetController() {
     const oauthRegistration = query.get("registered") === "1";
     const authError = query.get("auth_error");
     if (authError) {
-      setStartupError(authError.endsWith("not_configured") ? "Google-вход пока не настроен." : "Не удалось завершить вход через Google. Попробуйте ещё раз.");
+      setStartupError(authError.endsWith("not_configured") ? t("auth.googleUnavailable") : t("auth.googleFinishError"));
       window.history.replaceState({}, "", window.location.pathname);
     }
     loadApplicationData().then(async (data) => {
@@ -458,7 +461,7 @@ export function useBookMeetController() {
         try {
           setPublicCatalog(await loadPublicCatalog());
         } catch (publicError) {
-          setStartupError(publicError instanceof Error ? publicError.message : "Не удалось загрузить публичный каталог");
+          setStartupError(publicError instanceof Error ? publicError.message : t("catalog.publicLoadError"));
           setGuestAuthOpen(true);
         }
         return;
@@ -471,7 +474,7 @@ export function useBookMeetController() {
         setDeletedRecovery({ daysRemaining: Number(error.data.daysRemaining ?? 0) });
         return;
       }
-      setStartupError(error instanceof Error ? error.message : "Сервер Book Meet пока недоступен");
+      setStartupError(error instanceof Error ? error.message : t("common.serverUnavailable"));
     }).finally(async () => { await finishMinimumLoading(loadingStartedAt); if (active) setAuthLoading(false); });
     return () => { active = false; };
   }, []);
@@ -500,7 +503,7 @@ export function useBookMeetController() {
     const response = await apiFetch("/api/books", { method: "POST", body: JSON.stringify(payload) });
     const data = await response.json().catch(() => ({})) as { bookId?: number; topRank?: 1 | 2 | 3; error?: string; code?: string };
     if (!response.ok) {
-      window.alert(data.code === "TOP3_LIMIT" ? "В TOP3 уже добавлены три книги. Сначала снимите отметку с одной из них." : data.error || "Не удалось добавить книгу в Мою библиотеку");
+      window.alert(data.code === "TOP3_LIMIT" ? t("book.top3Limit") : localizedApiError(data.error, t("book.addLibraryError")));
       return;
     }
     const savedBook = { ...book, id: Number(data.bookId ?? catalogBookId), catalogBookId, topRank: data.topRank };
@@ -509,35 +512,35 @@ export function useBookMeetController() {
   }
 
   function addNotification(notification: Omit<SocialNotification, "id" | "unread" | "createdAt">) {
-    setNotifications((current) => [...current, { ...notification, id: Date.now() + Math.random(), unread: true, createdAt: "сейчас" }]);
+    setNotifications((current) => [...current, { ...notification, id: Date.now() + Math.random(), unread: true, createdAt: t("common.now") }]);
   }
 
   function toggleLike(item: ReadingItem) {
     if (!currentUser || !item.ownerId || item.ownerId === currentUser.id) return;
     const key = `${item.kind}-${item.id}`;
     const alreadyLiked = (likes[key] ?? []).includes(currentUser.id);
-    void apiFetch("/api/reactions", { method: alreadyLiked ? "DELETE" : "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ userId: currentUser.id, ownerId: item.ownerId, materialKind: item.kind, materialId: item.id, text: `${currentUser.profile.name} поставил(а) «Нравится»: ${item.title}.` }) }).catch((error) => console.warn(error));
+    void apiFetch("/api/reactions", { method: alreadyLiked ? "DELETE" : "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ userId: currentUser.id, ownerId: item.ownerId, materialKind: item.kind, materialId: item.id, text: t("notification.likeText", { name: currentUser.profile.name, title: item.title }) }) }).catch((error) => console.warn(error));
     setLikes((current) => ({ ...current, [key]: alreadyLiked ? (current[key] ?? []).filter((id) => id !== currentUser.id) : [...(current[key] ?? []), currentUser.id] }));
     if (alreadyLiked) return;
     setNotifications((current) => {
       const existing = current.find((notification) => notification.userId === item.ownerId && notification.type === "like" && notification.materialId === item.id && notification.materialKind === item.kind);
       const total = (likes[key] ?? []).length + 1;
-      const text = total > 1 ? `${currentUser.profile.name} и ещё ${total - 1} поставили «Нравится»: ${item.title}.` : `${currentUser.profile.name} поставил(а) «Нравится»: ${item.title}.`;
-      if (existing) return current.map((notification) => notification.id === existing.id ? { ...notification, actorId: currentUser.id, text, unread: true, createdAt: "сейчас" } : notification);
-      return [...current, { id: Date.now() + Math.random(), userId: item.ownerId!, actorId: currentUser.id, type: "like", title: "Нравится", text, unread: true, createdAt: "сейчас", materialId: item.id, materialKind: item.kind }];
+      const text = total > 1 ? t("notification.likeTextMultiple", { name: currentUser.profile.name, count: formatNumber(total - 1), title: item.title }) : t("notification.likeText", { name: currentUser.profile.name, title: item.title });
+      if (existing) return current.map((notification) => notification.id === existing.id ? { ...notification, actorId: currentUser.id, text, unread: true, createdAt: t("common.now") } : notification);
+      return [...current, { id: Date.now() + Math.random(), userId: item.ownerId!, actorId: currentUser.id, type: "like", title: t("notification.like"), text, unread: true, createdAt: t("common.now"), materialId: item.id, materialKind: item.kind }];
     });
   }
 
   async function addComment(item: ReadingItem, text: string): Promise<MaterialComment | null> {
     if (!currentUser || !item.ownerId) return null;
-    const notificationText = `${currentUser.profile.name} прокомментировал(а) материал «${item.title}»: ${text}`;
+    const notificationText = t("notification.commentText", { name: currentUser.profile.name, title: item.title, text });
     try {
       const response = await apiFetch("/api/comments", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ userId: currentUser.id, ownerId: item.ownerId, materialKind: item.kind, materialId: item.id, body: text, notificationText }) });
-      if (!response.ok) throw new Error("Не удалось сохранить комментарий");
+      if (!response.ok) throw new Error(t("material.commentError"));
       const data = await response.json() as { comment: MaterialComment };
       const key = `${item.kind}-${item.id}`;
       setCommenters((current) => ({ ...current, [key]: current[key]?.includes(currentUser.id) ? current[key] : [...(current[key] ?? []), currentUser.id] }));
-      if (item.ownerId !== currentUser.id) addNotification({ userId: item.ownerId, actorId: currentUser.id, type: "comment", title: "Новый комментарий", text: notificationText, materialId: item.id, materialKind: item.kind });
+      if (item.ownerId !== currentUser.id) addNotification({ userId: item.ownerId, actorId: currentUser.id, type: "comment", title: t("notification.comment"), text: notificationText, materialId: item.id, materialKind: item.kind });
       return data.comment;
     } catch (error) { console.warn(error); return null; }
   }
@@ -655,8 +658,8 @@ export function useBookMeetController() {
     const nextState: ChatRouteState = { bookMeetChat: true, backgroundPath, chatMode: "compact" };
     window.history[isSwitchingChat ? "replaceState" : "pushState"](nextState, "", `/chat/${userId}`);
     notifyAppNavigation();
-    document.title = `${user.isAdmin && !currentUser.isAdmin ? "Служба поддержки" : user.profile.name} — Диалоги Book Meet`;
-    setSelectedFriend({ id: user.id, name: user.isAdmin && !currentUser.isAdmin ? "Служба поддержки" : user.profile.name, type: user.profile.type, city: user.profile.city, initials: user.initials, avatarUrl: user.avatarUrl, color: user.isAdmin ? "navy" : user.color, online: Boolean(user.online), support: Boolean(user.isAdmin && !currentUser.isAdmin), lastMessage: "", time: "", bio: user.profile.bio, books: user.profile.favoriteGenres.join(", ") });
+    document.title = `${user.isAdmin && !currentUser.isAdmin ? t("chat.support") : user.profile.name} — ${t("header.chats")} Book Meet`;
+    setSelectedFriend({ id: user.id, name: user.isAdmin && !currentUser.isAdmin ? t("chat.support") : user.profile.name, type: user.profile.type, city: user.profile.city, initials: user.initials, avatarUrl: user.avatarUrl, color: user.isAdmin ? "navy" : user.color, online: Boolean(user.online), support: Boolean(user.isAdmin && !currentUser.isAdmin), lastMessage: "", time: "", bio: user.profile.bio, books: user.profile.favoriteGenres.join(", ") });
     setChatExpanded(false);
     setMobileFriendsOpen(true);
     const key = conversationKey(currentUser.id, userId);
@@ -669,12 +672,12 @@ export function useBookMeetController() {
   async function sendMessage(text: string, attachment?: ChatAttachment) {
     if (!selectedFriend || !currentUser) return;
     const response = await apiFetch("/api/social/messages", { method: "POST", credentials: "same-origin", headers: { "content-type": "application/json" }, body: JSON.stringify({ targetId: selectedFriend.id, body: text, attachment }) });
-    if (!response.ok) { alert("Не удалось отправить сообщение"); return; }
+    if (!response.ok) { alert(t("chat.sendError")); return; }
     const data = await response.json() as { message?: Message };
     const createdAt = data.message?.createdAt ?? new Date().toISOString();
     const key = conversationKey(currentUser.id, selectedFriend.id);
     setMessages((current) => ({ ...current, [key]: [...(current[key] ?? []), { id: data.message?.id ?? Date.now(), mine: true, senderId: currentUser.id, text, attachment, time: "", createdAt, read: false }] }));
-    addNotification({ userId: selectedFriend.id, actorId: currentUser.id, type: "new_message", title: "Новое сообщение", text: `${currentUser.profile.name}: ${text || "поделился(ась) материалом"}` });
+    addNotification({ userId: selectedFriend.id, actorId: currentUser.id, type: "new_message", title: t("notification.newMessage"), text: `${currentUser.profile.name}: ${text || t("chat.sharedMaterial")}` });
   }
 
   async function sendFriendRequest(targetId: number, message: string) {
@@ -683,16 +686,16 @@ export function useBookMeetController() {
     if (target?.profile.type !== "Сообщество" && (currentUser.profile.type === "Издатель" || target?.profile.type === "Издатель")) return;
     if (friendRequests.some((request) => request.status === "pending" && ((request.fromId === currentUser.id && request.toId === targetId) || (request.fromId === targetId && request.toId === currentUser.id)))) return;
     const response = await apiFetch("/api/social/friend-requests", { method: "POST", credentials: "same-origin", headers: { "content-type": "application/json" }, body: JSON.stringify({ targetId, message }) });
-    if (!response.ok) { alert("Не удалось отправить предложение дружбы"); return; }
+    if (!response.ok) { alert(t("social.friendRequestError")); return; }
     setFriendRequests((current) => [...current, { id: Date.now(), fromId: currentUser.id, toId: targetId, status: "pending", message }]);
     const targetIsCommunity = users.find((user) => user.id === targetId)?.profile.type === "Сообщество";
-    addNotification({ userId: targetId, actorId: currentUser.id, type: "friend_request", title: targetIsCommunity ? "Новая заявка" : "Новый друг", text: targetIsCommunity ? `${currentUser.profile.name} хочет присоединиться к сообществу.${message ? ` Сообщение: ${message}` : ""}` : `${currentUser.profile.name} хочет добавить вас в друзья.${message ? ` Сообщение: ${message}` : ""}` });
+    addNotification({ userId: targetId, actorId: currentUser.id, type: "friend_request", title: targetIsCommunity ? t("notification.newMembershipRequest") : t("notification.friendRequest"), text: targetIsCommunity ? t("notification.membershipRequestText", { name: currentUser.profile.name, message: message ? t("notification.messageSuffix", { message }) : "" }) : t("notification.friendRequestText", { name: currentUser.profile.name, message: message ? t("notification.messageSuffix", { message }) : "" }) });
   }
 
   async function cancelFriendRequest(targetId: number) {
     if (!currentUser) return;
     const response = await apiFetch(`/api/social/friend-requests/${targetId}`, { method: "DELETE", credentials: "same-origin" });
-    if (!response.ok) throw new Error((await response.json() as { error?: string }).error || "Не удалось отменить запрос");
+    if (!response.ok) throw new Error(localizedApiError((await response.json() as { error?: string }).error, t("social.cancelRequestError")));
     setFriendRequests((current) => current.filter((request) => !(request.status === "pending" && request.fromId === currentUser.id && request.toId === targetId)));
     setNotifications((current) => current.filter((notification) => !(notification.type === "friend_request" && notification.actorId === currentUser.id && notification.userId === targetId)));
   }
@@ -700,7 +703,7 @@ export function useBookMeetController() {
   async function acceptFriend(targetId: number) {
     if (!currentUser) return;
     const response = await apiFetch(`/api/social/friends/${targetId}/accept`, { method: "POST", credentials: "same-origin" });
-    if (!response.ok) { alert("Не удалось принять предложение дружбы"); return; }
+    if (!response.ok) { alert(t("social.acceptRequestError")); return; }
     setFriendRequests((current) => current.map((request) => request.status === "pending" && request.fromId === targetId && request.toId === currentUser.id ? { ...request, status: "accepted" } : request));
     const isMembership = currentUser.profile.type === "Сообщество";
     if (isMembership) setCommunityMemberships((current) => [...current, { communityId: currentUser.id, memberId: targetId }]);
@@ -710,9 +713,9 @@ export function useBookMeetController() {
       return [...current, ...pairs.filter((pair) => !current.some((follow) => follow.followerId === pair.followerId && follow.targetId === pair.targetId))];
     });
     const key = conversationKey(currentUser.id, targetId);
-    const systemText = isMembership ? "Заявка принята. Теперь вы участник сообщества и можете начать переписку" : "Теперь вы друзья и можете начать переписку";
-    const notificationTitle = isMembership ? "Заявка принята" : "Теперь вы друзья";
-    setMessages((current) => ({ ...current, [key]: [{ id: Date.now(), mine: false, system: true, text: systemText, time: "сейчас" }] }));
+    const systemText = isMembership ? t("social.membershipAcceptedSystem") : t("social.friendshipAcceptedSystem");
+    const notificationTitle = isMembership ? t("social.requestAccepted") : t("notification.friendshipStarted");
+    setMessages((current) => ({ ...current, [key]: [{ id: Date.now(), mine: false, system: true, text: systemText, time: t("common.now") }] }));
     addNotification({ userId: currentUser.id, actorId: targetId, type: "friendship_started", title: notificationTitle, text: systemText });
     addNotification({ userId: targetId, actorId: currentUser.id, type: "friendship_started", title: notificationTitle, text: systemText });
     setProfileUserId(null);
@@ -721,37 +724,37 @@ export function useBookMeetController() {
   async function rejectFriend(targetId: number, comment: string) {
     if (!currentUser) return;
     const response = await apiFetch(`/api/social/friends/${targetId}/reject`, { method: "POST", credentials: "same-origin", headers: { "content-type": "application/json" }, body: JSON.stringify({ comment }) });
-    if (!response.ok) { alert("Не удалось отклонить предложение дружбы"); return; }
+    if (!response.ok) { alert(t("social.rejectRequestError")); return; }
     setFriendRequests((current) => current.map((request) => request.status === "pending" && request.fromId === targetId && request.toId === currentUser.id ? { ...request, status: "rejected", comment } : request));
     const isMembership = currentUser.profile.type === "Сообщество";
-    addNotification({ userId: targetId, actorId: currentUser.id, type: "friend_rejected", title: isMembership ? "Заявка отклонена" : "Предложение дружбы отклонено", text: isMembership ? `${currentUser.profile.name} отклонило заявку на вступление.${comment.trim() ? ` Комментарий: ${comment.trim()}` : ""}` : `${currentUser.profile.name} отклонил предложение дружбы.${comment.trim() ? ` Комментарий: ${comment.trim()}` : ""} Вы не сможете начать переписку, но можете подписаться на пользователя и следить за обновлениями.` });
+    addNotification({ userId: targetId, actorId: currentUser.id, type: "friend_rejected", title: isMembership ? t("social.requestRejected") : t("notification.friendRejected"), text: isMembership ? t("notification.membershipRejectedText", { name: currentUser.profile.name, comment: comment.trim() ? t("notification.commentSuffix", { comment: comment.trim() }) : "" }) : t("notification.friendRejectedText", { name: currentUser.profile.name, comment: comment.trim() ? t("notification.commentSuffix", { comment: comment.trim() }) : "" }) });
     setProfileUserId(null);
   }
 
   async function removeFriend(targetId: number) {
     if (!currentUser) return;
     const response = await apiFetch(`/api/social/friends/${targetId}`, { method: "DELETE", credentials: "same-origin" });
-    if (!response.ok) { alert("Не удалось изменить список друзей"); return; }
+    if (!response.ok) { alert(t("social.friendListError")); return; }
     const targetIsCommunity = users.find((user) => user.id === targetId)?.profile.type === "Сообщество";
     if (targetIsCommunity || currentUser.profile.type === "Сообщество") setCommunityMemberships((current) => current.filter((item) => !((item.communityId === currentUser.id && item.memberId === targetId) || (item.communityId === targetId && item.memberId === currentUser.id))));
     else setFriendships((current) => current.filter((item) => !((item.userA === currentUser.id && item.userB === targetId) || (item.userA === targetId && item.userB === currentUser.id))));
     const membershipEnded = targetIsCommunity || currentUser.profile.type === "Сообщество";
-    addNotification({ userId: targetId, actorId: currentUser.id, type: "friendship_ended", title: membershipEnded ? "Участие завершено" : "Дружба завершена", text: membershipEnded ? `${currentUser.profile.name} завершило участие в сообществе.` : `${currentUser.profile.name} перестал дружить с вами.` });
+    addNotification({ userId: targetId, actorId: currentUser.id, type: "friendship_ended", title: membershipEnded ? t("social.membershipEnded") : t("notification.friendshipEnded"), text: membershipEnded ? t("notification.membershipEndedText", { name: currentUser.profile.name }) : t("notification.friendshipEndedText", { name: currentUser.profile.name }) });
     setProfileUserId(null); if (selectedFriend?.id === targetId) { setSelectedFriend(null); setChatExpanded(false); }
   }
 
   async function followUser(targetId: number) {
     if (!currentUser || follows.some((follow) => follow.followerId === currentUser.id && follow.targetId === targetId)) return;
     const response = await apiFetch("/api/social/follows", { method: "POST", credentials: "same-origin", headers: { "content-type": "application/json" }, body: JSON.stringify({ targetId }) });
-    if (!response.ok) { alert("Не удалось подписаться на пользователя"); return; }
+    if (!response.ok) { alert(t("social.followError")); return; }
     setFollows((current) => [...current, { followerId: currentUser.id, targetId }]);
-    addNotification({ userId: targetId, actorId: currentUser.id, type: "new_follower", title: "Новый подписчик", text: `${currentUser.profile.name} подписался на ваши обновления.` });
+    addNotification({ userId: targetId, actorId: currentUser.id, type: "new_follower", title: t("notification.newFollower"), text: t("notification.newFollowerText", { name: currentUser.profile.name }) });
   }
 
   async function unfollowUser(targetId: number) {
     if (!currentUser) return;
     const response = await apiFetch(`/api/social/follows/${targetId}`, { method: "DELETE", credentials: "same-origin" });
-    if (!response.ok) throw new Error((await response.json() as { error?: string }).error || "Не удалось отменить подписку");
+    if (!response.ok) throw new Error(localizedApiError((await response.json() as { error?: string }).error, t("social.unfollowError")));
     setFollows((current) => current.filter((follow) => !(follow.followerId === currentUser.id && follow.targetId === targetId)));
     setNotifications((current) => current.filter((notification) => !(notification.type === "new_follower" && notification.actorId === currentUser.id && notification.userId === targetId)));
   }
@@ -759,18 +762,18 @@ export function useBookMeetController() {
   async function unblockUser(targetId: number) {
     const response = await apiFetch(currentUser?.isAdmin ? `/api/admin/users/${targetId}/suspension` : `/api/social/blocks/${targetId}`, { method: "DELETE", credentials: "same-origin" });
     const data = await response.json().catch(() => ({})) as { error?: string };
-    if (!response.ok) throw new Error(data.error || "Не удалось разблокировать пользователя");
+    if (!response.ok) throw new Error(localizedApiError(data.error, t("social.unblockError")));
     await refreshBootstrap();
   }
 
   async function blockUser(targetId: number) {
     const endpoint = currentUser?.isAdmin ? `/api/admin/users/${targetId}/suspension` : "/api/social/blocks";
     const body = currentUser?.isAdmin
-      ? { permanent: true, reason: "Заблокирован администратором" }
+      ? { permanent: true, reason: t("admin.blockedByAdmin") }
       : { targetId };
     const response = await apiFetch(endpoint, { method: "POST", credentials: "same-origin", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
     const data = await response.json().catch(() => ({})) as { error?: string };
-    if (!response.ok) throw new Error(data.error || "Не удалось заблокировать пользователя");
+    if (!response.ok) throw new Error(localizedApiError(data.error, t("social.blockError")));
     setProfileUserId(null);
     await refreshBootstrap();
   }
@@ -782,13 +785,13 @@ export function useBookMeetController() {
       const response = await apiFetch("/api/users/me/state", { method: "PUT", credentials: "same-origin", headers: { "content-type": "application/json" }, body: JSON.stringify({ profile: updatedUser.profile, avatarUrl: updatedUser.avatarUrl, reviews: updatedUser.reviews, excerpts: updatedUser.excerpts ?? [], publisherNews: updatedUser.publisherNews ?? [] }) });
       if (!response.ok) {
         const data = await response.json().catch(() => ({})) as { error?: string };
-        throw new Error(data.error || "Не удалось сохранить профиль и материалы");
+        throw new Error(localizedApiError(data.error, t("profile.saveMaterialsError")));
       }
     });
     profileSaveQueue.current = saveTask.catch(() => undefined);
     if (previous && updatedUser.reviews.length > previous.reviews.length) {
       const recipients = users.filter((user) => user.id !== updatedUser.id && (isFriendPair(user.id, updatedUser.id) || follows.some((follow) => follow.followerId === user.id && follow.targetId === updatedUser.id)));
-      recipients.forEach((recipient) => addNotification({ userId: recipient.id, actorId: updatedUser.id, type: "publication", title: "Новая рецензия", text: `${updatedUser.profile.name} опубликовал новую рецензию.` }));
+      recipients.forEach((recipient) => addNotification({ userId: recipient.id, actorId: updatedUser.id, type: "publication", title: t("notification.newReview"), text: t("notification.newReviewText", { name: updatedUser.profile.name }) }));
     }
     return saveTask.catch((error) => {
       if (previous) setUsers((current) => current.map((user) => user === updatedUser ? previous : user));
@@ -799,24 +802,24 @@ export function useBookMeetController() {
   async function handleHomeViewChange(homeView: "classic" | "feed") {
     const response = await apiFetch("/api/users/me/home-view", { method: "PATCH", credentials: "same-origin", headers: { "content-type": "application/json" }, body: JSON.stringify({ homeView }) });
     const data = await response.json().catch(() => ({})) as { error?: string };
-    if (!response.ok) throw new Error(data.error || "Не удалось сохранить вид главной страницы");
+    if (!response.ok) throw new Error(localizedApiError(data.error, t("settings.homeViewError")));
     setUsers((current) => current.map((user) => user.id === activeUserId ? { ...user, profile: { ...user.profile, homeView } } : user));
   }
 
   async function createEvent(value: typeof emptyEvent) {
     const response = await apiFetch("/api/events", { method: "POST", credentials: "same-origin", headers: { "content-type": "application/json" }, body: JSON.stringify(value) });
     const data = await response.json() as { event?: BookEvent; error?: string };
-    if (!response.ok || !data.event) { alert(data.error ?? "Не удалось отправить событие на модерацию"); return; }
+    if (!response.ok || !data.event) { alert(localizedApiError(data.error, t("event.submitError"))); return; }
     setEvents((current) => [...current, data.event!]);
     setEventFormOpen(false);
-    if (currentUser) addNotification({ userId: currentUser.id, actorId: currentUser.id, type: "event_submitted", title: "Событие на модерации", text: `Событие «${data.event.title}» отправлено на модерацию. Вы уже видите его на главной странице.`, materialId: data.event.id, materialKind: "event" });
+    if (currentUser) addNotification({ userId: currentUser.id, actorId: currentUser.id, type: "event_submitted", title: t("notification.eventSubmitted"), text: t("notification.eventSubmittedText", { title: data.event.title }), materialId: data.event.id, materialKind: "event" });
   }
 
   async function resubmitEvent(value: typeof emptyEvent) {
     if (!editingEvent) return;
     const response = await apiFetch(`/api/events/${editingEvent.id}`, { method: "PATCH", credentials: "same-origin", headers: { "content-type": "application/json" }, body: JSON.stringify(value) });
     const data = await response.json() as { event?: BookEvent; error?: string };
-    if (!response.ok || !data.event) { alert(data.error ?? "Не удалось повторно отправить событие"); return; }
+    if (!response.ok || !data.event) { alert(localizedApiError(data.error, t("event.resubmitError"))); return; }
     setEvents((current) => current.map((item) => item.id === editingEvent.id ? data.event! : item));
     setEditingEvent(null);
   }
@@ -824,14 +827,14 @@ export function useBookMeetController() {
   async function moderateEvent(id: number, action: "accept" | "revision" | "reject" | "edit", note = "", event?: typeof emptyEvent, pinned = false) {
     const response = await apiFetch(`/api/admin/events/${id}`, { method: "PATCH", credentials: "same-origin", headers: { "content-type": "application/json" }, body: JSON.stringify({ action, note, event, pinned }) });
     const data = await response.json() as { error?: string };
-    if (!response.ok) { alert(data.error ?? "Не удалось выполнить действие модерации"); return; }
+    if (!response.ok) { alert(localizedApiError(data.error, t("admin.applyDecisionError"))); return; }
     setEvents((current) => current.map((item) => item.id !== id ? item : action === "edit" && event ? { ...item, ...event } : { ...item, status: action === "accept" ? "published" : action === "revision" ? "needs_changes" : "rejected", moderationNote: note, pinned: action === "accept" ? pinned : false }));
   }
 
   async function createOccasion(value: typeof emptyOccasion) {
     const response = await apiFetch("/api/occasions", { method: "POST", credentials: "same-origin", headers: { "content-type": "application/json" }, body: JSON.stringify(value) });
     const data = await response.json() as { occasion?: Occasion; error?: string };
-    if (!response.ok || !data.occasion) { alert(data.error ?? "Не удалось отправить повод на модерацию"); return; }
+    if (!response.ok || !data.occasion) { alert(localizedApiError(data.error, t("occasion.submitError"))); return; }
     setOccasions((current) => [data.occasion!, ...current]); setOccasionFormOpen(false);
   }
 
@@ -839,7 +842,7 @@ export function useBookMeetController() {
     if (!editingOccasion) return;
     const response = await apiFetch(`/api/occasions/${editingOccasion.id}`, { method: "PATCH", credentials: "same-origin", headers: { "content-type": "application/json" }, body: JSON.stringify(value) });
     const data = await response.json() as { occasion?: Occasion; error?: string };
-    if (!response.ok || !data.occasion) { alert(data.error ?? "Не удалось повторно отправить повод"); return; }
+    if (!response.ok || !data.occasion) { alert(localizedApiError(data.error, t("occasion.resubmitError"))); return; }
     setOccasions((current) => current.map((item) => item.id === editingOccasion.id ? data.occasion! : item));
     setEditingOccasion(null);
   }
@@ -847,14 +850,14 @@ export function useBookMeetController() {
   async function moderateOccasion(id: number, action: "accept" | "revision" | "reject" | "edit", note = "", occasion?: typeof emptyOccasion) {
     const response = await apiFetch(`/api/admin/occasions/${id}`, { method: "PATCH", credentials: "same-origin", headers: { "content-type": "application/json" }, body: JSON.stringify({ action, note, occasion }) });
     const data = await response.json() as { error?: string };
-    if (!response.ok) { alert(data.error ?? "Не удалось выполнить действие модерации"); return; }
+    if (!response.ok) { alert(localizedApiError(data.error, t("admin.applyDecisionError"))); return; }
     setOccasions((current) => current.map((item) => item.id !== id ? item : action === "edit" && occasion ? { ...item, ...occasion, type: occasion.type || item.type } : { ...item, status: action === "accept" ? "published" : action === "revision" ? "needs_changes" : "rejected", moderationNote: note }));
   }
 
   async function moderatePublisher(id: number, action: "accept" | "revision" | "reject", note = "") {
     const response = await apiFetch(`/api/admin/publishers/${id}`, { method: "PATCH", credentials: "same-origin", headers: { "content-type": "application/json" }, body: JSON.stringify({ action, note }) });
     const data = await response.json().catch(() => ({})) as { error?: string };
-    if (!response.ok) { alert(data.error ?? "Не удалось изменить статус издательства"); return; }
+    if (!response.ok) { alert(localizedApiError(data.error, t("admin.publisherStatusError"))); return; }
     const publisherStatus = action === "accept" ? "approved" : action === "revision" ? "needs_changes" : "rejected";
     setUsers((current) => current.map((user) => user.id === id ? { ...user, profile: { ...user.profile, publisherStatus, publisherModerationNote: note } } : user));
   }
@@ -862,7 +865,7 @@ export function useBookMeetController() {
   async function deleteMaterial(kind: AdminCatalogKind, id: number) {
     const response = await apiFetch(`/api/admin/materials/${kind}/${id}`, { method: "DELETE", credentials: "same-origin" });
     const data = await response.json().catch(() => ({})) as { error?: string };
-    if (!response.ok) { window.alert(data.error ?? "Не удалось удалить материал"); return; }
+    if (!response.ok) { window.alert(localizedApiError(data.error, t("material.deleteError"))); return; }
     if (kind === "event") setEvents((current) => current.filter((item) => item.id !== id));
     else if (kind === "occasion") setOccasions((current) => current.filter((item) => item.id !== id));
     else setUsers((current) => current.map((user) => kind === "book" ? { ...user, books: user.books.filter((item) => item.id !== id), authorBooks: (user.authorBooks ?? []).filter((item) => item.id !== id), reviews: user.reviews.filter((item) => item.bookId !== id), excerpts: (user.excerpts ?? []).map((item) => item.bookId === id ? { ...item, bookId: undefined } : item) } : kind === "review" ? { ...user, reviews: user.reviews.filter((item) => item.id !== id) } : { ...user, excerpts: (user.excerpts ?? []).filter((item) => item.id !== id) }));
@@ -875,7 +878,7 @@ export function useBookMeetController() {
     if (["like", "comment"].includes(notification.type) && notification.materialId && notification.materialKind) {
       const owner = users.find((user) => user.id === notification.userId);
       if (notification.materialKind === "review") { const review = owner?.reviews.find((item) => item.id === notification.materialId); if (review) setSelectedMaterial({ id: review.id, kind: "review", title: review.bookTitle, author: owner!.profile.name, text: review.fullText, ownerId: owner!.id, createdAt: review.createdAt, preview: review.preview, bookAuthor: review.bookAuthor, rating: review.rating }); }
-      else if (notification.materialKind === "excerpt") { const excerpt = owner?.excerpts?.find((item) => item.id === notification.materialId); if (excerpt) setSelectedMaterial({ id: excerpt.id, kind: "excerpt", title: excerpt.bookTitle || "Публикация", author: owner!.profile.name, text: excerpt.text, preview: excerpt.previewText, bodyHtml: excerpt.bodyHtml, linkedBookId: excerpt.bookId, linkedBookIds: excerpt.bookIds, ownerId: owner!.id, createdAt: excerpt.createdAt }); }
+      else if (notification.materialKind === "excerpt") { const excerpt = owner?.excerpts?.find((item) => item.id === notification.materialId); if (excerpt) setSelectedMaterial({ id: excerpt.id, kind: "excerpt", title: excerpt.bookTitle || t("content.publications"), author: owner!.profile.name, text: excerpt.text, preview: excerpt.previewText, bodyHtml: excerpt.bodyHtml, linkedBookId: excerpt.bookId, linkedBookIds: excerpt.bookIds, ownerId: owner!.id, createdAt: excerpt.createdAt }); }
       else if (notification.materialKind === "event") setSelectedEvent(events.find((item) => item.id === notification.materialId) ?? null);
       else if (notification.materialKind === "occasion") setSelectedOccasion(occasions.find((item) => item.id === notification.materialId) ?? null);
       else setDetailNotification(notification);
@@ -899,7 +902,7 @@ export function useBookMeetController() {
         setSuspension({ permanent: Boolean(locked.permanent), until: locked.until, reason: locked.reason ?? "" });
         await finishMinimumLoading(loadingStartedAt); setAuthTransition(false); return {};
       }
-      if (!response.ok) { await finishMinimumLoading(loadingStartedAt); setAuthTransition(false); return { error: data.error ?? "Не удалось войти" }; }
+      if (!response.ok) { await finishMinimumLoading(loadingStartedAt); setAuthTransition(false); return { error: localizedApiError(data.error, t("auth.loginError")) }; }
       applyBootstrap(data);
       setNewlyRegistered(false);
       const returnTo = safeReturnTo(sessionStorage.getItem("bookmeet:returnTo") || "/");
@@ -911,7 +914,7 @@ export function useBookMeetController() {
       return {};
     } catch {
       await finishMinimumLoading(loadingStartedAt); setAuthTransition(false);
-      return { error: "Не удалось связаться с сервером Book Meet" };
+      return { error: t("common.serverConnectionError") };
     }
   }
 
@@ -921,7 +924,7 @@ export function useBookMeetController() {
     try {
       const response = await apiFetch("/api/auth/register", { method: "POST", credentials: "same-origin", headers: { "content-type": "application/json" }, body: JSON.stringify(value) });
       const data = await response.json() as BootstrapData & AuthResult;
-      if (!response.ok) { await finishMinimumLoading(loadingStartedAt); setAuthTransition(false); return { error: data.error ?? "Не удалось создать профиль" }; }
+      if (!response.ok) { await finishMinimumLoading(loadingStartedAt); setAuthTransition(false); return { error: localizedApiError(data.error, t("auth.createProfileError")) }; }
       applyBootstrap(data);
       setNewlyRegistered(true);
       window.history.replaceState({}, "", "/profile");
@@ -930,7 +933,7 @@ export function useBookMeetController() {
       return {};
     } catch {
       await finishMinimumLoading(loadingStartedAt); setAuthTransition(false);
-      return { error: "Не удалось связаться с сервером Book Meet" };
+      return { error: t("common.serverConnectionError") };
     }
   }
 
@@ -938,7 +941,7 @@ export function useBookMeetController() {
     await apiFetch("/api/auth/logout", { method: "POST", credentials: "same-origin" }).catch(() => undefined);
     setUsers([]); setCatalogBooks([]); setActiveUserId(null); setMessages({}); setFriendRequests([]); setFriendships([]); setCommunityMemberships([]); setFollows([]); setNotifications([]); setLikes({}); setEvents([]); setOccasions([]); setBlocks([]); setBlockedByUserIds([]); setReports([]); setSuspension(null); setCommenters({}); setSelectedFriend(null); setChatExpanded(false);
     navigateMainView("home", { replace: true }); setNotificationsOpen(false); setProfileAction(null); setNewlyRegistered(false); setGuestAuthOpen(false); setAuthTransition(false);
-    loadPublicCatalog().then(setPublicCatalog).catch((error) => setStartupError(error instanceof Error ? error.message : "Не удалось загрузить публичный каталог"));
+    loadPublicCatalog().then(setPublicCatalog).catch((error) => setStartupError(error instanceof Error ? error.message : t("catalog.publicLoadError")));
   }
 
   async function resolveDeletedProfile(action: "restore" | "new") {
@@ -946,14 +949,14 @@ export function useBookMeetController() {
     try {
       const response = await apiFetch(`/api/auth/deleted-profile/${action}`, { method: "POST", credentials: "same-origin" });
       const data = await response.json() as BootstrapData & { error?: string };
-      if (!response.ok) throw new Error(data.error || "Не удалось обработать удалённый профиль");
+      if (!response.ok) throw new Error(localizedApiError(data.error, t("profile.deletedResolveError")));
       applyBootstrap(data);
       setDeletedRecovery(null);
       setNewlyRegistered(action === "new");
       setView(action === "new" ? "profile" : "home");
       window.history.replaceState({}, "", action === "new" ? "/profile" : "/");
     } catch (error) {
-      setStartupError(error instanceof Error ? error.message : "Не удалось обработать удалённый профиль");
+      setStartupError(error instanceof Error ? error.message : t("profile.deletedResolveError"));
     } finally {
       setAuthTransition(false);
     }
@@ -961,8 +964,8 @@ export function useBookMeetController() {
 
   if (authTransition) return <AuthBookTransition />;
   if (authLoading) return <AuthBookTransition />;
-  if (deletedRecovery) return <main className="deleted-profile-recovery"><section role="dialog" aria-modal="true"><h1>Профиль удалён</h1><p>Данные профиля будут храниться ещё {deletedRecovery.daysRemaining} дн. Вы можете восстановить прежний профиль или создать новый.</p><p>При создании нового профиля прежний будет удалён окончательно. Это действие нельзя отменить.</p>{startupError && <span className="login-error">{startupError}</span>}<div className="form-actions"><button className="primary-button" type="button" onClick={() => void resolveDeletedProfile("restore")}>Восстановить профиль</button><button className="danger-button" type="button" onClick={() => void resolveDeletedProfile("new")}>Создать новый</button></div></section></main>;
-  if (suspension) return <main className="suspension-screen"><section><h1>Доступ к сайту ограничен</h1><p>{suspension.permanent ? "Ваш профиль заблокирован бессрочно." : `Ваш профиль заблокирован до ${new Date(suspension.until ?? "").toLocaleString("ru-RU")}.`}</p><p><strong>Причина:</strong> {suspension.reason || "Нарушение правил сайта."}</p></section></main>;
+  if (deletedRecovery) return <main className="deleted-profile-recovery"><section role="dialog" aria-modal="true"><h1>{t("profile.deletedTitle")}</h1><p>{t("profile.deletedRetention", { days: formatNumber(deletedRecovery.daysRemaining) })}</p><p>{t("profile.deletedNewWarning")}</p>{startupError && <span className="login-error">{startupError}</span>}<div className="form-actions"><button className="primary-button" type="button" onClick={() => void resolveDeletedProfile("restore")}>{t("admin.restoreProfile")}</button><button className="danger-button" type="button" onClick={() => void resolveDeletedProfile("new")}>{t("profile.createNew")}</button></div></section></main>;
+  if (suspension) return <main className="suspension-screen"><section><h1>{t("profile.accessRestricted")}</h1><p>{suspension.permanent ? t("profile.blockedIndefinitely") : t("profile.blockedUntil", { date: formatDate(suspension.until ?? "", { dateStyle: "medium", timeStyle: "short" }) })}</p><p><strong>{t("safety.reason")}:</strong> <span data-i18n-skip>{suspension.reason || t("profile.rulesViolation")}</span></p></section></main>;
   if (!currentUser) {
     if (guestAuthOpen || !publicCatalog) return <LoginScreen onLogin={login} onRegister={register} initialError={startupError} />;
     return <GuestExperience data={publicCatalog} onAuthenticate={(returnTo) => { sessionStorage.setItem("bookmeet:returnTo", safeReturnTo(returnTo || window.location.href)); setGuestAuthOpen(true); }} />;
@@ -983,7 +986,7 @@ export function useBookMeetController() {
     setSelectedFriend(null);
     setChatExpanded(false);
     setMobileFriendsOpen(false);
-    document.title = mainViewTitles.chat;
+    document.title = localizedViewTitle("chat");
   };
   const toggleChatExpanded = () => {
     const nextExpanded = !chatExpanded;
@@ -998,7 +1001,7 @@ export function useBookMeetController() {
     else if (attachment.kind === "user") openUserProfile(attachment.id);
     else if (attachment.kind === "event") setSelectedEvent(events.find((item) => item.id === attachment.id) ?? null);
     else if (attachment.kind === "review") setSelectedMaterial(reviewReadingItemById(users, attachment.id));
-    else if (attachment.kind === "excerpt") setSelectedMaterial(excerptReadingItemById(users, attachment.id));
+    else if (attachment.kind === "excerpt") setSelectedMaterial(excerptReadingItemById(users, attachment.id, t("content.publications")));
     else setSelectedOccasion(occasions.find((item) => item.id === attachment.id) ?? null);
   };
   const chat = selectedFriend ? <ChatView friend={selectedFriend} messages={activeChatMessages} profileEnabled={!selectedFriend.support} onOpenProfile={() => openUserProfile(selectedFriend.id)} onSend={sendMessage} shareItems={shareItems} onOpenAttachment={openChatAttachment} onReport={!currentUser.isAdmin && !selectedFriend.support ? () => openReportDialog({ kind: "chat", id: selectedFriend.id }) : undefined} expanded={chatExpanded} onToggleExpanded={toggleChatExpanded} onClose={closeChat} /> : null;
@@ -1006,7 +1009,7 @@ export function useBookMeetController() {
   const visibleHomeEvents = upcomingEvents.filter((item) => item.creatorId === currentUser.id && item.status !== "rejected" || item.status === "published").sort((a, b) => eventTimestamp(a) - eventTimestamp(b));
   const visibleHomeOccasions = occasions.filter((item) => item.creatorId === currentUser.id && item.status !== "rejected" || item.status === "published" && (item.targetGender === "Все" || item.targetGender === currentUser.profile.gender) && (item.targetProfileType === "Все" || item.targetProfileType === currentUser.profile.type));
   const materialDirectoryProps = { reviews: allReviews, excerpts: allExcerpts, publisherNews: allPublisherNews, currentUser, users: visibleUsers, catalog, likes, commenters, onToggleLike: toggleLike, onComment: addComment, onOpenUser: openUserProfile, relationshipFor, isFollowing: followsUser, onAddFriend: sendFriendRequest, onFollow: followUser };
-  const directoryShell = (content: ReactNode) => <div className="directory-page-shell"><button className="back-button directory-home-button" type="button" onClick={goHome}>← На главную</button>{content}</div>;
+  const directoryShell = (content: ReactNode) => <div className="directory-page-shell"><button className="back-button directory-home-button" type="button" onClick={goHome}>← {t("common.home")}</button>{content}</div>;
   const workspaceContent = view === "reviews"
     ? directoryShell(<MaterialsDirectoryPage kind="review" onCreate={() => startCreating("review")} {...materialDirectoryProps} />)
     : view === "publications"
@@ -1031,8 +1034,8 @@ export function useBookMeetController() {
   return (
     <div className="app-shell">
       <BookMeetHeader
-        accountName={currentUser.isAdmin ? "Служба поддержки" : currentUser.profile.name}
-        accountCaption={currentUser.isAdmin ? "Админка" : "Мой профиль"}
+        accountName={currentUser.isAdmin ? t("chat.support") : currentUser.profile.name}
+        accountCaption={currentUser.isAdmin ? t("admin.title") : t("profile.my")}
         initials={currentUser.initials}
         avatarUrl={currentUser.avatarUrl}
         unreadCount={unreadCount}
@@ -1076,22 +1079,22 @@ export function useBookMeetController() {
 
       {selectedBook && <UnifiedBookModal book={selectedBook} users={visibleUsers} catalog={catalog} events={events} retainWhenInactive onClose={() => setSelectedBook(null)} onReport={currentUser.isAdmin || selectedBook.creatorUserId === currentUser.id || users.some((user) => user.id === currentUser.id && (user.authorBooks ?? []).some((book) => book.id === selectedBook.id)) ? undefined : () => openReportDialog({ kind: "book", id: selectedBook.id })} onOpenUser={openUserProfile} onOpenEvent={(event) => setSelectedEvent(event)} onOpenReview={(review, user) => { setSelectedMaterial({ id: review.id, kind: "review", title: review.bookTitle, author: user.profile.name, text: review.fullText, bodyHtml: review.bodyHtml, linkedBookId: review.bookId, ownerId: user.id, createdAt: review.createdAt, preview: review.preview, bookAuthor: review.bookAuthor, rating: review.rating }); }} />}
       {selectedMaterial && <ReadingModal item={selectedMaterial} currentUser={currentUser} users={visibleUsers} catalog={catalog} likedUserIds={likes[`${selectedMaterial.kind}-${selectedMaterial.id}`] ?? []} onToggleLike={() => toggleLike(selectedMaterial)} onComment={(text) => addComment(selectedMaterial, text)} onOpenUser={openUserProfile} onClose={() => setSelectedMaterial(null)} onReport={selectedMaterial.ownerId !== currentUser.id && !currentUser.isAdmin ? () => openReportDialog({ kind: selectedMaterial.kind, id: selectedMaterial.id }) : undefined} onEdit={currentUser.isAdmin || selectedMaterial.ownerId === currentUser.id ? () => void editReadingMaterial(selectedMaterial, currentUser) : undefined} onDelete={currentUser.isAdmin || selectedMaterial.ownerId === currentUser.id ? () => void deleteReadingMaterial(selectedMaterial, currentUser) : undefined} />}
-      {adminEditingMaterial && <AdminCatalogEditor item={adminEditingMaterial} users={users} catalog={catalog} onClose={() => setAdminEditingMaterial(null)} onSave={async (payload) => { const response = await fetch(`/api/admin/materials/${adminEditingMaterial.kind}/${adminEditingMaterial.id}`, { method: "PATCH", credentials: "same-origin", headers: { "content-type": "application/json" }, body: JSON.stringify(payload) }); const data = await response.json().catch(() => ({})) as { error?: string }; if (!response.ok) { window.alert(data.error ?? "Не удалось сохранить изменения"); return; } setAdminEditingMaterial(null); await refreshBootstrap(); }} />}
+      {adminEditingMaterial && <AdminCatalogEditor item={adminEditingMaterial} users={users} catalog={catalog} onClose={() => setAdminEditingMaterial(null)} onSave={async (payload) => { const response = await fetch(`/api/admin/materials/${adminEditingMaterial.kind}/${adminEditingMaterial.id}`, { method: "PATCH", credentials: "same-origin", headers: { "content-type": "application/json" }, body: JSON.stringify(payload) }); const data = await response.json().catch(() => ({})) as { error?: string }; if (!response.ok) { window.alert(localizedApiError(data.error, t("common.saveChangesError"))); return; } setAdminEditingMaterial(null); await refreshBootstrap(); }} />}
       {detailNotification && <NotificationDetail notification={detailNotification} actor={users.find((user) => user.id === detailNotification.actorId)} isFollowing={follows.some((follow) => follow.followerId === currentUser.id && follow.targetId === detailNotification.actorId)} onClose={() => setDetailNotification(null)} onFollow={() => followUser(detailNotification.actorId)} />}
       {quickMaterialAction === "review" && <ReviewEditor catalog={catalog} onClose={() => setQuickMaterialAction(null)} onSave={(review) => { const nextUser = { ...currentUser, reviews: [review, ...currentUser.reviews] }; setQuickMaterialAction(null); void handleUserChange(nextUser); }} />}
       {quickMaterialAction === "excerpt" && <PublicationEditor catalog={catalog} onClose={() => setQuickMaterialAction(null)} onSave={(excerpt) => { const nextUser = { ...currentUser, excerpts: [excerpt, ...(currentUser.excerpts ?? [])] }; setQuickMaterialAction(null); void handleUserChange(nextUser); }} />}
       {eventFormOpen && <div className="modal-backdrop" onMouseDown={() => setEventFormOpen(false)}><section className="event-editor-modal" onMouseDown={(event) => event.stopPropagation()}><EventForm catalog={catalog} onCreateBook={() => { setEventFormOpen(false); startCreating("book"); }} onCancel={() => setEventFormOpen(false)} onSave={createEvent} /></section></div>}
-      {editingEvent && <div className="modal-backdrop" onMouseDown={() => setEditingEvent(null)}><section className="event-editor-modal" onMouseDown={(event) => event.stopPropagation()}><EventForm initial={editingEvent} catalog={catalog} onCreateBook={() => { setEditingEvent(null); startCreating("book"); }} submitLabel="Отправить повторно" onCancel={() => setEditingEvent(null)} onSave={resubmitEvent} /></section></div>}
+      {editingEvent && <div className="modal-backdrop" onMouseDown={() => setEditingEvent(null)}><section className="event-editor-modal" onMouseDown={(event) => event.stopPropagation()}><EventForm initial={editingEvent} catalog={catalog} onCreateBook={() => { setEditingEvent(null); startCreating("book"); }} submitLabel={t("moderation.resubmit")} onCancel={() => setEditingEvent(null)} onSave={resubmitEvent} /></section></div>}
       {selectedEvent && <EventModal item={selectedEvent} users={visibleUsers} currentUserId={currentUser.id} currentUser={currentUser} onOpenUser={openUserProfile} onReport={selectedEvent.creatorId !== currentUser.id && !currentUser.isAdmin ? () => openReportDialog({ kind: "event", id: selectedEvent.id }) : undefined} onOpenBook={(bookId) => {
         setSelectedBook(catalog.find((book) => book.id === (bookId ?? selectedEvent.linkedBookId)) ?? null);
       }} onClose={() => setSelectedEvent(null)} />}
       {occasionFormOpen && <div className="modal-backdrop" onMouseDown={() => setOccasionFormOpen(false)}><section className="event-editor-modal" onMouseDown={(event) => event.stopPropagation()}><OccasionForm catalog={catalog} onCancel={() => setOccasionFormOpen(false)} onSave={createOccasion} /></section></div>}
-      {editingOccasion && <div className="modal-backdrop" onMouseDown={() => setEditingOccasion(null)}><section className="event-editor-modal" onMouseDown={(event) => event.stopPropagation()}><OccasionForm initial={editingOccasion} catalog={catalog} submitLabel="Отправить повторно" onCancel={() => setEditingOccasion(null)} onSave={resubmitOccasion} /></section></div>}
+      {editingOccasion && <div className="modal-backdrop" onMouseDown={() => setEditingOccasion(null)}><section className="event-editor-modal" onMouseDown={(event) => event.stopPropagation()}><OccasionForm initial={editingOccasion} catalog={catalog} submitLabel={t("moderation.resubmit")} onCancel={() => setEditingOccasion(null)} onSave={resubmitOccasion} /></section></div>}
       {selectedOccasion && <OccasionModal item={selectedOccasion} currentUser={currentUser} users={visibleUsers} onReport={selectedOccasion.creatorId !== currentUser.id && !currentUser.isAdmin ? () => openReportDialog({ kind: "occasion", id: selectedOccasion.id }) : undefined} onOpenUser={openUserProfile} onOpenBook={(bookId) => { setSelectedBook(catalog.find((book) => book.id === bookId) ?? null); }} onClose={() => setSelectedOccasion(null)} />}
-      {roleRestrictionNotice && <div className="modal-backdrop" onMouseDown={() => setRoleRestrictionNotice(null)}><section className="simple-warning-modal" role="dialog" aria-modal="true" onMouseDown={(event) => event.stopPropagation()}><h2>{roleRestrictionNotice === "review" ? "Рецензии могут писать только читатели и блогеры" : roleRestrictionNotice === "excerpt" ? "Публикации могут создавать только писатели и блогеры" : roleRestrictionNotice === "occasion" ? "Организационные профили не могут создавать поводы познакомиться" : "Профиль организации ожидает официального подтверждения"}</h2><button className="primary-button" type="button" autoFocus onClick={() => setRoleRestrictionNotice(null)}>Закрыть</button></section></div>}
+      {roleRestrictionNotice && <div className="modal-backdrop" onMouseDown={() => setRoleRestrictionNotice(null)}><section className="simple-warning-modal" role="dialog" aria-modal="true" onMouseDown={(event) => event.stopPropagation()}><h2>{roleRestrictionNotice === "review" ? t("restriction.reviewRoles") : roleRestrictionNotice === "excerpt" ? t("restriction.publicationRoles") : roleRestrictionNotice === "occasion" ? t("restriction.organizationOccasion") : t("restriction.organizationPending")}</h2><button className="primary-button" type="button" autoFocus onClick={() => setRoleRestrictionNotice(null)}>{t("common.close")}</button></section></div>}
       {profileUser && profileUser.id !== currentUser.id && <UserProfileModal user={profileUser} viewer={currentUser} users={visibleUsers} catalog={catalog} profileFriends={profileFriendUsers} events={events} occasions={occasions} likes={likes} friendCount={profileFriendUsers.length} relationship={relationshipToProfile} incomingMessage={friendRequests.find((request) => request.status === "pending" && request.fromId === profileUser.id && request.toId === currentUser.id)?.message} isFollowing={(currentUser.profile.type === "Издатель" || profileUser.profile.type === "Издатель" ? false : isFriendPair(currentUser.id, profileUser.id)) || follows.some((follow) => follow.followerId === currentUser.id && follow.targetId === profileUser.id)} canMessage={Boolean(currentUser.isAdmin || profileUser.isAdmin || currentUser.profile.type === "Издатель" || profileUser.profile.type === "Издатель")} blockedByMe={Boolean(profileUser.blockedByMe || currentUser.isAdmin && profileUser.suspension)} onClose={() => setProfileUserId(null)} onAddFriend={(message) => sendFriendRequest(profileUser.id, message)} onCancelFriendRequest={() => cancelFriendRequest(profileUser.id)} onAccept={() => acceptFriend(profileUser.id)} onReject={(comment) => rejectFriend(profileUser.id, comment)} onRemoveFriend={() => removeFriend(profileUser.id)} onOpenChat={() => openChat(profileUser.id)} onFollow={() => followUser(profileUser.id)} onUnfollow={() => unfollowUser(profileUser.id)} onBlock={() => blockUser(profileUser.id)} onUnblock={() => unblockUser(profileUser.id)} onReport={currentUser.isAdmin ? undefined : () => openReportDialog({ kind: "user", id: profileUser.id })} onToggleLike={toggleLike} onComment={addComment} onOpenUser={openUserProfile} />}
-      {blockedProfileNotice && <div className="nested-modal-backdrop" onMouseDown={() => setBlockedProfileNotice(false)}><section className="confirm-social-modal" role="alertdialog" aria-modal="true" onMouseDown={(event) => event.stopPropagation()}><h2>Кажется, с вами не хотят общаться</h2><button className="primary-button" type="button" autoFocus onClick={() => setBlockedProfileNotice(false)}>Ок</button></section></div>}
-      {adultRestrictionNotice && <div className="nested-modal-backdrop"><section className="adult-restriction-modal" role="alertdialog" aria-modal="true" aria-labelledby="adult-restriction-title"><span className="adult-restriction-mark" aria-hidden="true">18+</span><h2 id="adult-restriction-title">Материал предназначен для лиц старше 18 лет</h2>{adultRestrictionNotice === "missing" && <p>Пожалуйста, укажите дату рождения в профиле, чтобы система могла определить ваш возраст.</p>}<div className="form-actions">{adultRestrictionNotice === "missing" ? <><button className="primary-button" type="button" onClick={() => leaveRestrictedMaterial(true)}>Перейти в профиль</button><button className="outline-button" type="button" onClick={() => leaveRestrictedMaterial(false)}>Выйти</button></> : <button className="primary-button" type="button" autoFocus onClick={() => leaveRestrictedMaterial(false)}>Ок</button>}</div></section></div>}
+      {blockedProfileNotice && <div className="nested-modal-backdrop" onMouseDown={() => setBlockedProfileNotice(false)}><section className="confirm-social-modal" role="alertdialog" aria-modal="true" onMouseDown={(event) => event.stopPropagation()}><h2>{t("social.blockedNotice")}</h2><button className="primary-button" type="button" autoFocus onClick={() => setBlockedProfileNotice(false)}>{t("common.ok")}</button></section></div>}
+      {adultRestrictionNotice && <div className="nested-modal-backdrop"><section className="adult-restriction-modal" role="alertdialog" aria-modal="true" aria-labelledby="adult-restriction-title"><span className="adult-restriction-mark" aria-hidden="true">18+</span><h2 id="adult-restriction-title">{t("content.adultRestriction")}</h2>{adultRestrictionNotice === "missing" && <p>{t("content.birthDateRequired")}</p>}<div className="form-actions">{adultRestrictionNotice === "missing" ? <><button className="primary-button" type="button" onClick={() => leaveRestrictedMaterial(true)}>{t("event.goProfile")}</button><button className="outline-button" type="button" onClick={() => leaveRestrictedMaterial(false)}>{t("common.logout")}</button></> : <button className="primary-button" type="button" autoFocus onClick={() => leaveRestrictedMaterial(false)}>{t("common.ok")}</button>}</div></section></div>}
       {catalogBookToAdd && <BookEditor book={catalogBookToAdd} catalog={catalog} top3Count={currentUser.books.filter((item) => item.topRank).length} onClose={() => setCatalogBookToAdd(null)} onSave={(book) => void saveCatalogBookToLibrary(book)} />}
       <SafetyCenter onChanged={() => void refreshBootstrap()} />
     </div>

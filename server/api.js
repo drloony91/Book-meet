@@ -15,6 +15,7 @@ import { createLocationRouter } from "./modules/location-router.js";
 import { canCreateFriendRequest, canMessagePair } from "./modules/social-permissions.js";
 import { consumeAccountActionToken, createOpaqueActionToken, EMAIL_VERIFICATION_TTL_MINUTES, PASSWORD_RESET_TTL_MINUTES, replaceAccountActionToken } from "./modules/account-tokens.js";
 import { sendAccountEmail } from "./modules/mailer.js";
+import { authText, requestLocale } from "./modules/i18n.js";
 import { enqueueTelegramAlert, shouldEnqueueSupportAlert } from "./modules/telegram-outbox.js";
 import { loadPublicCatalog } from "./modules/public-catalog.js";
 import { nextTopRank, top3Eligibility } from "./modules/top3.js";
@@ -227,29 +228,29 @@ function passwordRecoveryAllowed(request, email) {
   return true;
 }
 
-async function sendVerificationEmail(email, token) {
+async function sendVerificationEmail(email, token, locale = "ru") {
+  const link = accountActionLink("verify", token);
   return sendAccountEmail({
     to: email,
-    subject: "Подтвердите e-mail в Book Meet",
-    text: `Вы зарегистрировались в Book Meet. Подтвердите e-mail по ссылке: ${accountActionLink("verify", token)}\n\nПароли не отправляются по e-mail и не содержатся в этом письме.`,
+    subject: authText(locale, "verificationSubject"),
+    text: authText(locale, "verificationText", { link }),
   });
 }
 
-async function sendPasswordResetEmail(email, token) {
+async function sendPasswordResetEmail(email, token, locale = "ru") {
+  const link = accountActionLink("reset", token);
   return sendAccountEmail({
     to: email,
-    subject: "Восстановление пароля Book Meet",
-    text: `Чтобы задать новый пароль Book Meet, откройте ссылку: ${accountActionLink("reset", token)}\n\nЕсли это были не вы, просто проигнорируйте письмо. Пароли не отправляются по e-mail и не содержатся в этом письме.`,
+    subject: authText(locale, "resetSubject"),
+    text: authText(locale, "resetText", { link }),
   });
 }
 
-async function sendGoogleAccountEmail(email, created = false) {
+async function sendGoogleAccountEmail(email, created = false, locale = "ru") {
   return sendAccountEmail({
     to: email,
-    subject: created ? "Регистрация в Book Meet через Google" : "Восстановление доступа Book Meet",
-    text: created
-      ? "Ваш профиль Book Meet создан через Google. Для входа используйте кнопку Google. Пароли не отправляются по e-mail и не содержатся в этом письме."
-      : "Этот профиль Book Meet использует вход через Google. Пароль для него не устанавливается: войдите кнопкой Google. Пароли не отправляются по e-mail и не содержатся в этом письме.",
+    subject: authText(locale, created ? "googleCreatedSubject" : "googleRecoverySubject"),
+    text: authText(locale, created ? "googleCreatedText" : "googleRecoveryText"),
   });
 }
 
@@ -1075,7 +1076,7 @@ const googleCallback = asyncRoute(async (request, response) => {
     email: normalizeEmail(tokenInfo.email),
     name: tokenInfo.name,
   });
-  if (identity.created && identity.email) await sendGoogleAccountEmail(identity.email, true);
+  if (identity.created && identity.email) await sendGoogleAccountEmail(identity.email, true, requestLocale(request));
   const token = await createSession(getPool(), identity.userId);
   response.setHeader("Set-Cookie", [
     sessionCookie(token, request),
@@ -1113,7 +1114,7 @@ router.post("/auth/google/credential", asyncRoute(async (request, response) => {
       email: normalizeEmail(tokenInfo.email),
       name: tokenInfo.name,
     });
-    if (identity.created && identity.email) await sendGoogleAccountEmail(identity.email, true);
+    if (identity.created && identity.email) await sendGoogleAccountEmail(identity.email, true, requestLocale(request));
     const token = await createSession(getPool(), identity.userId);
     response.setHeader("Set-Cookie", sessionCookie(token, request));
     response.json({ ok: true, registered: identity.created });
@@ -1126,9 +1127,10 @@ router.post("/auth/google/credential", asyncRoute(async (request, response) => {
 router.use(createLocationRouter({ asyncRoute }));
 
 router.post("/auth/register", asyncRoute(async (request, response) => {
+  const locale = requestLocale(request);
   const email = normalizeEmail(request.body?.email);
   const password = String(request.body?.password ?? "");
-  if (!isValidEmail(email) || password.length < 8) return response.status(400).json({ error: "Укажите корректный e-mail и пароль не короче 8 знаков" });
+  if (!isValidEmail(email) || password.length < 8) return response.status(400).json({ code: "AUTH_INVALID_CREDENTIALS", error: authText(locale, "invalidCredentials") });
   const verificationToken = createOpaqueActionToken();
   const result = await withTransaction(async (connection) => {
     const [[duplicate]] = await connection.query("SELECT id FROM users WHERE email_key = ?", [email]);
@@ -1152,31 +1154,33 @@ router.post("/auth/register", asyncRoute(async (request, response) => {
     return { userId, token };
   });
   response.setHeader("Set-Cookie", sessionCookie(result.token, request));
-  await sendVerificationEmail(email, verificationToken);
+  await sendVerificationEmail(email, verificationToken, locale);
   response.status(201).json(await loadBootstrap(result.userId));
 }));
 
 router.post("/auth/email-verification/confirm", asyncRoute(async (request, response) => {
+  const locale = requestLocale(request);
   const token = String(request.body?.token ?? "");
-  if (token.length < 32 || token.length > 200) return response.status(400).json({ error: "Ссылка подтверждения недействительна или истекла" });
+  if (token.length < 32 || token.length > 200) return response.status(400).json({ code: "AUTH_VERIFICATION_INVALID", error: authText(locale, "verificationInvalid") });
   const verified = await withTransaction(async (connection) => {
     const userId = await consumeAccountActionToken(connection, { token, purpose: "email_verify" });
     if (!userId) return false;
     const [updated] = await connection.query("UPDATE users SET email_verified_at = COALESCE(email_verified_at, UTC_TIMESTAMP()) WHERE id = ? AND purged_at IS NULL", [userId]);
     return Boolean(updated.affectedRows);
   });
-  if (!verified) return response.status(400).json({ error: "Ссылка подтверждения недействительна или истекла" });
+  if (!verified) return response.status(400).json({ code: "AUTH_VERIFICATION_INVALID", error: authText(locale, "verificationInvalid") });
   response.json({ verified: true });
 }));
 
 router.post("/auth/password-reset/request", asyncRoute(async (request, response) => {
+  const locale = requestLocale(request);
   const email = normalizeEmail(request.body?.email);
-  const generic = { ok: true, message: "Если такой e-mail зарегистрирован, дальнейшие инструкции отправлены." };
+  const generic = { ok: true, code: "AUTH_RECOVERY_SENT", message: authText(locale, "recoveryGeneric") };
   if (!isValidEmail(email) || !passwordRecoveryAllowed(request, email)) return response.json(generic);
   const [[account]] = await getPool().query("SELECT id, email, google_subject, password_login_enabled, purged_at FROM users WHERE email_key = ? LIMIT 1", [email]);
   if (!account || account.purged_at) return response.json(generic);
   if (account.google_subject && !account.password_login_enabled) {
-    await sendGoogleAccountEmail(account.email, false);
+    await sendGoogleAccountEmail(account.email, false, locale);
     return response.json(generic);
   }
   const resetToken = createOpaqueActionToken();
@@ -1184,14 +1188,15 @@ router.post("/auth/password-reset/request", asyncRoute(async (request, response)
     const [[locked]] = await connection.query("SELECT id FROM users WHERE id = ? AND purged_at IS NULL FOR UPDATE", [account.id]);
     if (locked) await replaceAccountActionToken(connection, { userId: Number(locked.id), purpose: "password_reset", token: resetToken, ttlMinutes: PASSWORD_RESET_TTL_MINUTES });
   });
-  await sendPasswordResetEmail(account.email, resetToken);
+  await sendPasswordResetEmail(account.email, resetToken, locale);
   response.json(generic);
 }));
 
 router.post("/auth/password-reset/confirm", asyncRoute(async (request, response) => {
+  const locale = requestLocale(request);
   const token = String(request.body?.token ?? "");
   const password = String(request.body?.password ?? "");
-  if (token.length < 32 || token.length > 200 || password.length < 8) return response.status(400).json({ error: "Не удалось сохранить новый пароль. Проверьте ссылку и требования к паролю." });
+  if (token.length < 32 || token.length > 200 || password.length < 8) return response.status(400).json({ code: "AUTH_RESET_INVALID", error: authText(locale, "resetInvalid") });
   const reset = await withTransaction(async (connection) => {
     const userId = await consumeAccountActionToken(connection, { token, purpose: "password_reset" });
     if (!userId) return false;
@@ -1368,7 +1373,7 @@ router.post("/linked-profiles/create", asyncRoute(async (request, response) => {
     await replaceAccountActionToken(connection, { userId: communityId, purpose: "email_verify", token: verificationToken, ttlMinutes: EMAIL_VERIFICATION_TTL_MINUTES });
     return { communityId };
   });
-  await sendVerificationEmail(email, verificationToken);
+  await sendVerificationEmail(email, verificationToken, requestLocale(request));
   response.status(201).json({ linkedProfile: { id: result.communityId, name, type: "Сообщество", profileCompleted: false }, created: true });
 }));
 
@@ -1416,7 +1421,7 @@ router.post("/linked-profiles/google", asyncRoute(async (request, response) => {
     await connection.query("INSERT INTO linked_profiles (personal_user_id, community_user_id) VALUES (?, ?)", [personalId, target.id]);
     return { communityId: Number(target.id), created };
   });
-  if (result.created) await sendGoogleAccountEmail(normalizeEmail(identity.email), true).catch(() => undefined);
+  if (result.created) await sendGoogleAccountEmail(normalizeEmail(identity.email), true, requestLocale(request)).catch(() => undefined);
   response.json({ linked: true, ...result });
 }));
 

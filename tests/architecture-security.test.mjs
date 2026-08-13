@@ -13,8 +13,14 @@ import { safeReturnTo } from "../app/lib/navigation-security.js";
 import { loadPublicCatalog } from "../server/modules/public-catalog.js";
 import { consumeAccountActionToken, createOpaqueActionToken, hashAccountActionToken, replaceAccountActionToken } from "../server/modules/account-tokens.js";
 import { mailerEnabled, sendAccountEmail } from "../server/modules/mailer.js";
+import { en, kk, ru } from "../app/i18n/messages.ts";
 
 const root = path.resolve(import.meta.dirname, "..");
+const assertLocalized = (source, key) => {
+  const escapedKey = key.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  assert.match(source, new RegExp(`(?:t\\(\\s*|translate\\([^,]+,\\s*)["']${escapedKey}["']`));
+  for (const messages of [ru, kk, en]) assert.equal(typeof messages[key], "string", `${key} must exist in every locale`);
+};
 
 test("TOP3 assigns stable free ranks and rejects ineligible copies", () => {
   assert.equal(nextTopRank([{ book_id: 10, top_rank: 1 }, { book_id: 11, top_rank: 3 }], 11), 3);
@@ -206,10 +212,10 @@ test("дата рождения, спойлеры и материалы 18+ за
   assert.match(api, /assertAdultMaterialAllowed/);
   assert.match(data, /hideAdultMaterials/);
   assert.match(data, /show_birth_date_to_friends && isViewerFriend/);
-  assert.match(profile, /Показывать дату рождения друзьям/);
-  assert.match(profile, /Изменить порядок пунктов меню профиля/);
-  assert.match(content, /Скрыть под спойлер/);
-  assert.match(content, /Прочитано глав/);
+  assertLocalized(profile, "profile.showBirthDate");
+  assertLocalized(profile, "settings.changeOrder");
+  assertLocalized(content, "editor.spoiler");
+  assertLocalized(content, "library.chaptersRead");
 });
 
 test("участие в сообществе не является дружбой, а реакции читают только доступные материалы", async () => {
@@ -280,10 +286,11 @@ test("локальные правки этапа 1 закреплены конт
   const users = await readFile(path.join(root, "app", "screens", "UsersDirectoryScreen.tsx"), "utf8");
   const data = await readFile(path.join(root, "server", "data.js"), "utf8");
   const cityFixes = await readFile(path.join(root, "mysql", "migrations", "018_city_catalog_corrections.sql"), "utf8");
-  assert.match(content, /Рецензия\$\{item\.rating/);
-  assert.match(content, /Иду! Установить напоминание/);
+  assertLocalized(content, "content.reviews");
+  assert.match(content, /item\.rating \? ` · ★ \$\{item\.rating\}`/);
+  assertLocalized(content, "event.setReminder");
   assert.match(content, /event-attendees/);
-  assert.match(users, /Кого вы ищете\?/);
+  assertLocalized(users, "directory.who");
   assert.match(users, /material-clickable-card/);
   assert.match(data, /reminder_user_ids/);
   assert.match(cityFixes, /Тюмень/);
@@ -303,15 +310,15 @@ test("этапы 5 и 6 закрепляют доступ 18+, поводы и �
   assert.match(materialInput, /Время завершения можно указать только после времени начала/);
   assert.match(data, /adultAccess: \{ status: adultStatus, restricted: restrictedAdultMaterials \}/);
   assert.match(data, /WHERE is_adult = 1 AND status = 'published'/);
-  assert.match(controller, /Материал предназначен для лиц старше 18 лет/);
-  assert.match(controller, /Перейти в профиль/);
+  assertLocalized(controller, "content.adultMaterial");
+  assertLocalized(controller, "event.goProfile");
   assert.match(content, /occasion-type-switch/);
-  assert.match(content, /завершение на следующий день/);
-  assert.match(content, /Показать всех/);
+  assertLocalized(content, "occasion.nextDay");
+  assertLocalized(content, "event.showAll");
   assert.match(content, /events\/\$\{item\.id\}\/attendees\?page=/);
   assert.match(api, /router\.get\("\/events\/:id\/attendees"/);
   assert.match(content, /libraryStatus === "reading"/);
-  assert.match(content, /Читает сейчас/);
+  assertLocalized(content, "book.readingNow");
 });
 
 test("этап 9 разделяет крупные обязанности и удаляет одноразовые deploy-скрипты", async () => {
@@ -355,8 +362,8 @@ test("этапы 7 и 8 закрепляют удаление профиля, в
   assert.match(api, /router\.post\("\/auth\/deleted-profile\/new"/);
   assert.match(api, /router\.delete\("\/admin\/users\/:id\/permanent"/);
   assert.match(bootstrap, /deletedProfile/);
-  assert.match(controller, /Создать новый/);
-  assert.match(profile, /Действительно удалить профиль\?/);
+  assertLocalized(controller, "profile.createNew");
+  assertLocalized(profile, "settings.deleteConfirm");
 });
 
 test("исправления карточки книги, страны, городов и интерфейса защищены контрактами", async () => {

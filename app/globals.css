@@ -87,6 +87,14 @@ button { color: inherit; }
 .user-button { justify-self: end; display: flex; align-items: center; gap: 12px; padding: 7px 8px 7px 14px; border-radius: 14px; transition: background .2s; }
 .user-button:hover { background: #f7f4f1; }
 .topbar-account-actions { position: relative; justify-self: end; display: flex; align-items: center; gap: 7px; }
+.locale-switcher { position: relative; flex: 0 0 auto; }
+.locale-switcher-toggle { display: grid; width: 42px; height: 42px; place-items: center; border: 1px solid #b9c9db; border-radius: 50%; color: var(--blue); background: #fff; cursor: pointer; font-size: 11px; font-weight: 800; letter-spacing: .04em; transition: color .18s ease, border-color .18s ease, background .18s ease; }
+.locale-switcher-toggle:hover, .locale-switcher-toggle[aria-expanded="true"] { color: #fff; border-color: var(--blue); background: var(--blue); }
+.locale-switcher-menu { position: absolute; z-index: 240; top: calc(100% + 9px); right: 0; display: grid; min-width: 176px; padding: 7px; border: 1px solid var(--line); border-radius: 12px; background: #fff; box-shadow: 0 16px 38px rgba(35,29,24,.16); }
+.locale-switcher-menu button { display: grid; grid-template-columns: 32px 1fr; align-items: center; gap: 8px; width: 100%; padding: 9px 10px; border: 0; border-radius: 8px; color: var(--ink); background: transparent; cursor: pointer; text-align: left; }
+.locale-switcher-menu button:hover { background: #f3f7fb; }
+.locale-switcher-menu button.is-selected { color: #fff; background: var(--blue); font-weight: 700; }
+.locale-switcher-menu button span { font-size: 10px; font-weight: 800; }
 .notification-button { position: relative; width: 42px; height: 42px; border: 1px solid var(--line); border-radius: 50%; background: white; cursor: pointer; font-size: 17px; filter: grayscale(1); }
 .notification-button:hover { border-color: var(--blue); background: var(--blue-soft); }
 .notification-button > span { display: block; transform-origin: 50% 15%; }
@@ -884,7 +892,7 @@ select option {
 }
 
 .spoiler:not(.is-revealed):hover::after {
-  content: "Открыть спойлер";
+  content: attr(data-spoiler-label);
   position: absolute;
   z-index: 20;
   margin-top: -28px;
@@ -3079,6 +3087,16 @@ select {
 .guest-login-button { white-space: nowrap; }
 .auth-recovery-link { border: 0; padding: 3px 0; color: var(--blue); background: transparent; cursor: pointer; font: inherit; font-size: 12px; font-weight: 700; text-decoration: underline; text-underline-offset: 3px; }
 .auth-provider-actions + .auth-recovery-link { display: block; width: fit-content; margin: 8px auto 0; }
+.auth-locale-row { display: flex; justify-content: center; align-items: center; gap: 7px; min-height: 24px; margin: 7px auto 0; color: var(--muted); font-size: 11px; }
+.auth-locale-row span { display: inline-flex; align-items: center; gap: 7px; }
+.auth-locale-row i { font-style: normal; opacity: .55; }
+.auth-locale-row button { padding: 2px 0; border: 0; color: inherit; background: transparent; cursor: pointer; font: inherit; }
+.auth-locale-row button:hover, .auth-locale-row button.is-selected { color: var(--blue); text-decoration: underline; text-underline-offset: 3px; }
+
+@media (max-width: 800px) {
+  .locale-switcher-toggle { width: 38px; height: 38px; }
+  .locale-switcher-menu { position: fixed; top: 58px; right: 8px; }
+}
 .account-action-book { width: min(520px, calc(100vw - 28px)); min-height: 0; }
 .account-action-book .login-book-spread { display: block; }
 .account-action-book .login-book-page { width: 100%; min-height: 0; }

@@ -7,10 +7,7 @@ export function parseJson(value, fallback = []) {
 }
 
 export function formatDate(value) {
-  if (!value) return "сегодня";
-  const date = new Date(value);
-  const today = new Date();
-  if (date.toDateString() === today.toDateString()) return "сегодня";
+  const date = value ? new Date(value) : new Date();
   return new Intl.DateTimeFormat("ru-RU", { day: "2-digit", month: "2-digit", year: "numeric" }).format(date);
 }
 

@@ -1,4 +1,6 @@
 import { useEffect, useRef, useState } from "react";
+import type { MessageKey } from "../i18n/messages";
+import type { Translate } from "../i18n";
 
 export type MainView =
   | "home"
@@ -44,19 +46,23 @@ export const mainViewPaths: Record<RoutableMainView, string> = {
   chat: "/chat",
 };
 
-export const mainViewTitles: Record<RoutableMainView, string> = {
-  home: "Book Meet — встречаемся благодаря книгам",
-  users: "Пользователи — Book Meet",
-  publishing: "Новинки издательств — Book Meet",
-  books: "Все книги — Book Meet",
-  communities: "Книжные сообщества — Book Meet",
-  partners: "Наши партнёры — Book Meet",
-  events: "Книжные события — Book Meet",
-  reviews: "Рецензии — Book Meet",
-  publications: "Публикации — Book Meet",
-  occasions: "Поводы познакомиться — Book Meet",
-  chat: "Диалоги — Book Meet",
+export const mainViewTitleKeys: Record<RoutableMainView, MessageKey> = {
+  home: "nav.homeTagline",
+  users: "directory.users",
+  publishing: "nav.publishing",
+  books: "nav.books",
+  communities: "nav.communities",
+  partners: "nav.partners",
+  events: "content.bookEvents",
+  reviews: "content.reviews",
+  publications: "content.publications",
+  occasions: "content.occasions",
+  chat: "header.chats",
 };
+
+export function mainViewTitle(view: RoutableMainView, t: Translate) {
+  return view === "home" ? `Book Meet — ${t(mainViewTitleKeys.home)}` : `${t(mainViewTitleKeys[view])} — Book Meet`;
+}
 
 export const profileTabPaths = {
   main: "/profile",

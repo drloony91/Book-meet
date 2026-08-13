@@ -2,8 +2,14 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { access, readFile } from "node:fs/promises";
 import path from "node:path";
+import { en, kk, ru } from "../app/i18n/messages.ts";
+import { authText } from "../server/modules/i18n.js";
 
 const root = path.resolve(import.meta.dirname, "..");
+const assertLocalized = (source, key) => {
+  assert.match(source, new RegExp(`(?:t\\(|translate\\(currentLocale\\(\\),\\s*)["']${key.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}["']`));
+  for (const messages of [ru, kk, en]) assert.equal(typeof messages[key], "string", `${key} must exist in every locale`);
+};
 const readFrontendSource = async () => (await Promise.all([
   ["app", "BookMeetApp.tsx"],
   ["app", "hooks", "useBookMeetController.tsx"],
@@ -58,12 +64,13 @@ test("email verification and password recovery use hashed, scoped action tokens"
   assert.match(api, /router\.post\("\/auth\/email-verification\/confirm"/);
   assert.match(api, /DELETE FROM sessions WHERE user_id = \?/);
   assert.match(api, /passwordRecoveryAllowed/);
-  assert.match(api, /Пароли не отправляются по e-mail/);
+  assert.match(api, /authText\(locale, "recoveryGeneric"\)/);
+  assert.match(authText("ru", "verificationText", { link: "https://example.test" }), /Пароли не отправляются по e-mail/);
   assert.match(mailer, /SMTP_HOST/);
   assert.match(mailer, /SMTP_PASS/);
   assert.doesNotMatch(mailer, /console\.warn\([^)]*error/);
   assert.match(demo, /demoAccountActionTokens/);
-  assert.match(auth, /Восстановить пароль/);
+  assertLocalized(auth, "auth.recover");
   assert.match(auth, /password-reset\/request/);
   assert.match(auth, /password-reset\/confirm/);
   assert.match(auth, /email-verification\/confirm/);
@@ -86,8 +93,8 @@ test("linked community profiles have a strict one-to-one, session-safe contract"
   assert.match(data, /linkedProfile: linkedProfileRow/);
   assert.match(demo, /const \{ linkedProfiles: _linkedProfiles, \.\.\.publicState \} = state/);
   assert.match(demo, /router\.post\("\/linked-profiles\/switch"/);
-  assert.match(profile, /Привязать сообщество/);
-  assert.match(profile, /Привязанный профиль/);
+  assertLocalized(profile, "linked.attachCommunity");
+  assertLocalized(profile, "linked.title");
   assert.match(profile, /linked-profiles\/google/);
 });
 
@@ -118,7 +125,7 @@ test("TOP3 хранится отдельным ранжированным сло
   assert.match(api, /code: "TOP3_LIMIT"/);
   assert.match(data, /topRank: book\.top_rank \? Number\(book\.top_rank\) : undefined/);
   assert.match(demo, /topRank = nextTopRank\(topBooks, id\)/);
-  assert.match(content, /Добавить в TOP3/);
+  assertLocalized(content, "content.top3");
   assert.match(content, /top3-crown/);
   assert.match(content, /sortLibraryBooks/);
 });
@@ -127,7 +134,7 @@ test("каталожная книга открывает единый BookEditor
   const controller = await readFile(path.join(root, "app", "hooks", "useBookMeetController.tsx"), "utf8");
   const content = await readFile(path.join(root, "app", "components", "content", "ContentComponents.tsx"), "utf8");
   const api = await readFile(path.join(root, "server", "api.js"), "utf8");
-  assert.match(content, /Добавить в Мою библиотеку/);
+  assertLocalized(content, "content.addLibrary");
   assert.match(content, /bookmeet:add-catalog-book/);
   assert.match(controller, /catalogBookToAdd && <BookEditor/);
   assert.match(controller, /useExistingId: catalogBookId/);
@@ -188,7 +195,7 @@ test("guest bootstrap публичен до requireUser и не содержит
   assert.match(loader, /e\.status = 'published' AND e\.is_adult = 0/);
   assert.match(loader, /p\.publisher_status = 'approved'/);
   assert.doesNotMatch(loader, /messages|notifications|friend_requests|friendships|user_blocks|reports|publisher_legal|publisher_bin|email/);
-  assert.match(guest, /Вход\/Регистрация/);
+  assertLocalized(guest, "nav.login");
   assert.match(guest, /onFindFriends=\{authenticate\}/);
   assert.match(guest, /onCreateOccasion=\{authenticate\}/);
   assert.match(controller, /loadPublicCatalog/);
@@ -221,8 +228,8 @@ test("Telegram alerts use a transactional outbox and environment-only credential
 test("occasion preview and modal render primary and audience fields as label-value rows", async () => {
   const content = await readFile(path.join(root, "app", "components", "content", "ContentComponents.tsx"), "utf8");
   assert.match(content, /occasion-audience-row/);
-  assert.match(content, /<strong>\{labels\.primary\}:<\/strong> \{item\.primaryText\}/);
-  assert.match(content, /<strong>\{labels\.audience\}:<\/strong> \{item\.audienceText\}/);
+  assert.match(content, /<strong>\{t\(labels\.primary\)\}:<\/strong> <span data-i18n-skip>\{item\.primaryText\}<\/span>/);
+  assert.match(content, /<strong>\{t\(labels\.audience\)\}:<\/strong> <span data-i18n-skip>\{item\.audienceText\}<\/span>/);
   assert.doesNotMatch(content, /<h[23]>\{labels\.primary\}: \{item\.primaryText\}<\/h[23]>/);
 });
 
@@ -267,8 +274,8 @@ test("источник Flip, получатель подарка и статис
   assert.match(api, /recipient_name, recipient_phone/);
   assert.match(api, /read_month, read_year/);
   assert.match(page, /function ReadingStatsModal/);
-  assert.match(page, /Телефон получателя/);
-  assert.match(page, /Вставьте ссылку на книгу на Flip, Marwin\/Меломан или Яндекс\.Книгах/);
+  assertLocalized(page, "wishlist.recipientPhone");
+  assertLocalized(page, "book.autofillHint");
 });
 
 test("ISBN и издательство входят в единую карточку, а точные совпадения применяются автоматически", async () => {
@@ -296,7 +303,7 @@ test("ISBN и издательство входят в единую карточ
   assert.match(api, /label = action === "Купить" \? source\.name : "Яндекс\.Книги"/);
   assert.match(content, /<BookLinksEditor links=\{form\.links\} lockedUrls=\{lockedLinkUrls\}/);
   assert.match(content, /<dt>ISBN<\/dt>/);
-  assert.match(content, /или заполните данные вручную/);
+  assertLocalized(content, "book.manualFill");
 });
 
 test("оценки книг поддерживают шаг 0,5 и сохраняются без округления", async () => {
@@ -315,7 +322,9 @@ test("админка изолирована, а удаление материа�
   const chat = await readFile(path.join(root, "app", "components", "chat", "ChatComponents.tsx"), "utf8");
   const api = await readFile(path.join(root, "server", "api.js"), "utf8");
   assert.match(page, /function AdminProfile/);
-  assert.match(chat, /adminMode \? "Запросы" : "Друзья"/);
+  assert.match(chat, /adminMode \? t\("chat\.requests"\) : t\("chat\.friends"\)/);
+  assertLocalized(chat, "chat.requests");
+  assertLocalized(chat, "chat.friends");
   assert.match(page, /user\.id === profileUserId && !user\.isAdmin/);
   assert.match(api, /router\.delete\("\/admin\/materials\/:kind\/:id"/);
   assert.match(api, /if \(!\(await isAdmin\(connection, adminId\)\)\)/);
@@ -334,7 +343,7 @@ test("двухэтапная защита подключается через п
   assert.match(api, /router\.post\("\/auth\/totp\/setup\/confirm"/);
   assert.match(api, /recoveryCodes\.map\(hashRecoveryCode\)/);
   assert.match(page, /function AdminSecurityPanel/);
-  assert.match(page, /QR-код для Google Authenticator/);
+  assertLocalized(page, "security.qrAlt");
 });
 
 test("Google-вход переживает холодный запуск и временную недоступность Google", async () => {
@@ -351,7 +360,7 @@ test("Google-вход переживает холодный запуск и вр
   assert.ok(Array.isArray(bundledKeys.keys) && bundledKeys.keys.length > 0);
   assert.ok(bundledKeys.keys.every((key) => key.kty === "RSA" && key.kid && key.n && key.e));
   assert.match(page, /for \(let attempt = 0; attempt < 2; attempt \+= 1\)/);
-  assert.match(page, /Google отвечает дольше обычного/);
+  assertLocalized(page, "auth.googleSlow");
 });
 
 test("главная страница поддерживает ленту, классический вид и единое меню создания", async () => {
@@ -438,10 +447,11 @@ test("профили сообществ, видимость меню и изда
   assert.match(api, /canMessagePair\(\{ friends: Boolean\(friendship\)/);
   assert.match(demo, /canMessagePair\(\{ friends, communityMembers: membership/);
   assert.match(demo, /const blockedPair = state\.blocks\.some/);
-  assert.match(profile, /placeholder="Например: Книжный клуб"/);
-  assert.match(profile, /Показывать пункты меню профиля/);
+  assert.match(profile, /placeholder=\{t\("linked\.communityPlaceholder"\)\}/);
+  assertLocalized(profile, "linked.communityPlaceholder");
+  assertLocalized(profile, "settings.showMenu");
   assert.match(profile, /draggedTab === "main" \|\| target === "main"/);
-  assert.match(directory, /Тип сообщества/);
+  assertLocalized(directory, "directory.communityType");
   assert.match(content, /const publisherPair =/);
   assert.match(content, /publisherMode \? \[/);
 });
@@ -493,16 +503,14 @@ test("несколько книг, строгие города и управле
   const header = await readFile(path.join(root, "app", "components", "layout", "AppLayout.tsx"), "utf8");
   assert.match(controllerUtils, /const MIN_LOADING_MS = 3_000/);
   assert.match(content, /linkedBookIds: number\[\]/);
-  assert.match(content, />＋ Добавить ещё книгу</);
+  assert.match(content, />＋ \{t\("event\.addBook"\)\}<\/button>/);
+  assertLocalized(content, "event.addBook");
   assert.match(content, /className="material-books-field"/);
-  assert.match(content, />Сначала создать книгу</);
+  assertLocalized(content, "content.createBookFirst");
   assert.match(content, /function PublicProfileDetails/);
   assert.match(content, /className="my-events-tab"/);
   assert.doesNotMatch(header, /Твоё книжное пространство/);
-  assert.match(header, />Все книги</);
-  assert.match(header, />Книжные сообщества</);
-  assert.match(header, />Наши партнеры</);
-  assert.match(header, />Новинки издательств</);
+  for (const key of ["nav.books", "nav.communities", "nav.partners", "nav.publishing"]) assertLocalized(header, key);
 });
 
 test("импорт, редакторы, поводы и адаптивный интерфейс закреплены production-контрактами", async () => {
@@ -518,13 +526,13 @@ test("импорт, редакторы, поводы и адаптивный и�
   assert.match(api, /\/admin\/books\/import\/preview/);
   assert.match(api, /\/admin\/books\/import\/resolve/);
   assert.match(api, /syncMaterialBooks/);
-  assert.match(content, /Вставить изображение/);
-  assert.match(content, /Вставить книгу/);
+  assertLocalized(content, "editor.insertImage");
+  assertLocalized(content, "editor.insertBook");
   assert.match(content, /rich-media-tool-button/);
-  assert.match(content, /Обсудить книгу/);
+  assertLocalized(content, "occasion.discuss");
   assert.match(content, /MaterialEngagement kind="occasion"/);
-  assert.match(profile, /Импорт каталога книг/);
-  assert.match(profile, /Мои поводы/);
+  assertLocalized(profile, "admin.importCatalog");
+  assertLocalized(profile, "profile.occasions");
   assert.match(profile, /activeTab === "occasions"/);
   assert.match(profile, /className="profile-nav"/);
   assert.match(css, /Mobile is a dedicated layout layer/);
@@ -541,7 +549,7 @@ test("полный каталог админки, издательские ма�
   const css = await readFile(path.join(root, "app", "globals.css"), "utf8");
   assert.match(profile, /fetch\("\/api\/books\/catalog"/);
   assert.match(profile, /kind: "publisher_news" as const/);
-  assert.match(profile, /Событие издательства/);
+  assertLocalized(profile, "admin.publisherEvent");
   assert.match(api, /\["book", "review", "excerpt", "publisher_news"\]/);
   assert.match(api, /publisher_news: "publisher_news"/);
   assert.match(content, /MaterialEngagement kind="event"/);
@@ -554,7 +562,9 @@ test("полный каталог админки, издательские ма�
   assert.match(auth, /setMode\(nextMode\)/);
   assert.match(auth, /login-turning-back">\{invitation/);
   assert.match(auth, /className="mobile-auth-invitation"/);
-  assert.match(auth, /formMode === "login" \? "Вы у нас впервые\?" : "Уже есть профиль\?"/);
+  assert.match(auth, /formMode === "login" \? t\("auth\.firstTime"\) : t\("auth\.hasProfile"\)/);
+  assertLocalized(auth, "auth.firstTime");
+  assertLocalized(auth, "auth.hasProfile");
   assert.doesNotMatch(auth, /className="auth-invitation-mark"/);
   assert.doesNotMatch(auth, /className="outline-button mobile-auth-mode-switch"/);
   assert.doesNotMatch(css, /workspace\.workspace-content-hub > \.friends-panel \{ display: none/);
@@ -574,10 +584,10 @@ test("профиль, фотографии и вложения сообщени�
   assert.match(api, /validatedChatAttachment/);
   assert.match(api, /INSERT INTO messages \(sender_user_id, recipient_user_id, body, attachment_kind, attachment_id\)/);
   assert.match(data, /attachment: row\.attachment_kind/);
-  assert.match(profile, /Заполните обязательные поля/);
+  assertLocalized(profile, "form.requiredFields");
   assert.match(profile, /!profile\.cityId/);
   assert.match(profile, /canvas\.toDataURL\("image\/webp", 0\.82\)/);
-  assert.match(chat, /Профилем пользователя/);
+  assertLocalized(chat, "chat.shareUser");
   assert.match(chat, /itemFromUrl/);
   assert.match(auth, /const visibleMode = mode/);
   assert.match(auth, /auth-switch-placeholder/);
@@ -586,7 +596,8 @@ test("профиль, фотографии и вложения сообщени�
 test("library reading status stays in the library and drives book audiences", async () => {
   const content = await readFile(path.join(root, "app", "components", "content", "ContentComponents.tsx"), "utf8");
   const api = await readFile(path.join(root, "server", "api.js"), "utf8");
-  assert.match(content, /aria-label="Статус книги в библиотеке"/);
+  assert.match(content, /aria-label=\{t\("library\.bookStatus"\)\}/);
+  assertLocalized(content, "library.bookStatus");
   assert.match(content, /readingStatus \?\? "read"\) === "read" && form\.rating === 0/);
   assert.match(content, /item\.readingStatus \?\? "read"\) !== "want"/);
   assert.match(content, /item\.readingStatus === "want"/);
@@ -621,8 +632,8 @@ test("publisher profiles are moderated, private and separated from writer public
   assert.match(api, /Профиль организации ожидает официального подтверждения/);
   assert.match(data, /viewerIsAdmin \|\| Number\(row\.id\) === Number\(viewerId\) \? row\.publisher_bin/);
   assert.match(routes, /publishing: "\/publishing"/);
-  assert.match(profile, /Книги издательства/);
-  assert.match(profile, /Новости издательства/);
+  assertLocalized(profile, "profile.publisherBooks");
+  assertLocalized(profile, "admin.publisherNews");
   assert.match(directory, /export function PublishingDirectoryPage/);
 });
 
@@ -639,11 +650,11 @@ test("communities, membership chats and responsive conversation panels share pro
   assert.match(api, /creator_user_id AS owner_id, title FROM events/);
   assert.match(api, /creator_user_id AS owner_id, primary_text AS title FROM occasions/);
   assert.match(api, /publisher_news n JOIN profiles p/);
-  assert.match(profile, /Участники сообщества/);
-  assert.match(content, /Присоединиться к сообществу/);
+  assertLocalized(profile, "profile.communityMembers");
+  assertLocalized(content, "profile.joinCommunity");
   assert.match(content, /profileFriends/);
   assert.match(directory, /export function CommunitiesDirectoryPage/);
-  assert.match(directory, /Название сообщества/);
+  assertLocalized(directory, "directory.communityName");
   assert.match(layout, /mobile-chat-button/);
   assert.match(css, /workspace\.mobile-friends-closed > \.friends-panel/);
   assert.match(css, /grid-template-columns: repeat\(6,minmax\(0,1fr\)\)/);

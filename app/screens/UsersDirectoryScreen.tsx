@@ -3,8 +3,10 @@ import { CustomSelect } from "../components/common/CustomSelect";
 import { CityFilter } from "../components/content/ContentComponents";
 import { userBookMatches } from "../lib/domain";
 import type { BookEvent, DemoUser, PublicOrganization } from "../types/domain";
+import { useI18n } from "../i18n";
 
 export function UsersDirectoryPage({ currentUser, users, onOpenUser }: { currentUser: DemoUser; users: DemoUser[]; onOpenUser: (userId: number) => void }) {
+  const { t, domainLabel } = useI18n();
   const [sort, setSort] = useState<"registration" | "matches">("matches");
   const [city, setCity] = useState("");
   const [profileType, setProfileType] = useState<"all" | "Читатель" | "Писатель" | "Блогер">("all");
@@ -24,18 +26,18 @@ export function UsersDirectoryPage({ currentUser, users, onOpenUser }: { current
 
   return <main className="content-scroll directory-page">
     <div className="directory-heading">
-      <div><span className="section-subtitle">Сообщество Book Meet</span><h1>Пользователи</h1><div className="users-directory-metrics"><p>Всего пользователей — {publicUsers.length}</p><p>Пользователей в вашем городе — {cityUsers}</p></div></div>
+      <div><span className="section-subtitle">{t("directory.community")}</span><h1>{t("directory.users")}</h1><div className="users-directory-metrics"><p>{t("directory.totalUsers", { count: publicUsers.length })}</p><p>{t("directory.cityUsers", { count: cityUsers })}</p></div></div>
       <div className="directory-controls directory-filter-controls">
-        <label className="directory-control-field"><span>Кого вы ищете?</span><CustomSelect ariaLabel="Кого вы ищете?" value={profileType} onChange={setProfileType} options={[{ value: "all", label: "Всех" }, { value: "Читатель", label: "Читателей" }, { value: "Писатель", label: "Писателей" }, { value: "Блогер", label: "Блогеров" }]} /></label>
-        <div className="directory-control-field"><span>Город</span><CityFilter value={city} cities={publicUsers.filter((user) => user.id !== currentUser.id).map((user) => user.profile.city)} onChange={setCity} /></div>
-        <label className="directory-control-field"><span>Сортировка</span><CustomSelect ariaLabel="Сортировка" value={sort} onChange={setSort} options={[{ value: "matches", label: "По книжным совпадениям" }, { value: "registration", label: "По дате регистрации" }]} /></label>
+        <label className="directory-control-field"><span>{t("directory.who")}</span><CustomSelect ariaLabel={t("directory.who")} value={profileType} onChange={setProfileType} options={[{ value: "all", label: t("directory.everyone") }, { value: "Читатель", label: domainLabel("Читатель") }, { value: "Писатель", label: domainLabel("Писатель") }, { value: "Блогер", label: domainLabel("Блогер") }]} /></label>
+        <div className="directory-control-field"><span>{t("content.city")}</span><CityFilter value={city} cities={publicUsers.filter((user) => user.id !== currentUser.id).map((user) => user.profile.city)} onChange={setCity} /></div>
+        <label className="directory-control-field"><span>{t("common.sort")}</span><CustomSelect ariaLabel={t("common.sort")} value={sort} onChange={setSort} options={[{ value: "matches", label: t("directory.bookMatches") }, { value: "registration", label: t("directory.registration") }]} /></label>
       </div>
     </div>
     <div className="users-directory-grid">{sortedUsers.map(({ user, matches }) => <article className="directory-user-card material-clickable-card" role="button" tabIndex={0} key={user.id} onClick={() => onOpenUser(user.id)} onKeyDown={(event) => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); onOpenUser(user.id); } }}>
       <span className={`avatar avatar-lg avatar-${user.color} ${user.avatarUrl ? "has-photo" : ""}`} style={user.avatarUrl ? { backgroundImage: `url(${user.avatarUrl})` } : undefined}>{!user.avatarUrl && user.initials}{user.online && <span className="online-dot" />}</span>
-      <div><span>{user.profile.type}{user.profile.city ? ` · ${user.profile.city}` : ""} · <b className={user.online ? "online-copy" : "offline-copy"}>{user.online ? "в сети" : "не в сети"}</b></span><h2>{user.profile.name}</h2><p>{user.profile.bio || "Пользователь пока ничего о себе не рассказал."}</p></div>
-      <div className="user-match-summary"><strong>{matches.total}</strong><span>книжных совпадений</span><small>{matches.books} книг · {matches.favoriteGenres} любимых жанров · {matches.dislikedGenres} нелюбимых жанров</small></div>
-      <small>Зарегистрирован(а) {user.joined}</small>
+      <div><span>{domainLabel(user.profile.type)}{user.profile.city ? <span data-i18n-skip> · {user.profile.city}</span> : ""} · <b className={user.online ? "online-copy" : "offline-copy"}>{user.online ? t("chat.online") : t("chat.offline")}</b></span><h2 data-i18n-skip>{user.profile.name}</h2><p data-i18n-skip={Boolean(user.profile.bio)}>{user.profile.bio || t("directory.userBioEmpty")}</p></div>
+      <div className="user-match-summary"><strong>{matches.total}</strong><span>{t("directory.matches")}</span><small>{matches.books} · {matches.favoriteGenres} · {matches.dislikedGenres}</small></div>
+      <small>{t("directory.registered", { date: user.joined })}</small>
     </article>)}</div>
   </main>;
 }
@@ -49,6 +51,7 @@ export function CommunitiesDirectoryPage({ users, events, onOpenUser }: { users:
 }
 
 export function PublicOrganizationDirectoryPage({ type, organizations, onOpen }: { type: "Издатель" | "Сообщество"; organizations: PublicOrganization[]; onOpen: () => void }) {
+  const { t, domainLabel } = useI18n();
   const [query, setQuery] = useState("");
   const [communityType, setCommunityType] = useState("all");
   const community = type === "Сообщество";
@@ -59,12 +62,13 @@ export function PublicOrganizationDirectoryPage({ type, organizations, onOpen }:
     return available.filter((item) => (!needle || item.name.toLocaleLowerCase("ru").includes(needle)) && (!community || communityType === "all" || item.communityType === communityType));
   }, [available, community, communityType, query]);
   return <main className="content-scroll directory-page publishing-directory-page">
-    <div className="directory-heading"><div><h1>{community ? "Книжные сообщества" : "Новинки издательств"}</h1><p>{community ? "Книжные клубы, объединения, их книги, события и новости." : "Познакомьтесь с издательствами! Книги, события и новости издательства — в одном месте."}</p></div><div className={`organization-directory-filters ${community ? "has-community-type" : ""}`}><label className="books-search-field"><span>Поиск по названию</span><input type="search" value={query} onChange={(event) => setQuery(event.target.value)} placeholder={community ? "Название сообщества" : "Название издательства"} /></label>{community && <label className="directory-control-field"><span>Тип сообщества</span><CustomSelect ariaLabel="Тип сообщества" value={communityType} onChange={setCommunityType} options={[{ value: "all", label: "Все типы" }, ...communityTypes.map((item) => ({ value: item, label: item }))]} /></label>}</div></div>
-    {visible.length ? <div className="publishing-list">{visible.map((organization) => <article className="publishing-card material-clickable-card" role="button" tabIndex={0} key={organization.id} onClick={onOpen} onKeyDown={(event) => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); onOpen(); } }}><div className="publishing-card-intro"><span className={`avatar avatar-lg avatar-${organization.color} ${organization.avatarUrl ? "has-photo" : ""}`} style={organization.avatarUrl ? { backgroundImage: `url(${organization.avatarUrl})` } : undefined}>{!organization.avatarUrl && organization.initials}</span><div className="publishing-card-copy"><span className="section-subtitle">{organization.type}{organization.communityType ? ` · ${organization.communityType}` : ""}{organization.city ? ` · ${organization.city}` : ""}</span><h2>{organization.name}</h2><p>{organization.bio || `${community ? "Сообщество" : "Издательство"} пока не добавило описание.`}</p></div></div></article>)}</div> : <div className="profile-tab-placeholder">{query ? "Ничего не найдено." : `Подтверждённых ${community ? "сообществ" : "издательств"} пока нет.`}</div>}
+    <div className="directory-heading"><div><h1>{community ? t("nav.communities") : t("nav.publishing")}</h1><p>{community ? t("directory.communityIntro") : t("directory.publisherIntro")}</p></div><div className={`organization-directory-filters ${community ? "has-community-type" : ""}`}><label className="books-search-field"><span>{t("directory.searchName")}</span><input type="search" value={query} onChange={(event) => setQuery(event.target.value)} placeholder={community ? t("directory.communityName") : t("directory.publisherName")} /></label>{community && <label className="directory-control-field"><span>{t("directory.communityType")}</span><CustomSelect ariaLabel={t("directory.communityType")} value={communityType} onChange={setCommunityType} options={[{ value: "all", label: t("directory.allTypes") }, ...communityTypes.map((item) => ({ value: item, label: item }))]} /></label>}</div></div>
+    {visible.length ? <div className="publishing-list">{visible.map((organization) => <article className="publishing-card material-clickable-card" role="button" tabIndex={0} key={organization.id} onClick={onOpen} onKeyDown={(event) => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); onOpen(); } }}><div className="publishing-card-intro"><span className={`avatar avatar-lg avatar-${organization.color} ${organization.avatarUrl ? "has-photo" : ""}`} style={organization.avatarUrl ? { backgroundImage: `url(${organization.avatarUrl})` } : undefined}>{!organization.avatarUrl && organization.initials}</span><div className="publishing-card-copy"><span className="section-subtitle">{domainLabel(organization.type)}<span data-i18n-skip>{organization.communityType ? ` · ${organization.communityType}` : ""}{organization.city ? ` · ${organization.city}` : ""}</span></span><h2 data-i18n-skip>{organization.name}</h2><p data-i18n-skip={Boolean(organization.bio)}>{organization.bio || t("directory.descriptionEmpty", { organization: domainLabel(type) })}</p></div></div></article>)}</div> : <div className="profile-tab-placeholder">{query ? t("common.nothingFound") : t("directory.approvedEmpty", { organizations: domainLabel(type) })}</div>}
   </main>;
 }
 
 function OrganizationDirectoryPage({ type, users, events, onOpenUser }: { type: "Издатель" | "Сообщество"; users: DemoUser[]; events: BookEvent[]; onOpenUser: (userId: number) => void }) {
+  const { t, domainLabel } = useI18n();
   const [query, setQuery] = useState("");
   const [communityType, setCommunityType] = useState("all");
   const communityTypes = useMemo(() => Array.from(new Set(users.filter((user) => user.profile.type === "Сообщество").map((user) => user.profile.communityType?.trim()).filter((value): value is string => Boolean(value)))).sort((a, b) => a.localeCompare(b, "ru")), [users]);
@@ -84,22 +88,22 @@ function OrganizationDirectoryPage({ type, users, events, onOpenUser }: { type: 
   }, [communityType, events, query, type, users]);
   const community = type === "Сообщество";
   return <main className="content-scroll directory-page publishing-directory-page">
-    <div className="directory-heading"><div><h1>{community ? "Книжные сообщества" : "Новинки издательств"}</h1><p>{community ? "Книжные клубы, объединения, их книги, события и новости." : "Познакомьтесь с издательствами! Книги, события и новости издательства — в одном месте."}</p></div><div className={`organization-directory-filters ${community ? "has-community-type" : ""}`}><label className="books-search-field"><span>Поиск по названию</span><input type="search" value={query} onChange={(event) => setQuery(event.target.value)} placeholder={community ? "Название сообщества" : "Название издательства"} /></label>{community && <label className="directory-control-field"><span>Тип сообщества</span><CustomSelect ariaLabel="Тип сообщества" value={communityType} onChange={setCommunityType} options={[{ value: "all", label: "Все типы" }, ...communityTypes.map((item) => ({ value: item, label: item }))]} /></label>}</div></div>
+    <div className="directory-heading"><div><h1>{community ? t("nav.communities") : t("nav.publishing")}</h1><p>{community ? t("directory.communityIntro") : t("directory.publisherIntro")}</p></div><div className={`organization-directory-filters ${community ? "has-community-type" : ""}`}><label className="books-search-field"><span>{t("directory.searchName")}</span><input type="search" value={query} onChange={(event) => setQuery(event.target.value)} placeholder={community ? t("directory.communityName") : t("directory.publisherName")} /></label>{community && <label className="directory-control-field"><span>{t("directory.communityType")}</span><CustomSelect ariaLabel={t("directory.communityType")} value={communityType} onChange={setCommunityType} options={[{ value: "all", label: t("directory.allTypes") }, ...communityTypes.map((item) => ({ value: item, label: item }))]} /></label>}</div></div>
     {organizations.length ? <div className="publishing-list">{organizations.map((publisher) => {
       const latestNews = [...(publisher.publisherNews ?? [])].sort((first, second) => Date.parse(second.createdAtValue ?? second.createdAt) - Date.parse(first.createdAtValue ?? first.createdAt))[0];
       const latestEvent = events.filter((item) => item.creatorId === publisher.id && item.status === "published").sort((first, second) => Date.parse(second.createdAt) - Date.parse(first.createdAt))[0];
       return <article className="publishing-card" key={publisher.id} onClick={() => onOpenUser(publisher.id)}>
         <div className="publishing-card-intro">
           <button className={`avatar avatar-lg avatar-${publisher.color} ${publisher.avatarUrl ? "has-photo" : ""}`} style={publisher.avatarUrl ? { backgroundImage: `url(${publisher.avatarUrl})` } : undefined} type="button" onClick={() => onOpenUser(publisher.id)}>{!publisher.avatarUrl && publisher.initials}</button>
-          <div className="publishing-card-copy"><h2>{publisher.profile.name}</h2><p>{publisher.profile.bio || `${community ? "Сообщество" : "Издательство"} пока не добавило описание.`}</p></div>
+          <div className="publishing-card-copy"><h2 data-i18n-skip>{publisher.profile.name}</h2><p data-i18n-skip={Boolean(publisher.profile.bio)}>{publisher.profile.bio || t("directory.descriptionEmpty", { organization: domainLabel(type) })}</p></div>
         </div>
         <div className="publishing-latest-books">{(publisher.authorBooks ?? []).slice(0, 3).map((book) => <div className="publishing-mini-book" key={book.id}><div className={`library-book-cover library-cover-${book.coverTone}`} style={book.coverUrl ? { backgroundImage: `url(${book.coverUrl})` } : undefined}>{!book.coverUrl && <><em>{book.author}</em><strong>{book.title}</strong><span>Book Meet</span></>}</div><div><strong>{book.title}</strong><span>{book.author}</span><p>{book.annotation}</p></div></div>)}</div>
         {(latestNews || latestEvent) && <div className="publishing-card-updates">
-          <div>{latestNews ? <><span className="section-subtitle">Последняя новость</span><strong>{latestNews.title}</strong><p>{latestNews.previewText}</p></> : <p>Новостей пока нет.</p>}</div>
+          <div>{latestNews ? <><span className="section-subtitle">{t("directory.latestNews")}</span><strong data-i18n-skip>{latestNews.title}</strong><p data-i18n-skip>{latestNews.previewText}</p></> : <p>{t("directory.noNews")}</p>}</div>
           <i aria-hidden="true" />
-          <div>{latestEvent ? <><span className="section-subtitle">Последнее событие</span><strong>{latestEvent.title}</strong><p>{latestEvent.date} · {latestEvent.city} · {latestEvent.summary}</p></> : <p>Событий пока нет.</p>}</div>
+          <div>{latestEvent ? <><span className="section-subtitle">{t("directory.latestEvent")}</span><strong data-i18n-skip>{latestEvent.title}</strong><p data-i18n-skip>{latestEvent.date} · {latestEvent.city} · {latestEvent.summary}</p></> : <p>{t("directory.noEvents")}</p>}</div>
         </div>}
       </article>;
-    })}</div> : <div className="profile-tab-placeholder">{query ? "Ничего не найдено." : `Подтверждённых ${community ? "сообществ" : "издательств"} пока нет.`}</div>}
+    })}</div> : <div className="profile-tab-placeholder">{query ? t("common.nothingFound") : t("directory.approvedEmpty", { organizations: domainLabel(type) })}</div>}
   </main>;
 }
