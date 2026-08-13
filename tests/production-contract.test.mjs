@@ -48,7 +48,7 @@ test("email verification and password recovery use hashed, scoped action tokens"
   const auth = await readFile(path.join(root, "app", "screens", "AuthScreens.tsx"), "utf8");
   const styles = await readFile(path.join(root, "app", "globals.css"), "utf8");
   assert.match(migration, /email_verified_at DATETIME NULL/);
-  assert.match(migration, /CREATE TABLE account_action_tokens/);
+  assert.match(migration, /CREATE TABLE(?: IF NOT EXISTS)? account_action_tokens/);
   assert.match(migration, /token_hash CHAR\(64\) NOT NULL/);
   assert.match(migration, /ENUM\('email_verify', 'password_reset'\)/);
   assert.match(security, /createHash\("sha256"\)/);

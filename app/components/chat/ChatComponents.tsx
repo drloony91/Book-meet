@@ -11,6 +11,15 @@ export function Avatar({ friend, size = "md" }: { friend: Friend; size?: "sm" | 
   );
 }
 
+function attachmentInitials(name: string) {
+  return name.trim().split(/\s+/).filter(Boolean).slice(0, 2).map((part) => part[0]).join("").toLocaleUpperCase("ru");
+}
+
+function ChatAttachmentVisual({ item, compact = false }: { item: ChatShareItem; compact?: boolean }) {
+  const initials = item.kind === "user" && !item.imageUrl ? attachmentInitials(item.title) : "";
+  return <span className={`chat-attachment-image chat-attachment-${item.kind} ${compact ? "is-compact" : ""} ${item.imageUrl ? "has-image" : "is-placeholder"}`} style={item.imageUrl ? { backgroundImage: `url(${item.imageUrl})` } : undefined} aria-hidden="true">{initials}</span>;
+}
+
 export function FriendsPanel({
   friends,
   selectedId,
@@ -189,13 +198,13 @@ export function ChatView({
         {messages.map((message) => (
           message.system ? (friend.support ? null : <div className="system-message" key={message.id}>✦ {message.text}</div>) :
             <div className={`message-wrap ${message.mine ? "mine" : "theirs"}`} key={message.id}>
-              <div className="message-bubble">{message.attachment && (() => { const item = shareItems.find((candidate) => candidate.kind === message.attachment?.kind && candidate.id === message.attachment?.id); return item ? <button className="chat-attachment-card" type="button" onClick={() => onOpenAttachment(message.attachment!)}>{item.imageUrl && <span className="chat-attachment-image" style={{ backgroundImage: `url(${item.imageUrl})` }} />}<span><strong>{item.title}</strong><em>{item.subtitle}</em></span></button> : null; })()}{message.text && <p>{message.text}</p>}<time>{messageTime(message)}{message.mine && <span className={`message-checks ${message.read ? "is-read" : ""}`} aria-label={message.read ? "Прочитано" : "Отправлено"}>{message.read ? "✓✓" : "✓"}</span>}</time></div>
+              <div className="message-bubble">{message.attachment && (() => { const item = shareItems.find((candidate) => candidate.kind === message.attachment?.kind && candidate.id === message.attachment?.id); return item ? <button className="chat-attachment-card" type="button" onClick={() => onOpenAttachment(message.attachment!)}><ChatAttachmentVisual item={item} /><span><strong>{item.title}</strong><em>{item.subtitle}</em></span></button> : null; })()}{message.text && <p>{message.text}</p>}<time>{messageTime(message)}{message.mine && <span className={`message-checks ${message.read ? "is-read" : ""}`} aria-label={message.read ? "Прочитано" : "Отправлено"}>{message.read ? "✓✓" : "✓"}</span>}</time></div>
             </div>
         ))}
       </section>
       <div className="chat-composer">
-        {shareOpen && <section className="chat-share-popover"><header><h3>Поделиться</h3><button type="button" onClick={() => { setShareOpen(false); setShareKind(null); }}>×</button></header>{!shareKind ? <div className="chat-share-types">{shareTypes.map((item) => <button type="button" key={item.kind} onClick={() => setShareKind(item.kind)}>{item.label}</button>)}</div> : <><button className="chat-share-back" type="button" onClick={() => { setShareKind(null); setShareQuery(""); }}>← Назад</button><input autoFocus value={shareQuery} onChange={(event) => changeShareQuery(event.target.value)} placeholder={currentShareType?.hint} /><div className="chat-share-results">{matchingItems.map((item) => <button type="button" key={`${item.kind}-${item.id}`} onClick={() => chooseAttachment(item)}>{item.imageUrl && <span style={{ backgroundImage: `url(${item.imageUrl})` }} />}<b>{item.title}</b><small>{item.subtitle}</small></button>)}{shareQuery.trim() && !matchingItems.length && <p>Совпадений не найдено</p>}</div></>}</section>}
-        {attachment && <div className="chat-selected-attachment"><button type="button" onClick={() => onOpenAttachment(attachment)}><strong>{attachment.title}</strong><small>{attachment.subtitle}</small></button><button type="button" aria-label="Убрать вложение" onClick={() => setAttachment(null)}>×</button></div>}
+        {shareOpen && <section className="chat-share-popover"><header><h3>Поделиться</h3><button type="button" onClick={() => { setShareOpen(false); setShareKind(null); }}>×</button></header>{!shareKind ? <div className="chat-share-types">{shareTypes.map((item) => <button type="button" key={item.kind} onClick={() => setShareKind(item.kind)}>{item.label}</button>)}</div> : <><button className="chat-share-back" type="button" onClick={() => { setShareKind(null); setShareQuery(""); }}>← Назад</button><input autoFocus value={shareQuery} onChange={(event) => changeShareQuery(event.target.value)} placeholder={currentShareType?.hint} /><div className="chat-share-results">{matchingItems.map((item) => <button type="button" key={`${item.kind}-${item.id}`} onClick={() => chooseAttachment(item)}><ChatAttachmentVisual item={item} compact /><b>{item.title}</b><small>{item.subtitle}</small></button>)}{shareQuery.trim() && !matchingItems.length && <p>Совпадений не найдено</p>}</div></>}</section>}
+        {attachment && <div className="chat-selected-attachment"><ChatAttachmentVisual item={attachment} compact /><button type="button" onClick={() => onOpenAttachment(attachment)}><strong>{attachment.title}</strong><small>{attachment.subtitle}</small></button><button type="button" aria-label="Убрать вложение" onClick={() => setAttachment(null)}>×</button></div>}
       <form className="message-form" onSubmit={submit}>
         <button type="button" aria-label="Поделиться" onClick={() => { setShareOpen((open) => !open); setShareKind(null); setShareQuery(""); }}>＋</button>
         <input value={draft} onChange={(event) => changeDraft(event.target.value)} placeholder="Написать сообщение…" aria-label="Сообщение" />
