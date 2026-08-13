@@ -2107,7 +2107,7 @@ select option {
 .modal-tool-button:hover::after, .modal-tool-button:focus-visible::after { opacity: 1; transform: translateY(0); }
 
 @media (min-width: 801px) {
-  html[lang="kk"] .friends-footnote strong { font-size: 10px; white-space: nowrap; }
+  html[lang="kk"] .friends-footnote strong { font-size: 10.5px; white-space: nowrap; }
 }
 
 .admin-dashboard { max-width: 920px; margin: 0 auto; }
