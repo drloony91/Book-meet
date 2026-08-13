@@ -49,7 +49,7 @@ import type {
   UserReview,
   WishBook,
 } from "../../types/domain";
-import { currentLocale, localizedApiError, translate, useI18n, type Locale } from "../../i18n";
+import { currentLocale, formatDateForLocale, localizedApiError, translate, useI18n, type Locale } from "../../i18n";
 
 export const monthlyBooks = [
   { title: "Время секонд хэнд", author: "Светлана Алексиевич", cover: "cover-red", mark: "В" },
@@ -145,7 +145,7 @@ function formatCommentDate(value: string, locale: Locale) {
   if (days === 0) return translate(locale, "date.todayAt", { time });
   if (days === 1) return translate(locale, "date.yesterdayAt", { time });
   if (date.getFullYear() === now.getFullYear()) {
-    return translate(locale, "date.dateAt", { date: new Intl.DateTimeFormat(intl, { day: "numeric", month: "long" }).format(date), time });
+    return translate(locale, "date.dateAt", { date: formatDateForLocale(locale, date, { day: "numeric", month: "long" }), time });
   }
   return translate(locale, "date.dateAt", { date: new Intl.DateTimeFormat(intl, { day: "2-digit", month: "2-digit", year: "numeric" }).format(date), time });
 }
@@ -341,7 +341,7 @@ const occasionFieldKeys = {
 function occasionDateLabel(item: Occasion, locale: Locale) {
   if (item.type !== "invite" || !item.meetingDate) return null;
   const date = new Date(`${item.meetingDate}T00:00:00`);
-  const dateText = new Intl.DateTimeFormat(locale === "kk" ? "kk-KZ" : locale === "en" ? "en-US" : "ru-RU", { day: "numeric", month: "long", year: "numeric" }).format(date);
+  const dateText = formatDateForLocale(locale, date, { day: "numeric", month: "long", year: "numeric" });
   if (!item.meetingStartTime) return dateText;
   if (!item.meetingEndTime) return `${dateText} · ${item.meetingStartTime}`;
   const nextDay = item.meetingEndTime < item.meetingStartTime;
@@ -542,7 +542,7 @@ function PublicProfileDetails({ user }: { user: DemoUser }) {
     {(user.profile.publisherSalesLinks ?? []).length > 0 && <div><span>{t("profile.bookSales")}</span><div className="writer-book-links" data-i18n-skip>{user.profile.publisherSalesLinks!.map((link) => <a className="outline-button" href={link.url} target="_blank" rel="noreferrer" key={link.id}>{link.label}</a>)}</div></div>}
   </div>;
   return <div className="public-profile-details">
-    {user.profile.birthDate && <div><span>{t("profile.birthday")}</span><p>{new Intl.DateTimeFormat(locale === "kk" ? "kk-KZ" : locale === "en" ? "en-US" : "ru-RU", { day: "numeric", month: "long", timeZone: "UTC" }).format(new Date(`${user.profile.birthDate}T00:00:00Z`))}</p></div>}
+    {user.profile.birthDate && <div><span>{t("profile.birthday")}</span><p>{formatDateForLocale(locale, new Date(`${user.profile.birthDate}T00:00:00Z`), { day: "numeric", month: "long", timeZone: "UTC" })}</p></div>}
     {textField(t("profile.aboutMe"), user.profile.bio, "profile-bio-wide")}
     {user.profile.type === "Писатель" && textField(t("profile.authorInfluences"), user.profile.authorInfluences)}
     {user.profile.type === "Писатель" && textField(t("profile.writingThemes"), user.profile.writingThemes)}
