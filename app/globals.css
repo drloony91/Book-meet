@@ -88,8 +88,8 @@ button { color: inherit; }
 .user-button:hover { background: #f7f4f1; }
 .topbar-account-actions { position: relative; justify-self: end; display: flex; align-items: center; gap: 7px; }
 .locale-switcher { position: relative; flex: 0 0 auto; }
-.locale-switcher-toggle { display: grid; width: 42px; height: 42px; place-items: center; border: 1px solid #b9c9db; border-radius: 50%; color: var(--blue); background: #fff; cursor: pointer; font-size: 11px; font-weight: 800; letter-spacing: .04em; transition: color .18s ease, border-color .18s ease, background .18s ease; }
-.locale-switcher-toggle:hover, .locale-switcher-toggle[aria-expanded="true"] { color: #fff; border-color: var(--blue); background: var(--blue); }
+.locale-switcher-toggle { display: grid; width: 42px; height: 42px; place-items: center; border: 1px solid var(--line); border-radius: 50%; color: #5f6e7d; background: #fff; cursor: pointer; font-size: 11px; font-weight: 800; letter-spacing: .04em; transition: color .18s ease, border-color .18s ease, background .18s ease; }
+.locale-switcher-toggle:hover, .locale-switcher-toggle[aria-expanded="true"] { color: var(--blue); border-color: var(--blue); background: var(--blue-soft); }
 .locale-switcher-menu { position: absolute; z-index: 240; top: calc(100% + 9px); right: 0; display: grid; min-width: 176px; padding: 7px; border: 1px solid var(--line); border-radius: 12px; background: #fff; box-shadow: 0 16px 38px rgba(35,29,24,.16); }
 .locale-switcher-menu button { display: grid; grid-template-columns: 32px 1fr; align-items: center; gap: 8px; width: 100%; padding: 9px 10px; border: 0; border-radius: 8px; color: var(--ink); background: transparent; cursor: pointer; text-align: left; }
 .locale-switcher-menu button:hover { background: #f3f7fb; }
@@ -985,7 +985,6 @@ select option {
 .modal-report-button svg { fill: none; stroke: currentColor; stroke-width: 1.8; }
 .safety-backdrop { z-index: 4000; }
 
-.chat-report-button svg,
 .comment-report-button svg {
   width: 20px;
   height: 20px;
@@ -995,16 +994,6 @@ select option {
   stroke-linecap: round;
   stroke-linejoin: round;
 }
-
-.chat-actions .chat-report-button {
-  width: 34px;
-  height: 34px;
-  color: #c43d3d;
-  border-color: #efbcbc;
-  transition: color .18s ease, background-color .18s ease, border-color .18s ease;
-}
-.chat-actions .chat-report-button svg { width: 16px; height: 16px; }
-.chat-actions .chat-report-button:hover { color: #fff; background: #c43d3d; border-color: #c43d3d; }
 
 .comments-block article {
   position: relative;
@@ -2110,10 +2099,16 @@ select option {
 .modal-tool-button { position: relative; display: grid; width: 34px; height: 34px; place-items: center; border: 1px solid #d9e1e9; border-radius: 50%; color: #506171; background: rgba(255,255,255,.96); cursor: pointer; transition: border-color .16s, color .16s, box-shadow .16s, transform .16s; }
 .modal-tool-button svg { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
 .modal-tool-button:hover { border-color: #9cbddd; color: var(--blue); box-shadow: 0 5px 14px rgba(24,83,137,.14); transform: translateY(-1px); }
+.modal-tool-button.modal-report-button { color: #c43d3d; border-color: #efbcbc; }
+.modal-tool-button.modal-report-button:hover { color: #fff; border-color: #c43d3d; background: #c43d3d; }
 .modal-delete-button:hover { border-color: #e7b6b6; color: #b83939; }
 .modal-close-button { font-size: 22px; line-height: 1; }
 .modal-tool-button::after { position: absolute; right: 0; top: calc(100% + 7px); width: max-content; padding: 5px 8px; border-radius: 6px; color: #fff; background: #263746; content: attr(data-tooltip); opacity: 0; pointer-events: none; transform: translateY(-3px); transition: .14s; font-size: 9px; }
 .modal-tool-button:hover::after, .modal-tool-button:focus-visible::after { opacity: 1; transform: translateY(0); }
+
+@media (min-width: 801px) {
+  html[lang="kk"] .friends-footnote strong { font-size: 10px; white-space: nowrap; }
+}
 
 .admin-dashboard { max-width: 920px; margin: 0 auto; }
 .admin-dashboard .profile-title-row { margin-bottom: 28px; }

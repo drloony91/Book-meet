@@ -61,6 +61,9 @@ export function occasionPayload(body = {}) {
   if (!OCCASION_TYPES.has(type) || !primaryText || !audienceText || !TARGET_GENDERS.has(targetGender) || !TARGET_PROFILE_TYPES.has(targetProfileType)) {
     throw Object.assign(new Error("Заполните все поля повода для знакомства"), { statusCode: 400 });
   }
+  if (type !== "invite" && targetCities.length > 1) {
+    throw Object.assign(new Error("Для повода можно выбрать только один город"), { statusCode: 400 });
+  }
   if (targetCities.some((city) => !CYRILLIC_CITY_PATTERN.test(city))) throw Object.assign(new Error("Выберите города из списка на кириллице"), { statusCode: 400 });
   if (type === "invite") {
     if (meetingCity && (!CYRILLIC_CITY_PATTERN.test(meetingCity) || !isSpecialLocation(meetingCity) && !meetingAddress)) {

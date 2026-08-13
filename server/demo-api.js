@@ -16,6 +16,10 @@ const passwords = new Map([
 const demoAccountActionTokens = new Map();
 let nextId = 100;
 
+function hasMultipleOccasionCities(body = {}) {
+  return body.type !== "invite" && new Set((Array.isArray(body.targetCities) ? body.targetCities : []).map((city) => String(city).trim()).filter(Boolean)).size > 1;
+}
+
 function demoTokenConnection() {
   return {
     async query(sql, values = []) {
@@ -1234,6 +1238,7 @@ router.patch("/admin/events/:id", (request, response) => {
 router.post("/occasions", (request, response) => {
   const creator = users.find((user) => user.id === request.demoUserId);
   if (["Издатель", "Сообщество"].includes(creator?.profile.type)) return response.status(403).json({ error: "Организационные профили не могут создавать поводы познакомиться" });
+  if (hasMultipleOccasionCities(request.body)) return response.status(400).json({ error: "Для повода можно выбрать только один город" });
   const catalog = state.catalogBooks;
   const linkedBook = catalog.find((book) => book.id === Number(request.body.linkedBookId));
   const occasion = { id: nextId++, creatorId: request.demoUserId, type: request.body.type, primaryText: String(request.body.primaryText ?? ""), audienceText: String(request.body.audienceText ?? ""), isAdult: Boolean(request.body.isAdult), targetGender: request.body.targetGender, targetCities: structuredClone(request.body.targetCities ?? []), targetProfileType: request.body.targetProfileType, meetingDate: request.body.type === "invite" ? String(request.body.meetingDate ?? "") : undefined, meetingStartTime: request.body.type === "invite" ? String(request.body.meetingStartTime ?? "") || undefined : undefined, meetingEndTime: request.body.type === "invite" ? String(request.body.meetingEndTime ?? "") || undefined : undefined, meetingCity: request.body.type === "invite" ? String(request.body.meetingCity ?? request.body.targetCities?.[0] ?? "") : undefined, meetingCityId: ["Казахстан", "Онлайн"].includes(String(request.body.meetingCity)) ? undefined : Number(request.body.meetingCityId) || undefined, meetingAddress: request.body.type === "invite" ? String(request.body.meetingAddress ?? "") : undefined, meetingMapUrl: request.body.type === "invite" ? String(request.body.meetingMapUrl ?? "") : undefined, linkedBookId: linkedBook?.id, linkedBooks: linkedBook ? [{ id: linkedBook.id, title: linkedBook.title, author: linkedBook.author, annotation: linkedBook.annotation, coverUrl: linkedBook.coverUrl, coverTone: linkedBook.coverTone }] : [], status: "pending", moderationNote: "", creatorName: creator?.profile.name ?? "", createdAt: new Date().toISOString() };
@@ -1251,6 +1256,7 @@ router.patch("/occasions/:id", (request, response) => {
   const occasion = state.occasions.find((item) => item.id === Number(request.params.id) && item.creatorId === request.demoUserId);
   if (!occasion) return response.status(404).json({ error: "Повод не найден" });
   if (occasion.status !== "needs_changes") return response.status(409).json({ error: "Редактировать можно только повод, отправленный на доработку" });
+  if (hasMultipleOccasionCities(request.body)) return response.status(400).json({ error: "Для повода можно выбрать только один город" });
   Object.assign(occasion, request.body, { status: "pending", moderationNote: "" });
   response.json({ occasion });
 });
@@ -1261,7 +1267,10 @@ router.patch("/admin/occasions/:id", (request, response) => {
   const occasion = state.occasions.find((item) => item.id === Number(request.params.id));
   if (!occasion) return response.status(404).json({ error: "Повод не найден" });
   const action = request.body.action;
-  if (action === "edit") Object.assign(occasion, request.body.occasion);
+  if (action === "edit") {
+    if (hasMultipleOccasionCities(request.body.occasion)) return response.status(400).json({ error: "Для повода можно выбрать только один город" });
+    Object.assign(occasion, request.body.occasion);
+  }
   else { occasion.status = action === "accept" ? "published" : action === "revision" ? "needs_changes" : "rejected"; occasion.moderationNote = String(request.body.note ?? ""); }
   response.json({ ok: true });
 });

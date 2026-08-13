@@ -192,7 +192,7 @@ export function ChatView({
         </button>
         <div className="chat-actions">
           <button type="button" onClick={onToggleExpanded} aria-label={expanded ? t("chat.collapse") : t("chat.expand")} title={expanded ? t("chat.collapse") : t("chat.expand")}>{expanded ? "↙" : "⛶"}</button>
-          {onReport && <button className="chat-report-button" type="button" onClick={onReport} aria-label={t("chat.report")} title={t("chat.report")}><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3 2.8 20h18.4L12 3Z" /><path d="M12 9v5m0 3h.01" /></svg></button>}
+          {onReport && <button className="modal-tool-button modal-report-button" type="button" onClick={onReport} data-tooltip={t("safety.report")} aria-label={t("chat.report")}><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3 2.8 20h18.4L12 3Z" /><path d="M12 9v5m0 3h.01" /></svg></button>}
           <button type="button" onClick={onClose} aria-label={t("chat.close")} title={t("chat.close")}>×</button>
         </div>
       </header>

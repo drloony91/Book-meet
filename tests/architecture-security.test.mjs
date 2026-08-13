@@ -13,6 +13,7 @@ import { safeReturnTo } from "../app/lib/navigation-security.js";
 import { loadPublicCatalog } from "../server/modules/public-catalog.js";
 import { consumeAccountActionToken, createOpaqueActionToken, hashAccountActionToken, replaceAccountActionToken } from "../server/modules/account-tokens.js";
 import { mailerEnabled, sendAccountEmail } from "../server/modules/mailer.js";
+import { occasionPayload } from "../server/modules/material-input.js";
 import { en, kk, ru } from "../app/i18n/messages.ts";
 
 const root = path.resolve(import.meta.dirname, "..");
@@ -38,6 +39,13 @@ test("guest returnTo accepts only same-origin application paths", () => {
   assert.equal(safeReturnTo("https://evil.example/steal", origin), "/");
   assert.equal(safeReturnTo("//evil.example/steal", origin), "/");
   assert.equal(safeReturnTo("javascript:alert(1)", origin), "/");
+});
+
+test("meet and discuss occasions accept at most one optional city", () => {
+  const base = { type: "meet", primaryText: "Обо мне", audienceText: "Кого ищу", targetGender: "Все", targetProfileType: "Все" };
+  assert.deepEqual(occasionPayload({ ...base, targetCities: [] }).targetCities, []);
+  assert.deepEqual(occasionPayload({ ...base, targetCities: ["Астана"] }).targetCities, ["Астана"]);
+  assert.throws(() => occasionPayload({ ...base, targetCities: ["Астана", "Алматы"] }), /только один город/);
 });
 
 test("account action tokens are opaque, purpose-scoped, expiring and single-use", async () => {

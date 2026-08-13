@@ -177,10 +177,10 @@ test("book search and chat report icon keep shared production contracts", async 
   assert.match(chat, /M12 3 2\.8 20h18\.4L12 3Z/);
   assert.match(chat, /M12 9v5m0 3h\.01/);
   assert.doesNotMatch(chat, /M12 8v6/);
-  assert.match(styles, /\.chat-actions \.chat-report-button \{[\s\S]*?width: 34px;[\s\S]*?height: 34px;/);
-  assert.match(styles, /\.chat-actions \.chat-report-button svg \{ width: 16px; height: 16px; \}/);
-  assert.match(styles, /\.chat-actions \.chat-report-button:hover \{ color: #fff; background: #c43d3d;/);
-  assert.doesNotMatch(styles, /\.chat-report-button \{[^}]*!important/);
+  assert.match(chat, /className="modal-tool-button modal-report-button"/);
+  assert.match(styles, /\.modal-tool-button\.modal-report-button \{ color: #c43d3d; border-color: #efbcbc; \}/);
+  assert.match(styles, /\.modal-tool-button\.modal-report-button:hover \{ color: #fff; border-color: #c43d3d; background: #c43d3d; \}/);
+  assert.doesNotMatch(chat, /chat-report-button/);
 });
 
 test("guest bootstrap публичен до requireUser и не содержит приватных социальных данных", async () => {
@@ -231,6 +231,9 @@ test("occasion preview and modal render primary and audience fields as label-val
   assert.match(content, /<strong>\{t\(labels\.primary\)\}:<\/strong> <span data-i18n-skip>\{item\.primaryText\}<\/span>/);
   assert.match(content, /<strong>\{t\(labels\.audience\)\}:<\/strong> <span data-i18n-skip>\{item\.audienceText\}<\/span>/);
   assert.doesNotMatch(content, /<h[23]>\{labels\.primary\}: \{item\.primaryText\}<\/h[23]>/);
+  assert.match(content, /CityAutocomplete label=\{t\("occasion\.cityOptional"\)\} value=\{targetCityDraft\}/);
+  assert.match(content, /targetCities: \[name\]/);
+  assert.match(content, /placeholder=\{value\.type === "invite" \? t\("occasion\.offerPlaceholder"\) : undefined\}/);
 });
 
 test("события, роли и модерация описаны отдельной миграцией", async () => {

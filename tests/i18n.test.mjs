@@ -11,6 +11,20 @@ test("all locale dictionaries have identical non-empty keys", () => {
   for (const locale of [ru, kk, en]) for (const key of keys) assert.ok(locale[key].trim(), `${key} must not be empty`);
 });
 
+test("occasion and profile setting copy stays aligned in every locale", () => {
+  assert.equal(ru["occasion.invite"], "Хочу пригласить");
+  assert.equal(kk["occasion.invite"], "Шақырғым келеді");
+  assert.equal(en["occasion.invite"], "I want to invite");
+  assert.equal(ru["occasion.cityOptional"], "Город (не обязательно)");
+  assert.equal(kk["occasion.cityOptional"], "Қала (міндетті емес)");
+  assert.equal(en["occasion.cityOptional"], "City (optional)");
+  for (const locale of [ru, kk, en]) {
+    assert.ok(locale["occasion.offerPlaceholder"].length > 40);
+    assert.match(locale["linked.title"], /сообщества|қауымдастық|community/i);
+  }
+  assert.equal(ru["settings.defaultHome"], "Вид главной страницы");
+});
+
 test("locale resolution is whitelist-only and defaults to Russian", () => {
   assert.equal(normalizeLocale(undefined), "ru");
   assert.equal(normalizeLocale("en-US"), "en");
