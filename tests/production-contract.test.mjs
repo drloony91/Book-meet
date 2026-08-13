@@ -135,6 +135,47 @@ test("каталожная книга открывает единый BookEditor
   assert.match(api, /ON DUPLICATE KEY UPDATE rating = VALUES\(rating\)/);
 });
 
+test("zero-owner canonical books stay available across routes, profiles and safe library CTA", async () => {
+  const controller = await readFile(path.join(root, "app", "hooks", "useBookMeetController.tsx"), "utf8");
+  const profile = await readFile(path.join(root, "app", "screens", "ProfileScreens.tsx"), "utf8");
+  const content = await readFile(path.join(root, "app", "components", "content", "ContentComponents.tsx"), "utf8");
+  const api = await readFile(path.join(root, "server", "api.js"), "utf8");
+  const demo = await readFile(path.join(root, "server", "demo-api.js"), "utf8");
+  assert.match(controller, /routeDataRef = useRef\(\{ users, catalog,/);
+  assert.match(controller, /routeData\.catalog\.find\(\(book\) => book\.id === route\.overlay!\.id\)/);
+  assert.match(controller, /setCatalogBooks\(data\.books \?\? \[\]\)/);
+  assert.match(controller, /<MyProfile[^>]*catalog=\{catalog\}/);
+  assert.match(controller, /<UserProfileModal[^>]*catalog=\{catalog\}/);
+  assert.match(controller, /<AdminCatalogEditor[^>]*catalog=\{catalog\}/);
+  assert.match(profile, /<LibraryTab[^>]*catalog=\{catalog\}/);
+  assert.match(profile, /<ReviewsTab[^>]*catalog=\{catalog\}/);
+  assert.match(profile, /<MyEventsTab[\s\S]{0,500}catalog=\{catalog\}/);
+  assert.match(controller, /const payload = \{ rating: book\.rating,[^}]*useExistingId: catalogBookId \}/);
+  assert.doesNotMatch(controller.match(/const payload = \{ rating: book\.rating,[^;]+;/)?.[0] ?? "", /author:|title:|links:|coverUrl:/);
+  assert.match(api, /readerUsesExistingCanonical/);
+  assert.match(api, /const links = readerUsesExistingCanonical \? null : validatedBookLinks/);
+  assert.match(demo, /readerUsesExistingCanonical[\s\S]*?\{ \.\.\.canonical, \.\.\.ownerFields, id, catalogBookId: id \}/);
+  assert.match(demo, /if \(catalogIndex >= 0\) \{\s+if \(!readerUsesExistingCanonical\)/);
+});
+
+test("book search and chat report icon keep shared production contracts", async () => {
+  const api = await readFile(path.join(root, "server", "api.js"), "utf8");
+  const demo = await readFile(path.join(root, "server", "demo-api.js"), "utf8");
+  const content = await readFile(path.join(root, "app", "components", "content", "ContentComponents.tsx"), "utf8");
+  const chat = await readFile(path.join(root, "app", "components", "chat", "ChatComponents.tsx"), "utf8");
+  const styles = await readFile(path.join(root, "app", "globals.css"), "utf8");
+  assert.match(content, /matchesBookQuery\(book, query\)/);
+  assert.match(api, /tokens\.map\(\(\) => "LOWER\(CONCAT_WS\(' ', title, author, COALESCE\(isbn, ''\), COALESCE\(publisher, ''\)\)\) LIKE \?"\)\.join\(" AND "\)/);
+  assert.match(demo, /tokens\.every\(\(token\) => searchable\.includes\(token\)\)/);
+  assert.match(chat, /M12 3 2\.8 20h18\.4L12 3Z/);
+  assert.match(chat, /M12 9v5m0 3h\.01/);
+  assert.doesNotMatch(chat, /M12 8v6/);
+  assert.match(styles, /\.chat-actions \.chat-report-button \{[\s\S]*?width: 34px;[\s\S]*?height: 34px;/);
+  assert.match(styles, /\.chat-actions \.chat-report-button svg \{ width: 16px; height: 16px; \}/);
+  assert.match(styles, /\.chat-actions \.chat-report-button:hover \{ color: #fff; background: #c43d3d;/);
+  assert.doesNotMatch(styles, /\.chat-report-button \{[^}]*!important/);
+});
+
 test("guest bootstrap публичен до requireUser и не содержит приватных социальных данных", async () => {
   const api = await readFile(path.join(root, "server", "api.js"), "utf8");
   const demo = await readFile(path.join(root, "server", "demo-api.js"), "utf8");

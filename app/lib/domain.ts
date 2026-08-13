@@ -100,6 +100,17 @@ export function normalizeBookKey(value: string) {
   return value.trim().toLocaleLowerCase("ru").replace(/[«»"'.,:;!?()[\]{}]/g, "").replace(/\s+/g, " ");
 }
 
+export function normalizeBookSearchText(value: string) {
+  return value.normalize("NFKC").toLocaleLowerCase("ru").replace(/[^\p{L}\p{N}]+/gu, " ").trim().replace(/\s+/g, " ");
+}
+
+export function matchesBookQuery(book: Pick<LibraryBook | AuthorBook, "title" | "author" | "isbn" | "publisher">, query: string) {
+  const tokens = normalizeBookSearchText(query).split(" ").filter(Boolean);
+  if (!tokens.length) return false;
+  const searchable = normalizeBookSearchText([book.title, book.author, book.isbn, book.publisher].filter(Boolean).join(" "));
+  return tokens.every((token) => searchable.includes(token));
+}
+
 export function catalogFromUsers(users: DemoUser[]) {
   const all = users.flatMap((user) => [...(user.authorBooks ?? []), ...user.books]);
   return all.filter((book, index) => all.findIndex((item) => item.id === book.id || (book.isbn && item.isbn === book.isbn) || (item.title.toLowerCase() === book.title.toLowerCase() && item.author.toLowerCase() === book.author.toLowerCase())) === index);

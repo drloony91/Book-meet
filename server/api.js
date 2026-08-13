@@ -2185,11 +2185,12 @@ router.get("/books/catalog", asyncRoute(async (request, response) => {
 router.get("/books", asyncRoute(async (request, response) => {
   const query = String(request.query.q ?? "").trim();
   if (!query) return response.json({ books: [] });
-  const like = `%${query}%`;
-  const isbnKey = normalizeIsbn(query);
+  const tokens = [...new Set(query.normalize("NFKC").toLocaleLowerCase("ru").replace(/[^\p{L}\p{N}]+/gu, " ").trim().split(/\s+/).filter(Boolean))].slice(0, 8);
+  if (!tokens.length) return response.json({ books: [] });
   const [[viewer]] = await getPool().query("SELECT u.role, p.birth_date FROM users u JOIN profiles p ON p.user_id = u.id WHERE u.id = ?", [request.bookMeetUser.id]);
   const adultViewer = viewer?.role === "admin" || Number(ageFromBirthDate(viewer?.birth_date) ?? -1) >= 18;
-  const [rows] = await getPool().query("SELECT id, author, title, isbn, publisher, genres, annotation, is_adult AS isAdult, cover_path AS coverUrl, cover_tone AS coverTone, flip_url AS flipUrl FROM books WHERE (? = 1 OR is_adult = 0) AND (author LIKE ? OR title LIKE ? OR (? <> '' AND isbn_key = ?)) ORDER BY updated_at DESC LIMIT 8", [adultViewer ? 1 : 0, like, like, isbnKey, isbnKey]);
+  const tokenClauses = tokens.map(() => "LOWER(CONCAT_WS(' ', title, author, COALESCE(isbn, ''), COALESCE(publisher, ''))) LIKE ?").join(" AND ");
+  const [rows] = await getPool().query(`SELECT id, author, title, isbn, publisher, genres, annotation, is_adult AS isAdult, cover_path AS coverUrl, cover_tone AS coverTone, flip_url AS flipUrl FROM books WHERE (? = 1 OR is_adult = 0) AND ${tokenClauses} ORDER BY updated_at DESC LIMIT 8`, [adultViewer ? 1 : 0, ...tokens.map((token) => `%${token}%`)]);
   response.json({ books: rows.map((row) => ({ ...row, id: Number(row.id), isAdult: Boolean(row.isAdult), genres: JSON.parse(row.genres || "[]") })) });
 }));
 
@@ -2305,14 +2306,16 @@ router.post("/admin/books/import/resolve", asyncRoute(async (request, response) 
 router.post("/books", asyncRoute(async (request, response) => {
   const userId = request.bookMeetUser.id;
   const payload = request.body ?? {};
+  const requestedExistingId = Number(payload.useExistingId || 0);
+  const readerUsesExistingCanonical = requestedExistingId > 0 && !payload.isAuthor;
   const author = String(payload.author ?? "").trim();
   const title = String(payload.title ?? "").trim();
-  const isbn = normalizeIsbn(payload.isbn);
-  const publisher = String(payload.publisher ?? "").trim();
-  const flipUrl = String(payload.flipUrl ?? "").trim();
+  const isbn = readerUsesExistingCanonical ? "" : normalizeIsbn(payload.isbn);
+  const publisher = readerUsesExistingCanonical ? "" : String(payload.publisher ?? "").trim();
+  const flipUrl = readerUsesExistingCanonical ? "" : String(payload.flipUrl ?? "").trim();
   if (flipUrl) marketplaceFromUrl(flipUrl);
-  const links = validatedBookLinks(payload.links, !payload.isAuthor);
-  if (!author || !title) return response.status(400).json({ error: "Автор и название обязательны" });
+  const links = readerUsesExistingCanonical ? null : validatedBookLinks(payload.links, !payload.isAuthor);
+  if (!readerUsesExistingCanonical && (!author || !title)) return response.status(400).json({ error: "Автор и название обязательны" });
   const rating = Number(payload.rating);
   const readingStatus = ["want", "reading", "read"].includes(payload.readingStatus) ? payload.readingStatus : "read";
   const top3Specified = typeof payload.top3 === "boolean" || payload.topRank !== undefined;
@@ -2340,7 +2343,7 @@ router.post("/books", asyncRoute(async (request, response) => {
     } else if (access.isPublisher) {
       throw Object.assign(new Error("Книги организации добавляются в специальной вкладке профиля"), { statusCode: 403 });
     }
-    let bookId = Number(payload.useExistingId || 0);
+    let bookId = requestedExistingId;
     let uploadedCoverPath = null;
     let createdCanonical = false;
     let canonicalOwnerId = null;
@@ -2373,20 +2376,20 @@ router.post("/books", asyncRoute(async (request, response) => {
       canonicalOwnerId = payload.isAuthor ? userId : null;
     } else {
       const [[book]] = await connection.query("SELECT id, creator_user_id, annotation, cover_path, isbn, publisher, is_adult FROM books WHERE id = ? FOR UPDATE", [bookId]);
-      if (!book) throw new Error("Выбранная книга не найдена");
+      if (!book) throw Object.assign(new Error("Выбранная книга не найдена"), { statusCode: 404 });
       if (book.is_adult) await assertAdultMaterialAllowed(connection, userId, true);
       canonicalOwnerId = book.creator_user_id ? Number(book.creator_user_id) : null;
       if (payload.isAuthor && !access.isPublisher && book.creator_user_id && Number(book.creator_user_id) !== userId) {
         throw Object.assign(new Error("Эта авторская карточка принадлежит другому писателю"), { statusCode: 409 });
       }
-      if (!book.cover_path && payload.coverUrl) {
+      if (!readerUsesExistingCanonical && !book.cover_path && payload.coverUrl) {
         uploadedCoverPath = await saveCover(payload.coverUrl);
         if (uploadedCoverPath) await connection.query("UPDATE books SET cover_path = ? WHERE id = ? AND cover_path IS NULL", [uploadedCoverPath, bookId]);
       }
-      if (flipUrl) await connection.query("UPDATE books SET flip_url = ? WHERE id = ?", [flipUrl, bookId]);
-      if (isbn && !book.isbn) await connection.query("UPDATE books SET isbn = ?, isbn_key = ? WHERE id = ? AND isbn IS NULL", [isbn, isbn, bookId]);
-      if (publisher && !book.publisher) await connection.query("UPDATE books SET publisher = ? WHERE id = ? AND publisher IS NULL", [publisher, bookId]);
-      if (!book.annotation && String(payload.annotation ?? "").trim()) {
+      if (!readerUsesExistingCanonical && flipUrl) await connection.query("UPDATE books SET flip_url = ? WHERE id = ?", [flipUrl, bookId]);
+      if (!readerUsesExistingCanonical && isbn && !book.isbn) await connection.query("UPDATE books SET isbn = ?, isbn_key = ? WHERE id = ? AND isbn IS NULL", [isbn, isbn, bookId]);
+      if (!readerUsesExistingCanonical && publisher && !book.publisher) await connection.query("UPDATE books SET publisher = ? WHERE id = ? AND publisher IS NULL", [publisher, bookId]);
+      if (!readerUsesExistingCanonical && !book.annotation && String(payload.annotation ?? "").trim()) {
         await connection.query("UPDATE books SET annotation = ? WHERE id = ? AND (annotation IS NULL OR annotation = '')", [String(payload.annotation).trim(), bookId]);
       }
     }

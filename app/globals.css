@@ -988,7 +988,15 @@ select option {
   stroke-linejoin: round;
 }
 
-.chat-report-button { color: #d13a3a !important; }
+.chat-actions .chat-report-button {
+  width: 34px;
+  height: 34px;
+  color: #c43d3d;
+  border-color: #efbcbc;
+  transition: color .18s ease, background-color .18s ease, border-color .18s ease;
+}
+.chat-actions .chat-report-button svg { width: 16px; height: 16px; }
+.chat-actions .chat-report-button:hover { color: #fff; background: #c43d3d; border-color: #c43d3d; }
 
 .comments-block article {
   position: relative;

@@ -43,13 +43,13 @@ test("bootstrap API запрашивает только выбранную се�
   const calls = [];
   const loadData = async (userId, options) => {
     calls.push({ userId, options });
-    return { activeUserId: userId, users: [{ id: 7 }], events: [], occasions: [], messages: { secret: [] }, reports: [{ id: 9 }] };
+    return { activeUserId: userId, users: [{ id: 7 }], books: [{ id: 88, title: "Книга без владельца" }], events: [], occasions: [], messages: { secret: [] }, reports: [{ id: 9 }] };
   };
   const router = createBootstrapRouter({ authenticatedUser: async () => ({ id: 7 }), loadData });
   await withServer(router, async (server) => {
     const response = await requestJson(server, "/api/bootstrap/catalog");
     assert.equal(response.status, 200);
-    assert.deepEqual(response.body, { activeUserId: 7, users: [{ id: 7 }], events: [], occasions: [] });
+    assert.deepEqual(response.body, { activeUserId: 7, users: [{ id: 7 }], books: [{ id: 88, title: "Книга без владельца" }], events: [], occasions: [] });
     assert.deepEqual(calls, [{ userId: 7, options: { sections: ["catalog"] } }]);
   });
 });

@@ -189,7 +189,7 @@ export function ChatView({
         </button>
         <div className="chat-actions">
           <button type="button" onClick={onToggleExpanded} aria-label={expanded ? "Свернуть диалог" : "Расширить диалог"} title={expanded ? "Свернуть диалог" : "Расширить диалог"}>{expanded ? "↙" : "⛶"}</button>
-          {onReport && <button className="chat-report-button" type="button" onClick={onReport} aria-label="Пожаловаться на диалог" title="Пожаловаться на диалог"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3 2.8 20h18.4L12 3Z" /><path d="M12 8v6" /><circle cx="12" cy="17" r="1" /></svg></button>}
+          {onReport && <button className="chat-report-button" type="button" onClick={onReport} aria-label="Пожаловаться на диалог" title="Пожаловаться на диалог"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3 2.8 20h18.4L12 3Z" /><path d="M12 9v5m0 3h.01" /></svg></button>}
           <button type="button" onClick={onClose} aria-label="Закрыть диалог" title="Закрыть диалог">×</button>
         </div>
       </header>

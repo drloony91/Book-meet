@@ -349,7 +349,7 @@ router.get("/bootstrap/:section", (request, response) => {
   if (user?.suspension && (user.suspension.permanent || new Date(user.suspension.until).getTime() > Date.now())) return response.status(423).json({ suspended: true, ...user.suspension });
   const keys = {
     session: ["activeUserId", "profileCompleted"],
-    catalog: ["activeUserId", "adultAccess", "users", "events", "occasions"],
+    catalog: ["activeUserId", "adultAccess", "users", "books", "events", "occasions"],
     social: ["activeUserId", "blocks", "blockedByUserIds", "friendRequests", "friendships", "communityMemberships", "follows", "notifications", "messages", "likes"],
     moderation: ["activeUserId", "reports"],
   }[request.params.section];
@@ -752,20 +752,25 @@ router.get("/books/catalog", (request, response) => {
 });
 
 router.get("/books", (request, response) => {
-  const query = String(request.query.q ?? "").trim().toLocaleLowerCase("ru");
+  const query = String(request.query.q ?? "").trim();
+  const tokens = query.normalize("NFKC").toLocaleLowerCase("ru").replace(/[^\p{L}\p{N}]+/gu, " ").trim().split(/\s+/).filter(Boolean);
   const viewer = users.find((user) => user.id === request.demoUserId);
   const adultViewer = Boolean(viewer?.isAdmin || Number(viewer?.profile.age ?? -1) >= 18);
-  response.json({ books: query ? state.catalogBooks.filter((book) => (adultViewer || !book.isAdult) && `${book.author} ${book.title} ${book.isbn ?? ""}`.toLocaleLowerCase("ru").includes(query)).slice(0, 8) : [] });
+  response.json({ books: tokens.length ? state.catalogBooks.filter((book) => {
+    const searchable = `${book.title} ${book.author} ${book.isbn ?? ""} ${book.publisher ?? ""}`.normalize("NFKC").toLocaleLowerCase("ru").replace(/[^\p{L}\p{N}]+/gu, " ");
+    return (adultViewer || !book.isAdult) && tokens.every((token) => searchable.includes(token));
+  }).slice(0, 8) : [] });
 });
 
 router.post("/books", (request, response) => {
   const user = users.find((item) => item.id === request.demoUserId);
   const payload = structuredClone(request.body ?? {});
+  const readerUsesExistingCanonical = Number(payload.useExistingId || 0) > 0 && !payload.isAuthor;
   if (payload.isAuthor && user.profile.type !== "Писатель" && !["Издатель", "Сообщество"].includes(user.profile.type)) return response.status(403).json({ error: "Добавлять книги могут только писатели и подтверждённые организации" });
   if (!payload.isAuthor && ["Издатель", "Сообщество"].includes(user.profile.type)) return response.status(403).json({ error: "Книги организации добавляются в специальной вкладке профиля" });
   const rating = Number(payload.rating);
   if (!payload.isAuthor && (payload.readingStatus ?? "read") === "read" && (!Number.isInteger(rating * 2) || rating < 0.5 || rating > 5)) return response.status(400).json({ error: "Оценка должна быть от 0,5 до 5 с шагом 0,5" });
-  if (!payload.isAuthor) {
+  if (!payload.isAuthor && !readerUsesExistingCanonical) {
     try {
       for (const link of (payload.links ?? []).filter((item) => item?.label?.trim() && item?.url?.trim())) {
         const source = demoMarketplace(link.url);
@@ -791,15 +796,20 @@ router.post("/books", (request, response) => {
     topRank = nextTopRank(topBooks, id);
   }
   const canonical = allBooks.find((item) => item.id === id);
+  if (readerUsesExistingCanonical && !canonical) return response.status(404).json({ error: "Выбранная книга не найдена" });
+  const ownerFields = { rating, review: String(payload.shortReview ?? payload.review ?? ""), readMonth: payload.readMonth, readYear: payload.readYear, readingStatus: payload.readingStatus ?? "read", lastReadChapter: payload.lastReadChapter, readingComment: payload.readingComment, topRank };
   const book = canonical
-    ? { ...canonical, ...payload, id, catalogBookId: id, topRank, author: canonical.author, title: canonical.title, isbn: canonical.isbn || payload.isbn, publisher: canonical.publisher || payload.publisher, annotation: canonical.annotation, coverUrl: canonical.coverUrl || payload.coverUrl, links: [...(canonical.links ?? []), ...(payload.links ?? [])].filter((link, index, list) => list.findIndex((item) => item.url === link.url) === index) }
+    ? readerUsesExistingCanonical
+      ? { ...canonical, ...ownerFields, id, catalogBookId: id }
+      : { ...canonical, ...payload, id, catalogBookId: id, topRank, author: canonical.author, title: canonical.title, isbn: canonical.isbn || payload.isbn, publisher: canonical.publisher || payload.publisher, annotation: canonical.annotation, coverUrl: canonical.coverUrl || payload.coverUrl, links: [...(canonical.links ?? []), ...(payload.links ?? [])].filter((link, index, list) => list.findIndex((item) => item.url === link.url) === index) }
     : { ...payload, id, catalogBookId: id, topRank, links: payload.links ?? [] };
   const target = payload.isAuthor ? (user.authorBooks ??= []) : user.books;
   const index = target.findIndex((item) => item.id === id);
   if (index >= 0) target[index] = book; else target.unshift(book);
   const catalogIndex = state.catalogBooks.findIndex((item) => item.id === id);
-  if (catalogIndex >= 0) state.catalogBooks[catalogIndex] = { ...state.catalogBooks[catalogIndex], ...book, rating: 0, review: "", readingStatus: undefined, topRank: undefined };
-  else state.catalogBooks.push({ ...book, rating: 0, review: "", readingStatus: undefined, topRank: undefined });
+  if (catalogIndex >= 0) {
+    if (!readerUsesExistingCanonical) state.catalogBooks[catalogIndex] = { ...state.catalogBooks[catalogIndex], ...book, rating: 0, review: "", readingStatus: undefined, topRank: undefined };
+  } else state.catalogBooks.push({ ...book, rating: 0, review: "", readingStatus: undefined, topRank: undefined });
   response.json({ ok: true, bookId: id, topRank });
 });
 
