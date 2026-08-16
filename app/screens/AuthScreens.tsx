@@ -2,7 +2,7 @@
 
 import { FormEvent, useEffect, useRef, useState } from "react";
 import { apiFetch } from "../services/api";
-import type { AuthResult } from "../types/domain";
+import type { AuthResult, LegalDocument } from "../types/domain";
 import { localizedApiError, useI18n } from "../i18n";
 import { AuthLocaleRow } from "../i18n/LocaleSwitcher";
 
@@ -19,7 +19,7 @@ declare global {
   }
 }
 
-export function LoginScreen({ onLogin, onRegister, initialError = "" }: { onLogin: (email: string, password: string, totp?: string) => Promise<AuthResult>; onRegister: (value: { email: string; password: string }) => Promise<AuthResult>; initialError?: string }) {
+export function LoginScreen({ onLogin, onRegister, initialError = "" }: { onLogin: (email: string, password: string, totp?: string) => Promise<AuthResult>; onRegister: (value: { email: string; password: string; legalAcceptance: { agreementAccepted: boolean; personalDataAccepted: boolean; documentIds: number[] } }) => Promise<AuthResult>; initialError?: string }) {
   const { locale, t } = useI18n();
   const [mode, setMode] = useState<"login" | "register">("login");
   const [turning, setTurning] = useState<"to-register" | "to-login" | null>(null);
@@ -29,6 +29,10 @@ export function LoginScreen({ onLogin, onRegister, initialError = "" }: { onLogi
   const [totp, setTotp] = useState("");
   const [totpRequired, setTotpRequired] = useState(false);
   const [providers, setProviders] = useState({ google: false, googleClientId: "" });
+  const [legalConfig, setLegalConfig] = useState<{ configured: boolean; documents: LegalDocument[] }>({ configured: false, documents: [] });
+  const [agreementAccepted, setAgreementAccepted] = useState(false);
+  const [personalDataAccepted, setPersonalDataAccepted] = useState(false);
+  const [openedLegal, setOpenedLegal] = useState<LegalDocument | null>(null);
   const [error, setError] = useState(initialError);
   const [submitting, setSubmitting] = useState(false);
   const [accountAction, setAccountAction] = useState<"none" | "recovery" | "reset" | "verification">("none");
@@ -44,6 +48,11 @@ export function LoginScreen({ onLogin, onRegister, initialError = "" }: { onLogi
       if (turnTimer.current) clearTimeout(turnTimer.current);
     };
   }, []);
+
+  useEffect(() => {
+    apiFetch(`/api/auth/legal-documents?locale=${locale}&v=${Date.now()}`, { cache: "no-store" })
+      .then((response) => response.json()).then((value) => setLegalConfig(value)).catch(() => setLegalConfig({ configured: false, documents: [] }));
+  }, [locale]);
 
   useEffect(() => {
     const parameters = new URLSearchParams(window.location.search);
@@ -76,6 +85,10 @@ export function LoginScreen({ onLogin, onRegister, initialError = "" }: { onLogi
       window.google.accounts.id.initialize({
         client_id: providers.googleClientId,
         callback: async ({ credential }) => {
+          if (mode === "register" && (!legalConfig.configured || !agreementAccepted || !personalDataAccepted)) {
+            setError(t("legal.acceptRequired"));
+            return;
+          }
           setSubmitting(true);
           setError("");
           try {
@@ -90,7 +103,7 @@ export function LoginScreen({ onLogin, onRegister, initialError = "" }: { onLogi
                   method: "POST",
                   credentials: "same-origin",
                   headers: { "content-type": "application/json" },
-                  body: JSON.stringify({ credential }),
+                  body: JSON.stringify({ credential, legalAcceptance: { agreementAccepted, personalDataAccepted, documentIds: legalConfig.documents.map((item) => item.id) } }),
                   signal: controller.signal,
                 }).finally(() => window.clearTimeout(timeout));
               } catch (requestError) {
@@ -138,7 +151,7 @@ export function LoginScreen({ onLogin, onRegister, initialError = "" }: { onLogi
       document.head.appendChild(script);
     }
     return () => { active = false; };
-  }, [locale, mode, providers.google, providers.googleClientId]);
+  }, [locale, mode, providers.google, providers.googleClientId, legalConfig, agreementAccepted, personalDataAccepted]);
 
   function changeMode(nextMode: "login" | "register") {
     if (nextMode === mode || turning) return;
@@ -157,7 +170,10 @@ export function LoginScreen({ onLogin, onRegister, initialError = "" }: { onLogi
     event.preventDefault();
     setSubmitting(true);
     setError("");
-    const result = mode === "login" ? await onLogin(email, password, totp) : await onRegister({ email, password });
+    if (mode === "register" && (!legalConfig.configured || !agreementAccepted || !personalDataAccepted)) {
+      setError(legalConfig.configured ? t("legal.acceptRequired") : t("legal.notConfigured")); setSubmitting(false); return;
+    }
+    const result = mode === "login" ? await onLogin(email, password, totp) : await onRegister({ email, password, legalAcceptance: { agreementAccepted, personalDataAccepted, documentIds: legalConfig.documents.map((item) => item.id) } });
     if (result.requiresTotp) setTotpRequired(true);
     if (result.error) setError(localizedApiError(result.error, mode === "login" ? t("auth.loginError") : t("auth.createProfileError")));
     setSubmitting(false);
@@ -210,9 +226,14 @@ export function LoginScreen({ onLogin, onRegister, initialError = "" }: { onLogi
       <form onSubmit={submit}>
         <label>E-mail<input required type="email" autoComplete="email" value={email} onChange={(event) => setEmail(event.target.value)} placeholder="you@example.com" /></label>
         <label>{t("auth.password")}<input required minLength={8} type="password" autoComplete={formMode === "login" ? "current-password" : "new-password"} value={password} onChange={(event) => setPassword(event.target.value)} placeholder={t("auth.passwordPlaceholder")} /></label>
+        {formMode === "register" && <div className="auth-legal-acceptances">
+          <label><input type="checkbox" checked={agreementAccepted} onChange={(event) => setAgreementAccepted(event.target.checked)} /><span>{t("legal.agreementAccept")} <button className="inline-legal-link" type="button" onClick={(event) => { event.preventDefault(); event.stopPropagation(); setOpenedLegal(legalConfig.documents.find((item) => item.type === "user_agreement") ?? null); }}>{t("legal.userAgreement")}</button></span></label>
+          <label><input type="checkbox" checked={personalDataAccepted} onChange={(event) => setPersonalDataAccepted(event.target.checked)} /><span>{t("legal.personalDataAccept")} <button className="inline-legal-link" type="button" onClick={(event) => { event.preventDefault(); event.stopPropagation(); setOpenedLegal(legalConfig.documents.find((item) => item.type === "personal_data_consent") ?? legalConfig.documents.find((item) => item.type === "privacy_policy") ?? null); }}>{t("legal.consent")}</button></span></label>
+          {!legalConfig.configured && <small className="form-error">{t("legal.notConfigured")}</small>}
+        </div>}
         {formMode === "login" && totpRequired && <label>{t("auth.totp")}<input required autoComplete="one-time-code" maxLength={19} value={totp} onChange={(event) => setTotp(event.target.value.toUpperCase().replace(/[^A-Z0-9-]/g, "").slice(0, 19))} placeholder="000000 / BM-XXXX-XXXX-XXXX" /></label>}
         {error && <span className="login-error">{error}</span>}
-        <button className="primary-button" type="submit" disabled={submitting}>{submitting ? t("auth.checking") : formMode === "login" ? t("auth.login") : t("auth.createProfile")}</button>
+        <button className="primary-button" type="submit" disabled={submitting || formMode === "register" && (!legalConfig.configured || !agreementAccepted || !personalDataAccepted)}>{submitting ? t("auth.checking") : formMode === "login" ? t("auth.login") : t("auth.createProfile")}</button>
       </form>
       <div className="auth-provider-actions">
         {providers.google ? <div className="google-provider-button" ref={googleButtonRef} /> : <span>{t("auth.googleUnavailable")}</span>}
@@ -223,6 +244,7 @@ export function LoginScreen({ onLogin, onRegister, initialError = "" }: { onLogi
         <h2>{formMode === "login" ? t("auth.firstTime") : t("auth.hasProfile")}</h2>
         <button className="outline-button auth-switch-button" type="button" onClick={() => changeMode(formMode === "login" ? "register" : "login")}>{formMode === "login" ? t("auth.register") : t("auth.login")}</button>
       </div>
+      {openedLegal && <div className="notice-backdrop auth-legal-backdrop" onMouseDown={() => setOpenedLegal(null)}><section className="compliance-document-modal" role="dialog" aria-modal="true" onMouseDown={(event) => event.stopPropagation()}><button className="modal-close" type="button" aria-label={t("common.close")} onClick={() => setOpenedLegal(null)}>×</button><span className="section-subtitle">{t("legal.version", { version: openedLegal.version })}</span><h2>{openedLegal.title}</h2><div className="legal-document-content" data-i18n-skip>{openedLegal.content}</div></section></div>}
     </div>;
   }
 

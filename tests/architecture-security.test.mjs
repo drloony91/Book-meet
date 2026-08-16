@@ -261,7 +261,7 @@ test("тип загруженного изображения определяе�
 
 test("изменяющие API-запросы имеют отдельные лимиты", () => {
   assert.equal(requestLimitPolicy("GET", "/bootstrap"), null);
-  assert.deepEqual(requestLimitPolicy("POST", "/auth/register"), { name: "auth", limit: 30, windowMs: 900_000 });
+  assert.deepEqual(requestLimitPolicy("POST", "/auth/register"), { name: "auth", limit: 20, windowMs: 900_000 });
   assert.deepEqual(requestLimitPolicy("POST", "/social/messages"), { name: "messages", limit: 60, windowMs: 60_000 });
 });
 
@@ -364,7 +364,10 @@ test("этапы 7 и 8 закрепляют удаление профиля, в
   const profile = await readFile(path.join(root, "app", "screens", "ProfileScreens.tsx"), "utf8");
   assert.match(migration, /deletion_expires_at DATETIME/);
   assert.match(migration, /purged_at DATETIME/);
-  assert.match(api, /DELETE FROM messages WHERE sender_user_id = \? OR recipient_user_id = \?/);
+  assert.doesNotMatch(api, /DELETE FROM messages WHERE sender_user_id = \? OR recipient_user_id = \?/);
+  assert.match(api, /INTERVAL 15 DAY/);
+  assert.match(api, /UPDATE reports SET reporter_user_id = NULL, reporter_anonymized = 1/);
+  assert.match(api, /INSERT INTO finalized_profile_deletions/);
   assert.match(api, /purgeExpiredDeletedProfiles/);
   assert.match(api, /router\.post\("\/auth\/deleted-profile\/restore"/);
   assert.match(api, /router\.post\("\/auth\/deleted-profile\/new"/);

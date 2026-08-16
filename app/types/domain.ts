@@ -136,6 +136,7 @@ export type UserProfileData = {
   gender: "Мужской" | "Женский" | "Не указан";
   birthDate?: string;
   age?: number;
+  ageGroup?: "minor" | "adult" | "missing";
   showBirthDateToFriends?: boolean;
   tabOrder?: ProfileTab[];
   hiddenProfileTabs?: ProfileTab[];
@@ -168,7 +169,8 @@ export type UserBlock = { blockerId: number; blockedId: number; createdAt?: stri
 export type ReportMaterialKind = "book" | "review" | "excerpt" | "event" | "occasion" | "publisher_news";
 export type SafetyReport = {
   id: number;
-  reporterId: number;
+  reference?: string;
+  reporterId?: number;
   reporterName: string;
   targetKind: "user" | ReportMaterialKind | "chat" | "comment";
   targetId: number;
@@ -176,8 +178,13 @@ export type SafetyReport = {
   targetUserName?: string;
   targetTitle?: string;
   reason: string;
-  status: "new" | "reviewed";
+  status: "new" | "reviewing" | "satisfied" | "rejected";
   createdAt: string;
+  dueAt?: string;
+  motivatedResponse?: string;
+  responseAt?: string;
+  appealedAt?: string;
+  appealText?: string;
   commentText?: string;
   materialKind?: ReportMaterialKind;
   materialId?: number;
@@ -187,8 +194,10 @@ export type DemoUser = { id: number; username: string; initials: string; color: 
 
 export type AdultMaterialKind = "book" | "review" | "excerpt" | "event" | "occasion";
 export type AdultAccess = { status: "adult" | "minor" | "missing"; restricted: Partial<Record<AdultMaterialKind, number[]>> };
+export type LegalDocument = { id: number; type: "user_agreement" | "privacy_policy" | "personal_data_consent"; version: string; language: "ru" | "kk" | "en"; title: string; content: string; fileName?: string; requiresReacceptance?: boolean; publishedAt?: string };
+export type AccessGate = { profileComplete: boolean; missingProfileFields: string[]; legalConfigured: boolean; pendingLegalDocuments: LegalDocument[]; legalDocuments?: LegalDocument[] };
 export type LinkedProfileCard = { id: number; name: string; type: "Читатель" | "Писатель" | "Блогер" | "Сообщество"; avatarUrl?: string; profileCompleted?: boolean };
-export type BootstrapData = { activeUserId: number; profileCompleted?: boolean; adultAccess?: AdultAccess; users: DemoUser[]; books?: LibraryBook[]; linkedProfile?: LinkedProfileCard; messages: Record<string, Message[]>; friendRequests: FriendRequest[]; friendships: Friendship[]; communityMemberships?: CommunityMembership[]; follows: Follow[]; notifications: SocialNotification[]; likes: Record<string, number[]>; events?: BookEvent[]; occasions?: Occasion[]; blocks?: UserBlock[]; blockedByUserIds?: number[]; reports?: SafetyReport[] };
+export type BootstrapData = { activeUserId: number; profileCompleted?: boolean; accessGate?: AccessGate; adultAccess?: AdultAccess; users: DemoUser[]; books?: LibraryBook[]; linkedProfile?: LinkedProfileCard; messages: Record<string, Message[]>; friendRequests: FriendRequest[]; friendships: Friendship[]; communityMemberships?: CommunityMembership[]; follows: Follow[]; notifications: SocialNotification[]; likes: Record<string, number[]>; events?: BookEvent[]; occasions?: Occasion[]; blocks?: UserBlock[]; blockedByUserIds?: number[]; reports?: SafetyReport[] };
 export type PublicCatalogBook = Pick<LibraryBook, "id" | "author" | "title" | "isbn" | "publisher" | "genres" | "annotation" | "coverUrl" | "coverTone"> & { addedAt?: string; popularity: number };
 export type PublicCatalogOwner = { id: number; name: string; initials: string; color: string; avatarUrl?: string };
 export type PublicCatalogMaterial = { id: number; kind: "review" | "excerpt" | "publisher_news"; title: string; preview: string; ownerName: string; owner: PublicCatalogOwner; createdAt?: string };
@@ -196,7 +205,7 @@ export type PublicCatalogEvent = { id: number; title: string; summary: string; d
 export type PublicCatalogOccasion = { id: number; type: OccasionType; primaryText: string; audienceText: string; targetCities: string[]; meetingDate?: string; meetingStartTime?: string; meetingEndTime?: string; meetingCity?: string; meetingAddress?: string; createdAt?: string };
 export type PublicOrganization = { id: number; name: string; city: string; type: "Издатель" | "Сообщество"; bio: string; communityType?: string; initials: string; color: string; avatarUrl?: string };
 export type PublicCatalogData = { books: PublicCatalogBook[]; materials: PublicCatalogMaterial[]; events: PublicCatalogEvent[]; occasions: PublicCatalogOccasion[]; organizations: PublicOrganization[] };
-export type AuthResult = { error?: string; requiresTotp?: boolean; deletedProfile?: boolean; daysRemaining?: number };
+export type AuthResult = { error?: string; code?: string; requiresTotp?: boolean; deletedProfile?: boolean; daysRemaining?: number };
 
 export type AdminMaterialKind = "book" | "review" | "excerpt" | "event" | "occasion";
 export type AdminCatalogKind = AdminMaterialKind | "publisher_news";

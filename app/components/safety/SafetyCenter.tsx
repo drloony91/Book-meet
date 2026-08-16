@@ -36,6 +36,7 @@ function SafetyReportDialog({ target, onClose, onChanged }: { target: ReportTarg
   const [blockUser, setBlockUser] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
+  const [confirmation, setConfirmation] = useState("");
   const routedPopup = useRoutedPopup(`/reports/${target.kind}/${target.id}`, "/", onClose, `${t("safety.report")} — Book Meet`);
 
   const userReport = target.kind === "user";
@@ -52,9 +53,9 @@ function SafetyReportDialog({ target, onClose, onChanged }: { target: ReportTarg
         headers: { "content-type": "application/json" },
         body: JSON.stringify({ targetKind: target?.kind, targetId: target?.id, reason: reason.trim(), blockUser }),
       });
-      const data = await response.json().catch(() => ({})) as { error?: string };
+      const data = await response.json().catch(() => ({})) as { error?: string; reference?: string };
       if (!response.ok) throw new Error(localizedApiError(data.error, t("safety.sendError")));
-      routedPopup.close();
+      setConfirmation(data.reference ?? "");
       onChanged();
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : t("safety.sendError"));
@@ -67,6 +68,7 @@ function SafetyReportDialog({ target, onClose, onChanged }: { target: ReportTarg
   const title = userReport ? t("safety.user") : target.kind === "chat" ? t("safety.chat") : target.kind === "comment" ? t("safety.comment") : t("safety.material");
   return createPortal(<div className="nested-modal-backdrop safety-backdrop" onMouseDown={routedPopup.close}>
     <section className="safety-report-modal" role="dialog" aria-modal="true" onMouseDown={(event) => event.stopPropagation()}>
+      {confirmation ? <><h2>{t("safety.confirmationTitle")}</h2><p>{t("safety.confirmationText", { reference: confirmation })}</p><button className="primary-button" type="button" onClick={routedPopup.close}>{t("common.ok")}</button></> : <>
       <h2>{title}</h2>
       {userReport && <>
         <label className="safety-block-choice">
@@ -85,6 +87,7 @@ function SafetyReportDialog({ target, onClose, onChanged }: { target: ReportTarg
           <button className="outline-button" type="button" onClick={routedPopup.close}>{t("common.cancel")}</button>
         </div>
       </form>
+      </>}
     </section>
   </div>, document.body);
 }

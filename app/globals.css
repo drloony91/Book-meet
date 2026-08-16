@@ -1189,6 +1189,54 @@ select option {
   }
 }
 
+.auth-legal-acceptances,
+.legal-document-links { display: grid; gap: 8px; }
+.auth-legal-acceptances { margin: 4px 0 8px; font-size: 12px; }
+.auth-legal-acceptances label,
+.legal-acceptance-choice { display: flex; align-items: flex-start; gap: 8px; }
+.auth-legal-acceptances input,
+.legal-acceptance-choice input { flex: 0 0 auto; margin-top: 3px; }
+.inline-legal-link,
+.text-link-button { border: 0; padding: 0; color: #1769c2; background: transparent; text-decoration: underline; cursor: pointer; font: inherit; }
+.auth-legal-backdrop,
+.compliance-document-backdrop { z-index: 1600; }
+.compliance-access-backdrop { z-index: 1500; }
+.compliance-access-modal,
+.compliance-document-modal,
+.complaint-detail-modal { position: relative; width: min(620px, calc(100vw - 32px)); max-height: min(82vh, 760px); overflow: auto; border-radius: 22px; background: #fff; padding: 28px; box-shadow: 0 24px 70px rgba(22, 43, 66, .24); }
+.compliance-document-modal { width: min(780px, calc(100vw - 32px)); }
+.legal-document-content { white-space: pre-wrap; line-height: 1.55; }
+.legal-document-links { margin: 18px 0; justify-items: start; }
+.legal-acceptance-choice { margin: 12px 0; }
+.user-complaints-settings { margin-top: 22px; padding-top: 20px; border-top: 1px solid #e1e5e8; }
+.user-complaints-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 12px; }
+.user-complaints-grid > button { min-height: 82px; display: grid; align-content: center; gap: 6px; text-align: left; border: 1px solid #d9e0e5; border-radius: 15px; padding: 14px; background: #fff; color: inherit; }
+.complaint-detail-modal dl { display: grid; grid-template-columns: minmax(120px, auto) 1fr; gap: 10px 16px; }
+.complaint-detail-modal dt { color: #70777d; }
+.complaint-detail-modal dd { margin: 0; }
+.report-deadline { color: #2b6b4a; }
+.report-overdue { color: #bd3131; }
+.admin-report-list > button { position: relative; }
+.admin-report-list .report-deadline,
+.admin-report-list .report-overdue { justify-self: start; font-size: 12px; }
+.admin-compliance-panel { display: grid; gap: 20px; }
+.admin-compliance-tabs { display: flex; flex-wrap: wrap; gap: 8px; }
+.admin-compliance-tabs button { border: 1px solid #cbd5dc; border-radius: 999px; padding: 9px 14px; background: #fff; color: #58636b; }
+.admin-compliance-tabs button.active { border-color: #1769c2; background: #e9f3ff; color: #1769c2; }
+.admin-compliance-form { display: grid; gap: 14px; max-width: 760px; }
+.admin-compliance-form label { display: grid; gap: 6px; }
+.admin-compliance-form label:has(> input[type="checkbox"]) { display: flex; align-items: center; gap: 8px; }
+.admin-audit-list { display: grid; gap: 10px; }
+.admin-audit-list article { display: grid; gap: 5px; border: 1px solid #dfe5e9; border-radius: 14px; padding: 14px; background: #fff; }
+
+@media (max-width: 720px) {
+  .compliance-access-modal,
+  .compliance-document-modal,
+  .complaint-detail-modal { width: calc(100vw - 20px); padding: 24px 18px; border-radius: 18px; }
+  .complaint-detail-modal dl { grid-template-columns: 1fr; gap: 4px; }
+  .complaint-detail-modal dd { margin-bottom: 10px; }
+}
+
 @media (max-width: 480px) {
   .brand-header-logo {
     width: 165px;
@@ -1771,7 +1819,8 @@ select option {
 .following-label { align-self: center; padding: 8px 10px; color: #4f7a63; font-size: 10px; }
 .tooltip-button { position: relative; }
 .tooltip-button::after { position: absolute; left: 50%; bottom: calc(100% + 10px); z-index: 10; width: 280px; padding: 9px 11px; border-radius: 8px; color: white; background: rgba(24, 39, 57, .94); box-shadow: 0 8px 24px rgba(24, 39, 57, .18); content: attr(data-tooltip); opacity: 0; pointer-events: none; transform: translate(-50%, 4px); transition: .16s ease; font: 10px/1.45 Arial, sans-serif; text-align: left; }
-.tooltip-button:hover::after, .tooltip-button:focus-visible::after { opacity: 1; transform: translate(-50%, 0); }
+.tooltip-button:hover::after, .tooltip-button:focus-visible::after, .tooltip-button[aria-disabled="true"]:focus::after { opacity: 1; transform: translate(-50%, 0); }
+.primary-button[aria-disabled="true"] { opacity: .55; cursor: not-allowed; }
 .friend-request-form { position: relative; max-width: 650px; margin: 14px auto 23px; }
 .friend-request-form textarea { width: 100%; min-height: 105px; padding: 14px 100px 42px 14px; border: 1px solid #b8cee2; border-radius: 12px; resize: vertical; outline: 0; font: 12px/1.5 Arial, sans-serif; }
 .friend-request-form textarea:focus { border-color: var(--blue); box-shadow: 0 0 0 3px var(--blue-soft); }

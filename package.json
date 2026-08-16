@@ -12,7 +12,7 @@
     "demo": "node scripts/demo.js",
     "build": "vite build",
     "start": "node server/index.js",
-    "test": "vite build && node --test tests/security.test.mjs tests/architecture-security.test.mjs tests/book-query.test.mjs tests/bootstrap-router.test.mjs tests/production-contract.test.mjs tests/i18n.test.mjs",
+    "test": "vite build && node --test tests/security.test.mjs tests/architecture-security.test.mjs tests/book-query.test.mjs tests/bootstrap-router.test.mjs tests/production-contract.test.mjs tests/i18n.test.mjs tests/compliance.test.mjs",
     "lint": "tsc --noEmit",
     "db:migrate": "node scripts/migrate.js",
     "db:seed": "node scripts/seed.js",

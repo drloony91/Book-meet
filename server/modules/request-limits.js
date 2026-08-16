@@ -2,7 +2,9 @@ const buckets = new Map();
 
 export function requestLimitPolicy(method, path) {
   if (["GET", "HEAD", "OPTIONS"].includes(method)) return null;
-  if (path.startsWith("/auth/")) return { name: "auth", limit: 30, windowMs: 15 * 60_000 };
+  if (path === "/auth/login" || path === "/auth/google/credential") return { name: "auth-login", limit: 12, windowMs: 15 * 60_000 };
+  if (path.startsWith("/auth/password-reset")) return { name: "auth-recovery", limit: 6, windowMs: 15 * 60_000 };
+  if (path.startsWith("/auth/")) return { name: "auth", limit: 20, windowMs: 15 * 60_000 };
   if (path === "/social/messages") return { name: "messages", limit: 60, windowMs: 60_000 };
   if (path === "/books" || path === "/users/me/state") return { name: "uploads", limit: 30, windowMs: 60_000 };
   return { name: "writes", limit: 180, windowMs: 60_000 };

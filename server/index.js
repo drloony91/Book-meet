@@ -25,6 +25,9 @@ async function start() {
   if (production && demoMode) {
     throw new Error("DEMO_MODE запрещён в production");
   }
+  if (production && !process.env.AUDIT_HASH_SECRET) {
+    throw new Error("AUDIT_HASH_SECRET is required in production");
+  }
 
   const { default: api } = await import(demoMode ? "./demo-api.js" : "./api.js");
   const telegramDispatcher = demoMode ? null : createTelegramOutboxDispatcher();
@@ -92,7 +95,7 @@ async function start() {
     console.error(error);
     const status = error.statusCode || 500;
     const message = process.env.NODE_ENV === "production" && status >= 500 ? "Не удалось выполнить запрос" : error.message;
-    const code = error.code === "TOP3_LIMIT" ? error.code : undefined;
+    const code = typeof error.code === "string" && /^[A-Z0-9_]{3,80}$/.test(error.code) ? error.code : undefined;
     response.status(status).json(code ? { error: message, code } : { error: message });
   });
 

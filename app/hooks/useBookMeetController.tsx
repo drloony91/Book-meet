@@ -46,6 +46,7 @@ import {
 import { EmptyContentState } from "../components/common/EmptyContentState";
 import { ModalIconActions } from "../components/modals/ModalIconActions";
 import { SafetyCenter, openReportDialog } from "../components/safety/SafetyCenter";
+import { ComplianceAccessGate } from "../components/compliance/AccessGate";
 import {
   catalogFromSources,
   eventTimestamp,
@@ -113,6 +114,7 @@ export function useBookMeetController() {
   const [guestAuthOpen, setGuestAuthOpen] = useState(false);
   const [publicCatalog, setPublicCatalog] = useState<PublicCatalogData | null>(null);
   const [newlyRegistered, setNewlyRegistered] = useState(false);
+  const [accessGate, setAccessGate] = useState<BootstrapData["accessGate"]>();
   const [startupError, setStartupError] = useState("");
   const [view, setView] = useState<MainView>(initialMainView);
   const currentRoute = useCurrentAppRoute();
@@ -408,6 +410,7 @@ export function useBookMeetController() {
     setBlocks(data.blocks ?? []);
     setBlockedByUserIds(data.blockedByUserIds ?? []);
     setReports(data.reports ?? []);
+    if (data.accessGate) setAccessGate(data.accessGate);
     setSuspension(null);
     setStartupError("");
   }
@@ -918,7 +921,7 @@ export function useBookMeetController() {
     }
   }
 
-  async function register(value: { email: string; password: string }): Promise<AuthResult> {
+  async function register(value: { email: string; password: string; legalAcceptance: { agreementAccepted: boolean; personalDataAccepted: boolean; documentIds: number[] } }): Promise<AuthResult> {
     const loadingStartedAt = Date.now();
     setAuthTransition(true);
     try {
@@ -1056,7 +1059,7 @@ export function useBookMeetController() {
       />
 
       {view === "profile" && !chatExpanded ? (
-        currentUser.isAdmin ? <AdminProfile onBack={closeOwnProfile} onLogout={logout} events={events} occasions={occasions} users={users} catalog={catalog} reports={reports} onModerateEvent={moderateEvent} onModerateOccasion={moderateOccasion} onModeratePublisher={moderatePublisher} onOpenChat={openChat} onOpenUser={openUserProfile} onRefresh={() => void refreshBootstrap()} onDeleteMaterial={deleteMaterial} /> : <MyProfile key={`${currentUser.id}-${profileAction ?? "profile"}-${profileEditId ?? "new"}-${newlyRegistered ? "setup" : "ready"}`} onBack={closeOwnProfile} user={currentUser} users={users} catalog={catalog} friends={currentUser.profile.type === "Сообщество" ? currentMembershipUsers : currentFriendUsers} friendRequests={friendRequests} follows={follows} events={events} occasions={occasions} likes={likes} initialAction={profileAction} initialEditId={profileEditId} initialEditing={newlyRegistered} onProfileCompleted={() => { if (newlyRegistered) void apiFetch("/api/users/me/profile-complete", { method: "PATCH", credentials: "same-origin" }); setNewlyRegistered(false); }} onToggleLike={toggleLike} onComment={addComment} onEditEvent={setEditingEvent} onDeleteEvent={(id) => setEvents((current) => current.filter((item) => item.id !== id))} onEditOccasion={setEditingOccasion} onDeleteOccasion={(id) => setOccasions((current) => current.filter((item) => item.id !== id))} onModerateEvent={moderateEvent} onModerateOccasion={moderateOccasion} onOpenUser={openUserProfile} onOpenChat={openChat} onUserChange={handleUserChange} onHomeViewChange={handleHomeViewChange} onLogout={logout} />
+        currentUser.isAdmin ? <AdminProfile onBack={closeOwnProfile} onLogout={logout} events={events} occasions={occasions} users={users} catalog={catalog} reports={reports} onModerateEvent={moderateEvent} onModerateOccasion={moderateOccasion} onModeratePublisher={moderatePublisher} onOpenChat={openChat} onOpenUser={openUserProfile} onRefresh={() => void refreshBootstrap()} onDeleteMaterial={deleteMaterial} /> : <MyProfile key={`${currentUser.id}-${profileAction ?? "profile"}-${profileEditId ?? "new"}-${newlyRegistered ? "setup" : "ready"}`} onBack={closeOwnProfile} user={currentUser} users={users} catalog={catalog} friends={currentUser.profile.type === "Сообщество" ? currentMembershipUsers : currentFriendUsers} friendRequests={friendRequests} follows={follows} events={events} occasions={occasions} likes={likes} initialAction={profileAction} initialEditId={profileEditId} initialEditing={newlyRegistered} onProfileCompleted={() => { if (newlyRegistered) void apiFetch("/api/users/me/profile-complete", { method: "PATCH", credentials: "same-origin" }).then((response) => { if (response.ok) return refreshBootstrap(); return undefined; }); setNewlyRegistered(false); }} onToggleLike={toggleLike} onComment={addComment} onEditEvent={setEditingEvent} onDeleteEvent={(id) => setEvents((current) => current.filter((item) => item.id !== id))} onEditOccasion={setEditingOccasion} onDeleteOccasion={(id) => setOccasions((current) => current.filter((item) => item.id !== id))} onModerateEvent={moderateEvent} onModerateOccasion={moderateOccasion} onOpenUser={openUserProfile} onOpenChat={openChat} onUserChange={handleUserChange} onHomeViewChange={handleHomeViewChange} onLogout={logout} />
       ) : (
         <WorkspaceScreen
           friends={currentFriends}
@@ -1096,6 +1099,7 @@ export function useBookMeetController() {
       {blockedProfileNotice && <div className="nested-modal-backdrop" onMouseDown={() => setBlockedProfileNotice(false)}><section className="confirm-social-modal" role="alertdialog" aria-modal="true" onMouseDown={(event) => event.stopPropagation()}><h2>{t("social.blockedNotice")}</h2><button className="primary-button" type="button" autoFocus onClick={() => setBlockedProfileNotice(false)}>{t("common.ok")}</button></section></div>}
       {adultRestrictionNotice && <div className="nested-modal-backdrop"><section className="adult-restriction-modal" role="alertdialog" aria-modal="true" aria-labelledby="adult-restriction-title"><span className="adult-restriction-mark" aria-hidden="true">18+</span><h2 id="adult-restriction-title">{t("content.adultRestriction")}</h2>{adultRestrictionNotice === "missing" && <p>{t("content.birthDateRequired")}</p>}<div className="form-actions">{adultRestrictionNotice === "missing" ? <><button className="primary-button" type="button" onClick={() => leaveRestrictedMaterial(true)}>{t("event.goProfile")}</button><button className="outline-button" type="button" onClick={() => leaveRestrictedMaterial(false)}>{t("common.logout")}</button></> : <button className="primary-button" type="button" autoFocus onClick={() => leaveRestrictedMaterial(false)}>{t("common.ok")}</button>}</div></section></div>}
       {catalogBookToAdd && <BookEditor book={catalogBookToAdd} catalog={catalog} top3Count={currentUser.books.filter((item) => item.topRank).length} onClose={() => setCatalogBookToAdd(null)} onSave={(book) => void saveCatalogBookToLibrary(book)} />}
+      {accessGate && <ComplianceAccessGate gate={accessGate} onAccepted={async () => { await refreshBootstrap(); }} onOpenProfile={() => { setProfileAction(null); setProfileEditId(null); setView("profile"); window.history.replaceState({}, "", "/profile"); }} />}
       <SafetyCenter onChanged={() => void refreshBootstrap()} />
     </div>
   );

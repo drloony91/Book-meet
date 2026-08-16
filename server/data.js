@@ -1,4 +1,5 @@
 import { getPool } from "./db.js";
+import { legalAccessState, profileAccessState } from "./modules/compliance.js";
 import { normalizeIdentity } from "./security.js";
 
 export function parseJson(value, fallback = []) {
@@ -165,10 +166,11 @@ export async function loadUsers(connection = getPool(), viewerId = null) {
       })),
       createdAtValue: book.book_created_at ? new Date(book.book_created_at).toISOString() : undefined,
     }));
+    const deletedView = Boolean(row.deleted_at || row.purged_at);
     return {
       id: Number(row.id),
-      username: row.username,
-      initials: row.initials,
+      username: deletedView ? "deleted-user" : row.username,
+      initials: deletedView ? "—" : row.initials,
       color: row.color,
       avatarUrl: row.deleted_at || row.purged_at ? undefined : row.avatar_path ?? undefined,
       isAdmin: row.role === "admin",
@@ -186,40 +188,41 @@ export async function loadUsers(connection = getPool(), viewerId = null) {
       deletionExpiresAt: row.deletion_expires_at ? new Date(row.deletion_expires_at).toISOString() : undefined,
       purged: Boolean(row.purged_at),
       profile: {
-        name: row.display_name,
-        city: row.city,
-        cityId: row.city_id ? Number(row.city_id) : undefined,
-        country: row.country_name ?? undefined,
+        name: deletedView ? "Удалённый пользователь" : row.display_name,
+        city: deletedView ? "" : row.city,
+        cityId: !deletedView && row.city_id ? Number(row.city_id) : undefined,
+        country: deletedView ? undefined : row.country_name ?? undefined,
         type: String(row.profile_type ?? "Читатель").trim() || "Читатель",
-        gender: row.gender ?? "Не указан",
-        birthDate: Number(row.id) === Number(viewerId) || viewerIsAdmin || row.show_birth_date_to_friends && isViewerFriend(row.id) ? sqlDate(row.birth_date) || undefined : undefined,
-        age: Number(row.id) === Number(viewerId) || viewerIsAdmin ? ageFromBirthDate(row.birth_date) ?? undefined : undefined,
-        showBirthDateToFriends: Number(row.id) === Number(viewerId) || viewerIsAdmin ? Boolean(row.show_birth_date_to_friends) : undefined,
-        tabOrder: parseJson(row.profile_tab_order),
-        hiddenProfileTabs: parseJson(row.hidden_profile_tabs),
+        gender: deletedView ? "Не указан" : row.gender ?? "Не указан",
+        birthDate: !deletedView && (Number(row.id) === Number(viewerId) || viewerIsAdmin || row.show_birth_date_to_friends && isViewerFriend(row.id)) ? sqlDate(row.birth_date) || undefined : undefined,
+        age: !deletedView && (Number(row.id) === Number(viewerId) || viewerIsAdmin) ? ageFromBirthDate(row.birth_date) ?? undefined : undefined,
+        ageGroup: deletedView || ageFromBirthDate(row.birth_date) === null ? "missing" : ageFromBirthDate(row.birth_date) < 18 ? "minor" : "adult",
+        showBirthDateToFriends: deletedView ? undefined : Number(row.id) === Number(viewerId) || viewerIsAdmin ? Boolean(row.show_birth_date_to_friends) : undefined,
+        tabOrder: deletedView ? [] : parseJson(row.profile_tab_order),
+        hiddenProfileTabs: deletedView ? [] : parseJson(row.hidden_profile_tabs),
         homeView: row.home_view === "classic" ? "classic" : "feed",
-        bio: row.bio ?? "",
-        authorInfluences: row.author_influences ?? "",
-        writingThemes: row.writing_themes ?? "",
-        weekend: row.weekend ?? "",
-        joy: row.joy ?? "",
-        talk: row.talk ?? "",
-        strangerMessage: row.stranger_message ?? "",
-        favoriteGenres: parseJson(row.favorite_genres),
-        dislikedGenres: parseJson(row.disliked_genres),
+        bio: deletedView ? "" : row.bio ?? "",
+        authorInfluences: deletedView ? "" : row.author_influences ?? "",
+        writingThemes: deletedView ? "" : row.writing_themes ?? "",
+        weekend: deletedView ? "" : row.weekend ?? "",
+        joy: deletedView ? "" : row.joy ?? "",
+        talk: deletedView ? "" : row.talk ?? "",
+        strangerMessage: deletedView ? "" : row.stranger_message ?? "",
+        favoriteGenres: deletedView ? [] : parseJson(row.favorite_genres),
+        dislikedGenres: deletedView ? [] : parseJson(row.disliked_genres),
         publisherStatus: row.publisher_status ?? (["Издатель", "Сообщество"].includes(row.profile_type) ? "pending" : "not_required"),
-        publisherWebsite: row.publisher_website ?? "",
-        publisherSalesLinks: parseJson(row.publisher_sales_links),
-        publisherLegalName: viewerIsAdmin || Number(row.id) === Number(viewerId) ? row.publisher_legal_name ?? "" : "",
-        publisherBin: viewerIsAdmin || Number(row.id) === Number(viewerId) ? row.publisher_bin ?? "" : "",
-        publisherAccount: viewerIsAdmin || Number(row.id) === Number(viewerId) ? row.publisher_account ?? "" : "",
-        publisherBik: viewerIsAdmin || Number(row.id) === Number(viewerId) ? row.publisher_bik ?? "" : "",
-        publisherBank: viewerIsAdmin || Number(row.id) === Number(viewerId) ? row.publisher_bank ?? "" : "",
-        publisherLegalAddress: viewerIsAdmin || Number(row.id) === Number(viewerId) ? row.publisher_legal_address ?? "" : "",
-        publisherPostalAddress: viewerIsAdmin || Number(row.id) === Number(viewerId) ? row.publisher_postal_address ?? "" : "",
-        publisherModerationNote: viewerIsAdmin || Number(row.id) === Number(viewerId) ? row.publisher_moderation_note ?? "" : "",
-        communityType: row.community_type ?? "",
-        communityRules: row.community_rules ?? "",
+        publisherWebsite: deletedView ? "" : row.publisher_website ?? "",
+        publisherSalesLinks: deletedView ? [] : parseJson(row.publisher_sales_links),
+        publisherLegalName: viewerIsAdmin && !deletedView ? row.publisher_legal_name ?? "" : "",
+        publisherBin: viewerIsAdmin && !deletedView ? row.publisher_bin ?? "" : "",
+        publisherAccount: viewerIsAdmin && !deletedView ? row.publisher_account ?? "" : "",
+        publisherBik: viewerIsAdmin && !deletedView ? row.publisher_bik ?? "" : "",
+        publisherBank: viewerIsAdmin && !deletedView ? row.publisher_bank ?? "" : "",
+        publisherLegalAddress: viewerIsAdmin && !deletedView ? row.publisher_legal_address ?? "" : "",
+        publisherPostalAddress: viewerIsAdmin && !deletedView ? row.publisher_postal_address ?? "" : "",
+        publisherModerationNote: viewerIsAdmin && !deletedView ? row.publisher_moderation_note ?? "" : "",
+        communityType: deletedView ? "" : row.community_type ?? "",
+        communityRules: deletedView ? "" : row.community_rules ?? "",
       },
       books: library,
       authorBooks,
@@ -272,7 +275,7 @@ export async function loadBootstrap(userId, options = {}) {
   const includeSocial = sections.has("social");
   const includeModeration = sections.has("moderation");
   const [[accountState]] = await pool.query(
-    `SELECT u.profile_completed, u.role, p.gender, p.profile_type, p.birth_date
+    `SELECT u.profile_completed, u.role, u.preferred_locale, p.gender, p.profile_type, p.birth_date
        FROM users u
        JOIN profiles p ON p.user_id = u.id
       WHERE u.id = ?
@@ -283,6 +286,10 @@ export async function loadBootstrap(userId, options = {}) {
     isAdmin: accountState?.role === "admin",
     profile: { gender: accountState?.gender, type: accountState?.profile_type, age: ageFromBirthDate(accountState?.birth_date) ?? undefined },
   };
+  const [profileGate, legalGate] = await Promise.all([
+    profileAccessState(pool, userId),
+    legalAccessState(pool, userId, accountState?.preferred_locale || "ru"),
+  ]);
   const [blockRows] = includeCatalog || includeSocial ? await pool.query(
     "SELECT blocker_user_id, blocked_user_id, created_at FROM user_blocks WHERE blocker_user_id = ? OR blocked_user_id = ?",
     [userId, userId],
@@ -402,8 +409,9 @@ export async function loadBootstrap(userId, options = {}) {
     .filter((row) => row.material_kind === kind && Number(row.material_id) === Number(id))
     .map((row) => ({ id: Number(row.book_id), title: row.title, author: row.author, annotation: row.annotation ?? "", coverUrl: row.cover_path ?? undefined, coverTone: row.cover_tone ?? "blue" }));
   const [reportRows] = includeModeration && currentUser?.isAdmin ? await pool.query(
-    `SELECT r.id, r.reporter_user_id, r.target_kind, r.target_id, r.target_user_id, r.reason,
-            r.status, r.created_at, reporter.display_name AS reporter_name, target.display_name AS target_user_name,
+    `SELECT r.id, r.reference_code, r.reporter_user_id, r.reporter_anonymized, r.target_kind, r.target_id, r.target_user_id, r.reason,
+            r.status, r.created_at, r.due_at, r.motivated_response, r.response_at, r.appealed_at, r.appeal_text,
+            reporter.display_name AS reporter_name, target.display_name AS target_user_name,
             COALESCE(
               CASE WHEN r.target_kind = 'user' THEN target.display_name END,
               CASE WHEN r.target_kind = 'book' THEN (SELECT title FROM books WHERE id = r.target_id) END,
@@ -420,7 +428,7 @@ export async function loadBootstrap(userId, options = {}) {
             CASE WHEN r.target_kind = 'comment' THEN (SELECT material_kind FROM material_comments WHERE id = r.target_id) END AS comment_material_kind,
             CASE WHEN r.target_kind = 'comment' THEN (SELECT material_id FROM material_comments WHERE id = r.target_id) END AS comment_material_id
        FROM reports r
-       JOIN profiles reporter ON reporter.user_id = r.reporter_user_id
+       LEFT JOIN profiles reporter ON reporter.user_id = r.reporter_user_id
        LEFT JOIN profiles target ON target.user_id = r.target_user_id
       ORDER BY r.created_at DESC`,
   ) : [[]];
@@ -539,14 +547,21 @@ export async function loadBootstrap(userId, options = {}) {
   }));
   return {
     activeUserId: Number(userId),
-    profileCompleted: Boolean(accountState?.profile_completed),
+    profileCompleted: profileGate.complete,
+    accessGate: {
+      profileComplete: profileGate.complete,
+      missingProfileFields: profileGate.missing,
+      legalConfigured: legalGate.configured,
+      pendingLegalDocuments: legalGate.pending,
+      legalDocuments: legalGate.documents ?? [],
+    },
     adultAccess: { status: adultStatus, restricted: restrictedAdultMaterials },
     users: usersWithWishlists,
     linkedProfile: linkedProfileRow ? { id: Number(linkedProfileRow.id), name: linkedProfileRow.display_name, type: linkedProfileRow.profile_type, avatarUrl: linkedProfileRow.avatar_path ?? undefined, profileCompleted: Boolean(linkedProfileRow.profile_completed) } : undefined,
     books: catalogBooks,
     blocks: blockRows.map((row) => ({ blockerId: Number(row.blocker_user_id), blockedId: Number(row.blocked_user_id), createdAt: new Date(row.created_at).toISOString() })),
     blockedByUserIds: blockRows.filter((row) => Number(row.blocked_user_id) === Number(userId)).map((row) => Number(row.blocker_user_id)),
-    reports: reportRows.map((row) => ({ id: Number(row.id), reporterId: Number(row.reporter_user_id), reporterName: row.reporter_name, targetKind: row.target_kind, targetId: Number(row.target_id), targetUserId: row.target_user_id ? Number(row.target_user_id) : undefined, targetUserName: row.target_user_name ?? undefined, targetTitle: row.target_title, reason: row.reason, status: row.status, createdAt: new Date(row.created_at).toISOString(), commentText: row.comment_text ?? undefined, materialKind: row.comment_material_kind ?? undefined, materialId: row.comment_material_id ? Number(row.comment_material_id) : undefined, conversationMessages: conversationByReport.get(Number(row.id)) })),
+    reports: reportRows.map((row) => ({ id: Number(row.id), reference: row.reference_code, reporterId: row.reporter_user_id ? Number(row.reporter_user_id) : undefined, reporterName: row.reporter_anonymized ? "Удалённый пользователь" : row.reporter_name, targetKind: row.target_kind, targetId: Number(row.target_id), targetUserId: row.target_user_id ? Number(row.target_user_id) : undefined, targetUserName: row.target_user_name ?? undefined, targetTitle: row.target_title, reason: row.reason, status: row.status, createdAt: new Date(row.created_at).toISOString(), dueAt: row.due_at ? new Date(row.due_at).toISOString() : undefined, motivatedResponse: row.motivated_response ?? undefined, responseAt: row.response_at ? new Date(row.response_at).toISOString() : undefined, appealedAt: row.appealed_at ? new Date(row.appealed_at).toISOString() : undefined, appealText: row.appeal_text ?? undefined, commentText: row.comment_text ?? undefined, materialKind: row.comment_material_kind ?? undefined, materialId: row.comment_material_id ? Number(row.comment_material_id) : undefined, conversationMessages: conversationByReport.get(Number(row.id)) })),
     friendRequests: requestRows.filter((row) => currentUser?.isAdmin || (!hiddenUserIds.has(Number(row.from_user_id)) && !hiddenUserIds.has(Number(row.to_user_id)))).map((row) => ({ id: Number(row.id), fromId: Number(row.from_user_id), toId: Number(row.to_user_id), status: row.status, message: row.message ?? undefined, comment: row.rejection_comment ?? undefined })),
     friendships: friendshipRows.filter((row) => currentUser?.isAdmin || (!hiddenUserIds.has(Number(row.user_low_id)) && !hiddenUserIds.has(Number(row.user_high_id)))).map((row) => ({ userA: Number(row.user_low_id), userB: Number(row.user_high_id) })),
     communityMemberships: communityMembershipRows.filter((row) => currentUser?.isAdmin || (!hiddenUserIds.has(Number(row.community_user_id)) && !hiddenUserIds.has(Number(row.member_user_id)))).map((row) => ({ communityId: Number(row.community_user_id), memberId: Number(row.member_user_id) })),

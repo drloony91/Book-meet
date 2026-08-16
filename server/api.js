@@ -19,6 +19,7 @@ import { authText, requestLocale } from "./modules/i18n.js";
 import { enqueueTelegramAlert, shouldEnqueueSupportAlert } from "./modules/telegram-outbox.js";
 import { loadPublicCatalog } from "./modules/public-catalog.js";
 import { nextTopRank, top3Eligibility } from "./modules/top3.js";
+import { REPORT_STATUSES, REPORT_TARGET_KINDS, activeLegalDocuments, assertAgeCompatible, legalAccessState, logModerationAction, logSecurityEvent, profileAccessState, recordLegalAcceptances, removeCrossAgeRelationships, requestAuditMetadata, validateLegalAcceptance } from "./modules/compliance.js";
 import { clearSessionCookie, clearTransientCookie, createSessionToken, generateRecoveryCodes, generateTotpSecret, hashPassword, hashRecoveryCode, hashSessionToken, isValidEmail, normalizeEmail, normalizeIdentity, readCookie, recoveryCodeIndex, sessionCookie, transientCookie, verifyPassword, verifyTotp } from "./security.js";
 
 const router = Router();
@@ -59,7 +60,6 @@ async function purgeDeletedProfile(connection, userId) {
   const [[account]] = await connection.query("SELECT deleted_at, purged_at FROM users WHERE id = ? FOR UPDATE", [userId]);
   if (!account?.deleted_at || account.purged_at) return false;
   const tombstone = `deleted-${userId}-${randomBytes(6).toString("hex")}`;
-  await connection.query("DELETE FROM messages WHERE sender_user_id = ? OR recipient_user_id = ?", [userId, userId]);
   await connection.query("DELETE FROM sessions WHERE user_id = ?", [userId]);
   await connection.query("DELETE FROM account_action_tokens WHERE user_id = ?", [userId]);
   await connection.query("DELETE FROM friend_requests WHERE from_user_id = ? OR to_user_id = ?", [userId, userId]);
@@ -72,7 +72,9 @@ async function purgeDeletedProfile(connection, userId) {
   await connection.query("DELETE FROM user_books WHERE user_id = ? AND is_author = 0", [userId]);
   await connection.query("DELETE FROM material_likes WHERE user_id = ?", [userId]);
   await connection.query("DELETE FROM notifications WHERE user_id = ? OR actor_user_id = ?", [userId, userId]);
-  await connection.query("DELETE FROM reports WHERE reporter_user_id = ? OR target_user_id = ?", [userId, userId]);
+  await connection.query("DELETE FROM linked_profiles WHERE personal_user_id = ? OR community_user_id = ?", [userId, userId]);
+  await connection.query("UPDATE reports SET reporter_user_id = NULL, reporter_anonymized = 1 WHERE reporter_user_id = ?", [userId]);
+  await connection.query("UPDATE report_appeals SET appellant_user_id = NULL WHERE appellant_user_id = ?", [userId]);
   await connection.query(
     `UPDATE profiles SET display_name = 'Удалённый пользователь', city = '', city_id = NULL, gender = 'Не указан', birth_date = NULL,
             show_birth_date_to_friends = 0, profile_tab_order = NULL, hidden_profile_tabs = NULL, bio = '', author_influences = '', writing_themes = '', weekend = '', joy = '', talk = '',
@@ -88,6 +90,7 @@ async function purgeDeletedProfile(connection, userId) {
             profile_completed = 0, deletion_expires_at = NULL, purged_at = UTC_TIMESTAMP(), last_seen_at = NULL WHERE id = ?`,
     [tombstone, tombstone, await hashPassword(randomBytes(32).toString("base64url")), userId],
   );
+  await connection.query("INSERT INTO finalized_profile_deletions (user_id, tombstone_key, finalized_at) VALUES (?, ?, UTC_TIMESTAMP()) ON DUPLICATE KEY UPDATE tombstone_key = VALUES(tombstone_key), finalized_at = VALUES(finalized_at)", [userId, hashSessionToken(tombstone)]);
   return true;
 }
 
@@ -176,29 +179,51 @@ const deletedProfileCleanupTimer = setInterval(purgeExpiredDeletedProfiles, 6 * 
 deletedProfileCleanupTimer.unref?.();
 setTimeout(purgeExpiredDeletedProfiles, 30_000).unref?.();
 
+async function enforceAgeBoundaries() {
+  try {
+    const removed = await withTransaction((connection) => removeCrossAgeRelationships(connection));
+    if (removed) console.warn(`Удалено несовместимых по возрасту дружеских связей: ${removed}`);
+  } catch (error) {
+    console.warn("Не удалось выполнить аудит возрастных границ:", error.message);
+  }
+}
+
+const ageBoundaryTimer = setInterval(enforceAgeBoundaries, 24 * 60 * 60 * 1000);
+ageBoundaryTimer.unref?.();
+setTimeout(enforceAgeBoundaries, 45_000).unref?.();
+
 function asyncRoute(handler) {
   return (request, response, next) => Promise.resolve(handler(request, response, next)).catch(next);
 }
 
-function loginAttemptState(request) {
-  const key = request.ip || request.socket.remoteAddress || "unknown";
+function loginAttemptState(request, email) {
+  const client = request.ip || request.socket.remoteAddress || "unknown";
   const now = Date.now();
-  const current = loginAttempts.get(key);
-  if (!current || current.resetAt <= now) {
-    const fresh = { key, count: 0, resetAt: now + LOGIN_WINDOW_MS };
-    loginAttempts.set(key, fresh);
-    return fresh;
-  }
-  return { key, ...current };
+  const keys = [`ip:${client}`, `identity:${normalizeEmail(email)}`];
+  const buckets = keys.map((key) => {
+    const current = loginAttempts.get(key);
+    const bucket = !current || current.resetAt <= now ? { count: 0, resetAt: now + LOGIN_WINDOW_MS } : current;
+    loginAttempts.set(key, bucket);
+    return { key, bucket };
+  });
+  return {
+    blocked: buckets.some(({ bucket }) => bucket.count >= LOGIN_ATTEMPT_LIMIT),
+    fail: () => { for (const { bucket } of buckets) bucket.count += 1; },
+    clear: () => { for (const { key } of buckets) loginAttempts.delete(key); },
+  };
 }
 
-async function createSession(connection, userId) {
+async function createSession(connection, userId, request = null) {
   const { token, tokenHash } = createSessionToken();
-  const sessionDays = Math.max(1, Number(process.env.SESSION_DAYS || 7));
+  const [[account]] = await connection.query("SELECT role FROM users WHERE id = ? LIMIT 1", [userId]);
+  const sessionDays = account?.role === "admin"
+    ? Math.max(1 / 24, Number(process.env.ADMIN_SESSION_HOURS || 12) / 24)
+    : Math.max(1, Number(process.env.SESSION_DAYS || 7));
+  const { ipHash, userAgentHash } = request ? requestAuditMetadata(request) : { ipHash: null, userAgentHash: null };
   await connection.query("DELETE FROM sessions WHERE expires_at <= UTC_TIMESTAMP()");
   await connection.query(
-    "INSERT INTO sessions (token_hash, user_id, expires_at) VALUES (?, ?, DATE_ADD(UTC_TIMESTAMP(), INTERVAL ? DAY))",
-    [tokenHash, userId, sessionDays],
+    "INSERT INTO sessions (token_hash, user_id, expires_at, last_seen_at, ip_hash, user_agent_hash) VALUES (?, ?, DATE_ADD(UTC_TIMESTAMP(), INTERVAL ? SECOND), UTC_TIMESTAMP(), ?, ?)",
+    [tokenHash, userId, Math.max(60, Math.round(sessionDays * 86400)), ipHash, userAgentHash],
   );
   return token;
 }
@@ -448,7 +473,7 @@ async function uniqueInternalUsername(connection, baseValue) {
   return `reader-${Date.now()}`;
 }
 
-async function findOrCreateGoogleUser(identity) {
+async function findOrCreateGoogleUser(identity, { legalAcceptance = null, locale = "ru" } = {}) {
   return withTransaction(async (connection) => {
     const subjectColumn = "google_subject";
     const [[bySubject]] = await connection.query(`SELECT id FROM users WHERE ${subjectColumn} = ? LIMIT 1`, [identity.subject]);
@@ -463,6 +488,7 @@ async function findOrCreateGoogleUser(identity) {
       );
       return { userId: Number(account.id), created: false, email: identity.email || "" };
     }
+    const legalDocuments = await validateLegalAcceptance(connection, legalAcceptance, locale);
     const displayName = safeProfileName(identity.name, identity.username);
     const username = await uniqueInternalUsername(connection, identity.email?.split("@")[0] || identity.username || "google-reader");
     const initials = displayName.split(/\s+/).slice(0, 2).map((part) => part[0]).join("").toLocaleUpperCase("ru-RU").slice(0, 4) || "BM";
@@ -479,6 +505,7 @@ async function findOrCreateGoogleUser(identity) {
        VALUES (?, ?, '', NULL, 'Читатель', 'Не указан', '', '', '', '', '', '', '', '[]', '[]')`,
       [userId, displayName],
     );
+    await recordLegalAcceptances(connection, userId, legalDocuments);
     return { userId, created: true, email: identity.email || "" };
   });
 }
@@ -488,7 +515,7 @@ async function authenticatedUser(request) {
   if (!token) return null;
   const tokenHash = hashSessionToken(token);
   const [[user]] = await getPool().query(
-    `SELECT u.id, u.username, u.suspension_reason, u.suspended_until, u.suspended_permanently,
+    `SELECT u.id, u.username, u.role, u.preferred_locale, u.suspension_reason, u.suspended_until, u.suspended_permanently,
             u.deleted_at, u.deletion_expires_at, u.purged_at
        FROM sessions s JOIN users u ON u.id = s.user_id
       WHERE s.token_hash = ? AND s.expires_at > UTC_TIMESTAMP() LIMIT 1`, [tokenHash],
@@ -498,6 +525,7 @@ async function authenticatedUser(request) {
   const now = Date.now();
   if (now - (presenceTouches.get(userId) ?? 0) >= 30_000) {
     await getPool().query("UPDATE users SET last_seen_at = UTC_TIMESTAMP() WHERE id = ?", [userId]);
+    await getPool().query("UPDATE sessions SET last_seen_at = UTC_TIMESTAMP() WHERE token_hash = ?", [tokenHash]);
     presenceTouches.set(userId, now);
   }
   if (!user.suspended_permanently && user.suspended_until && new Date(user.suspended_until).getTime() <= Date.now()) {
@@ -506,7 +534,7 @@ async function authenticatedUser(request) {
     user.suspension_reason = null;
   }
   return {
-    id: userId, username: user.username, tokenHash,
+    id: userId, username: user.username, tokenHash, role: user.role, locale: user.preferred_locale || "ru",
     deletedProfile: Boolean(user.deleted_at && !user.purged_at),
     deletionExpiresAt: user.deletion_expires_at ? new Date(user.deletion_expires_at).toISOString() : null,
     purged: Boolean(user.purged_at),
@@ -823,6 +851,7 @@ async function applyPersonalBlock(connection, blockerId, blockedId) {
 }
 
 async function reportTarget(connection, kind, id) {
+  if (["interface", "admin_action", "partner"].includes(kind) && Number(id)) return { id: Number(id), title: kind, owner_id: null };
   const specs = {
     user: ["SELECT u.id, p.display_name AS title, u.id AS owner_id FROM users u JOIN profiles p ON p.user_id = u.id WHERE u.id = ?", id],
     book: ["SELECT id, title, creator_user_id AS owner_id FROM books WHERE id = ?", id],
@@ -935,7 +964,7 @@ async function interactableMaterialInfo(connection, userId, kind, id) {
   return material;
 }
 
-async function validatedChatAttachment(connection, input) {
+async function validatedChatAttachment(connection, input, senderUserId, recipientUserId) {
   if (!input) return null;
   const kind = String(input.kind ?? "");
   const id = Number(input.id);
@@ -951,6 +980,10 @@ async function validatedChatAttachment(connection, input) {
   if (!queries[kind]) throw Object.assign(new Error("Неизвестный тип вложения"), { statusCode: 400 });
   const [[item]] = await connection.query(queries[kind], [id]);
   if (!item) throw Object.assign(new Error("Материал для отправки не найден"), { statusCode: 404 });
+  if (kind !== "user") {
+    await assertAdultMaterialReadable(connection, senderUserId, kind, id);
+    await assertAdultMaterialReadable(connection, recipientUserId, kind, id);
+  }
   return { kind, id };
 }
 
@@ -980,10 +1013,16 @@ router.get("/auth/providers", (_request, response) => {
   });
 });
 
+router.get("/auth/legal-documents", asyncRoute(async (request, response) => {
+  response.setHeader("Cache-Control", "no-store");
+  const documents = await activeLegalDocuments(getPool(), requestLocale(request));
+  response.json({ configured: documents.length === 3, documents });
+}));
+
 router.post("/auth/login", asyncRoute(async (request, response) => {
-  const attempt = loginAttemptState(request);
-  if (attempt.count >= LOGIN_ATTEMPT_LIMIT) return response.status(429).json({ error: "Слишком много попыток входа. Попробуйте позже" });
   const email = normalizeEmail(request.body?.email);
+  const attempt = loginAttemptState(request, email);
+  if (attempt.blocked) return response.status(429).json({ error: "Слишком много попыток входа. Попробуйте позже" });
   const password = String(request.body?.password ?? "");
   const totp = String(request.body?.totp ?? "");
   if (!isValidEmail(email) || !password) return response.status(400).json({ error: "Введите e-mail и пароль" });
@@ -992,12 +1031,14 @@ router.post("/auth/login", asyncRoute(async (request, response) => {
     [email],
   );
   if (!account || !account.password_login_enabled || !(await verifyPassword(password, account.password_hash))) {
-    loginAttempts.set(attempt.key, { count: attempt.count + 1, resetAt: attempt.resetAt });
+    attempt.fail();
+    await logSecurityEvent(getPool(), request, { eventType: "login_password", result: "failed", details: "invalid_credentials" });
     return response.status(401).json({ error: "Неверный e-mail или пароль" });
   }
   if (account.totp_enabled && !totp) return response.status(202).json({ requiresTotp: true });
   if (account.totp_enabled && !verifyTotp(account.totp_secret, totp) && !(await consumeRecoveryCode(account.id, totp))) {
-    loginAttempts.set(attempt.key, { count: attempt.count + 1, resetAt: attempt.resetAt });
+    attempt.fail();
+    await logSecurityEvent(getPool(), request, { userId: account.id, eventType: "login_totp", result: "failed" });
     return response.status(401).json({ error: "Неверный одноразовый код" });
   }
   if (!account.suspended_permanently && account.suspended_until && new Date(account.suspended_until).getTime() <= Date.now()) {
@@ -1010,17 +1051,18 @@ router.post("/auth/login", asyncRoute(async (request, response) => {
       reason: account.suspension_reason ?? "",
     });
   }
-  loginAttempts.delete(attempt.key);
+  attempt.clear();
   if (account.deleted_at && !account.purged_at) {
     if (!account.deletion_expires_at || new Date(account.deletion_expires_at).getTime() <= Date.now()) {
       await withTransaction((connection) => purgeDeletedProfile(connection, account.id));
       return response.status(410).json({ error: "Срок хранения удалённого профиля истёк. Создайте новый профиль." });
     }
-    const token = await createSession(getPool(), account.id);
+    const token = await createSession(getPool(), account.id, request);
     response.setHeader("Set-Cookie", sessionCookie(token, request));
     return response.status(202).json({ deletedProfile: true, daysRemaining: deletionDaysRemaining(account.deletion_expires_at) });
   }
-  const token = await createSession(getPool(), account.id);
+  const token = await createSession(getPool(), account.id, request);
+  await logSecurityEvent(getPool(), request, { userId: account.id, eventType: "login", result: "success" });
   response.setHeader("Set-Cookie", sessionCookie(token, request));
   response.json(await loadBootstrap(account.id));
 }));
@@ -1071,13 +1113,15 @@ const googleCallback = asyncRoute(async (request, response) => {
   if (!tokenInfoResponse.ok || tokenInfo.aud !== process.env.GOOGLE_CLIENT_ID || tokenInfo.nonce !== expectedNonce || tokenInfo.email_verified !== "true") {
     return response.redirect("/?auth_error=google_verify");
   }
+  const [[existingGoogleAccount]] = await getPool().query("SELECT id FROM users WHERE google_subject = ? OR email_key = ? LIMIT 1", [tokenInfo.sub, normalizeEmail(tokenInfo.email)]);
+  if (!existingGoogleAccount) return response.redirect("/?auth_error=legal_required");
   const identity = await findOrCreateGoogleUser({
     subject: tokenInfo.sub,
     email: normalizeEmail(tokenInfo.email),
     name: tokenInfo.name,
   });
   if (identity.created && identity.email) await sendGoogleAccountEmail(identity.email, true, requestLocale(request));
-  const token = await createSession(getPool(), identity.userId);
+  const token = await createSession(getPool(), identity.userId, request);
   response.setHeader("Set-Cookie", [
     sessionCookie(token, request),
     clearTransientCookie("book_meet_google_state", request),
@@ -1113,14 +1157,15 @@ router.post("/auth/google/credential", asyncRoute(async (request, response) => {
       subject: tokenInfo.sub,
       email: normalizeEmail(tokenInfo.email),
       name: tokenInfo.name,
-    });
+    }, { legalAcceptance: request.body?.legalAcceptance, locale: requestLocale(request) });
     if (identity.created && identity.email) await sendGoogleAccountEmail(identity.email, true, requestLocale(request));
-    const token = await createSession(getPool(), identity.userId);
+    const token = await createSession(getPool(), identity.userId, request);
+    await logSecurityEvent(getPool(), request, { userId: identity.userId, eventType: "login_google", result: "success" });
     response.setHeader("Set-Cookie", sessionCookie(token, request));
     response.json({ ok: true, registered: identity.created });
   } catch (error) {
     console.error("Google credential account linking failed", error);
-    response.status(500).json({ error: "Не удалось связать Google-аккаунт с профилем Book Meet" });
+    response.status(error.statusCode || 500).json({ code: error.code, error: error.statusCode ? error.message : "Не удалось связать Google-аккаунт с профилем Book Meet" });
   }
 }));
 
@@ -1133,6 +1178,7 @@ router.post("/auth/register", asyncRoute(async (request, response) => {
   if (!isValidEmail(email) || password.length < 8) return response.status(400).json({ code: "AUTH_INVALID_CREDENTIALS", error: authText(locale, "invalidCredentials") });
   const verificationToken = createOpaqueActionToken();
   const result = await withTransaction(async (connection) => {
+    const legalDocuments = await validateLegalAcceptance(connection, request.body?.legalAcceptance, locale);
     const [[duplicate]] = await connection.query("SELECT id FROM users WHERE email_key = ?", [email]);
     if (duplicate) throw Object.assign(new Error("Профиль с таким e-mail уже существует"), { statusCode: 409 });
     const username = await uniqueInternalUsername(connection, email.split("@")[0]);
@@ -1140,8 +1186,8 @@ router.post("/auth/register", asyncRoute(async (request, response) => {
     const initials = displayName.split(/\s+/).slice(0, 2).map((part) => part[0]).join("").toLocaleUpperCase("ru-RU").slice(0, 4) || "BM";
     const colors = ["navy", "blue", "green", "red", "gold"];
     const [created] = await connection.query(
-      "INSERT INTO users (username, username_key, email, email_key, email_verified_at, password_hash, password_login_enabled, initials, color, role, profile_completed) VALUES (?, ?, ?, ?, NULL, ?, 1, ?, ?, 'user', 0)",
-      [username, normalizeIdentity(username), email, email, await hashPassword(password), initials, colors[Number(Date.now()) % colors.length]],
+      "INSERT INTO users (username, username_key, email, email_key, email_verified_at, password_hash, password_login_enabled, initials, color, role, profile_completed, preferred_locale) VALUES (?, ?, ?, ?, NULL, ?, 1, ?, ?, 'user', 0, ?)",
+      [username, normalizeIdentity(username), email, email, await hashPassword(password), initials, colors[Number(Date.now()) % colors.length], locale],
     );
     const userId = Number(created.insertId);
     await connection.query(
@@ -1149,7 +1195,9 @@ router.post("/auth/register", asyncRoute(async (request, response) => {
        VALUES (?, ?, '', NULL, 'Читатель', 'Не указан', '', '', '', '', '', '', '', '[]', '[]')`,
       [userId, displayName],
     );
-    const token = await createSession(connection, userId);
+    await recordLegalAcceptances(connection, userId, legalDocuments);
+    const token = await createSession(connection, userId, request);
+    await logSecurityEvent(connection, request, { userId, eventType: "registration", result: "success", details: "password" });
     await replaceAccountActionToken(connection, { userId, purpose: "email_verify", token: verificationToken, ttlMinutes: EMAIL_VERIFICATION_TTL_MINUTES });
     return { userId, token };
   });
@@ -1224,7 +1272,7 @@ router.post("/auth/deleted-profile/restore", asyncRoute(async (request, response
     await withTransaction((connection) => purgeDeletedProfile(connection, user.id));
     return response.status(410).json({ error: "Срок хранения профиля истёк" });
   }
-  await getPool().query("UPDATE users SET deleted_at = NULL, deletion_expires_at = NULL, last_seen_at = UTC_TIMESTAMP() WHERE id = ?", [user.id]);
+  await getPool().query("UPDATE users SET deleted_at = NULL, deletion_expires_at = NULL, consent_withdrawn_at = NULL, last_seen_at = UTC_TIMESTAMP() WHERE id = ?", [user.id]);
   response.json(await loadBootstrap(user.id));
 }));
 
@@ -1261,7 +1309,7 @@ router.post("/auth/deleted-profile/new", asyncRoute(async (request, response) =>
        VALUES (?, ?, '', NULL, 'Читатель', 'Не указан', '', '', '', '', '', '', '', '[]', '[]')`,
       [newUserId, displayName],
     );
-    return { userId: newUserId, token: await createSession(connection, newUserId) };
+    return { userId: newUserId, token: await createSession(connection, newUserId, request) };
   });
   response.setHeader("Set-Cookie", sessionCookie(result.token, request));
   response.status(201).json(await loadBootstrap(result.userId));
@@ -1333,6 +1381,133 @@ router.get("/admin/statistics", asyncRoute(async (request, response) => {
 
 router.use(asyncRoute(requireUser));
 
+router.post("/legal/acceptances", asyncRoute(async (request, response) => {
+  const locale = requestLocale(request);
+  const documents = await validateLegalAcceptance(getPool(), request.body, locale);
+  await withTransaction(async (connection) => {
+    await recordLegalAcceptances(connection, request.bookMeetUser.id, documents);
+    await logSecurityEvent(connection, request, { userId: request.bookMeetUser.id, eventType: "legal_reacceptance", result: "success", details: documents.map((item) => `${item.type}:${item.version}:${item.language}`).join(",") });
+  });
+  response.json({ accepted: true });
+}));
+
+router.get("/admin/legal-documents", asyncRoute(async (request, response) => {
+  if (!(await isAdmin(getPool(), request.bookMeetUser.id))) return response.status(403).json({ error: "Доступно только администратору" });
+  const [documents] = await getPool().query("SELECT * FROM legal_documents ORDER BY document_type, created_at DESC, language_code");
+  response.json({ documents });
+}));
+
+router.post("/admin/legal-documents", asyncRoute(async (request, response) => {
+  const adminId = request.bookMeetUser.id;
+  const type = String(request.body?.type ?? "");
+  const version = String(request.body?.version ?? "").trim().slice(0, 40);
+  const language = ["ru", "kk", "en"].includes(request.body?.language) ? request.body.language : "ru";
+  const title = String(request.body?.title ?? "").trim().slice(0, 255);
+  const content = String(request.body?.content ?? "").trim().slice(0, 2_000_000);
+  const fileName = String(request.body?.fileName ?? "").trim().slice(0, 255) || null;
+  const activate = request.body?.activate !== false;
+  const requiresReacceptance = Boolean(request.body?.requiresReacceptance);
+  if (!(await isAdmin(getPool(), adminId))) return response.status(403).json({ error: "Доступно только администратору" });
+  if (!["user_agreement", "privacy_policy", "personal_data_consent"].includes(type) || !version || !title || !content) return response.status(400).json({ error: "Заполните тип, версию, заголовок и текст документа" });
+  const documentId = await withTransaction(async (connection) => {
+    if (activate) await connection.query("UPDATE legal_documents SET is_active = 0 WHERE document_type = ? AND language_code = ?", [type, language]);
+    const [created] = await connection.query(
+      `INSERT INTO legal_documents (document_type, version, language_code, title, content, file_name, is_active, requires_reacceptance, uploaded_by_user_id, published_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ${activate ? "UTC_TIMESTAMP()" : "NULL"})`,
+      [type, version, language, title, content, fileName, activate ? 1 : 0, requiresReacceptance ? 1 : 0, adminId],
+    );
+    await logModerationAction(connection, { adminUserId: adminId, actionType: "legal_document_publish", objectType: "legal_document", objectId: created.insertId, newStatus: activate ? "active" : "draft", reason: requiresReacceptance ? "requires_reacceptance" : null });
+    return Number(created.insertId);
+  });
+  response.status(201).json({ id: documentId });
+}));
+
+router.get("/admin/audit-log", asyncRoute(async (request, response) => {
+  if (!(await isAdmin(getPool(), request.bookMeetUser.id))) return response.status(403).json({ error: "Доступно только администратору" });
+  const limit = Math.max(1, Math.min(200, Number(request.query.limit) || 100));
+  const [actions] = await getPool().query("SELECT * FROM moderation_audit_log ORDER BY created_at DESC LIMIT ?", [limit]);
+  response.json({ actions });
+}));
+
+router.get("/admin/security-events", asyncRoute(async (request, response) => {
+  if (!(await isAdmin(getPool(), request.bookMeetUser.id))) return response.status(403).json({ error: "Доступно только администратору" });
+  const [events] = await getPool().query("SELECT id, user_id, event_type, result, details, created_at FROM security_event_log ORDER BY created_at DESC LIMIT 200");
+  response.json({ events });
+}));
+
+router.delete("/admin/sessions", asyncRoute(async (request, response) => {
+  const adminId = request.bookMeetUser.id;
+  if (!(await isAdmin(getPool(), adminId))) return response.status(403).json({ error: "Доступно только администратору" });
+  await withTransaction(async (connection) => {
+    await connection.query("DELETE FROM sessions WHERE user_id = ?", [adminId]);
+    await logSecurityEvent(connection, request, { userId: adminId, eventType: "admin_sessions_terminate_all", result: "success" });
+  });
+  response.setHeader("Set-Cookie", clearSessionCookie(request));
+  response.json({ terminated: true });
+}));
+
+router.post("/admin/age-boundaries/audit", asyncRoute(async (request, response) => {
+  const adminId = request.bookMeetUser.id;
+  if (!(await isAdmin(getPool(), adminId))) return response.status(403).json({ error: "Доступно только администратору" });
+  const removed = await withTransaction(async (connection) => {
+    const count = await removeCrossAgeRelationships(connection);
+    await logModerationAction(connection, { adminUserId: adminId, actionType: "cross_age_relationship_audit", objectType: "friendships", reason: `removed:${count}` });
+    return count;
+  });
+  response.json({ removed });
+}));
+
+router.get("/users/me/telegram-notifications", asyncRoute(async (request, response) => {
+  const [[account]] = await getPool().query("SELECT telegram_subject, telegram_notifications_enabled, telegram_notification_categories FROM users WHERE id = ?", [request.bookMeetUser.id]);
+  response.json({ connected: Boolean(account?.telegram_subject), enabled: Boolean(account?.telegram_notifications_enabled), categories: jsonArray(account?.telegram_notification_categories) });
+}));
+
+router.patch("/users/me/telegram-notifications", asyncRoute(async (request, response) => {
+  const allowed = new Set(["messages", "moderation", "complaints", "events", "social"]);
+  const categories = (Array.isArray(request.body?.categories) ? request.body.categories : []).map(String).filter((item) => allowed.has(item));
+  const enabled = Boolean(request.body?.enabled);
+  const [[account]] = await getPool().query("SELECT telegram_subject FROM users WHERE id = ?", [request.bookMeetUser.id]);
+  if (enabled && !account?.telegram_subject) return response.status(409).json({ error: "Сначала подключите Telegram" });
+  await getPool().query("UPDATE users SET telegram_notifications_enabled = ?, telegram_notification_categories = ? WHERE id = ?", [enabled ? 1 : 0, JSON.stringify(categories), request.bookMeetUser.id]);
+  response.json({ enabled, categories });
+}));
+
+router.delete("/users/me/telegram", asyncRoute(async (request, response) => {
+  await withTransaction(async (connection) => {
+    await connection.query("UPDATE users SET telegram_subject = NULL, telegram_notifications_enabled = 0, telegram_notification_categories = NULL WHERE id = ?", [request.bookMeetUser.id]);
+    await logSecurityEvent(connection, request, { userId: request.bookMeetUser.id, eventType: "telegram_disconnect", result: "success" });
+  });
+  response.json({ disconnected: true });
+}));
+
+router.get("/admin/incidents", asyncRoute(async (request, response) => {
+  if (!(await isAdmin(getPool(), request.bookMeetUser.id))) return response.status(403).json({ error: "Доступно только администратору" });
+  const [incidents] = await getPool().query("SELECT * FROM security_incidents ORDER BY detected_at DESC");
+  response.json({ incidents });
+}));
+
+router.post("/admin/incidents", asyncRoute(async (request, response) => {
+  const adminId = request.bookMeetUser.id;
+  if (!(await isAdmin(getPool(), adminId))) return response.status(403).json({ error: "Доступно только администратору" });
+  const description = String(request.body?.description ?? "").trim().slice(0, 20_000);
+  const affectedData = String(request.body?.affectedData ?? "").trim().slice(0, 20_000);
+  const cause = String(request.body?.cause ?? "").trim().slice(0, 20_000);
+  const measures = String(request.body?.measures ?? "").trim().slice(0, 20_000);
+  if (!description || !affectedData || !cause || !measures) return response.status(400).json({ error: "Заполните описание, затронутые данные, причину и меры" });
+  const incidentId = await withTransaction(async (connection) => {
+    const provisionalCode = `pending-${randomBytes(12).toString("hex")}`;
+    const [created] = await connection.query(
+      "INSERT INTO security_incidents (incident_code, detected_at, description, affected_data, affected_user_count, cause, measures, resolved_at, authority_notified_at, created_by_user_id) VALUES (?, COALESCE(?, UTC_TIMESTAMP()), ?, ?, ?, ?, ?, ?, ?, ?)",
+      [provisionalCode, request.body?.detectedAt || null, description, affectedData, Math.max(0, Number(request.body?.affectedUserCount) || 0), cause, measures, request.body?.resolvedAt || null, request.body?.authorityNotifiedAt || null, adminId],
+    );
+    const code = `INC-${new Date().getUTCFullYear()}-${String(created.insertId).padStart(6, "0")}`;
+    await connection.query("UPDATE security_incidents SET incident_code = ? WHERE id = ?", [code, created.insertId]);
+    await logModerationAction(connection, { adminUserId: adminId, actionType: "incident_create", objectType: "security_incident", objectId: created.insertId });
+    return { id: Number(created.insertId), code };
+  });
+  response.status(201).json(incidentId);
+}));
+
 const PERSONAL_LINK_TYPES = new Set(["Читатель", "Писатель", "Блогер"]);
 
 async function assertLinkedProfilePair(connection, personalUserId, communityUserId) {
@@ -1370,6 +1545,10 @@ router.post("/linked-profiles/create", asyncRoute(async (request, response) => {
     await connection.query("INSERT INTO profiles (user_id, display_name, city, city_id, profile_type, gender, publisher_status, bio, author_influences, writing_themes, weekend, joy, talk, stranger_message, favorite_genres, disliked_genres) VALUES (?, ?, '', NULL, 'Сообщество', 'Не указан', 'draft', '', '', '', '', '', '', '', '[]', '[]')", [communityId, name]);
     await assertLinkedProfilePair(connection, personalId, communityId);
     await connection.query("INSERT INTO linked_profiles (personal_user_id, community_user_id) VALUES (?, ?)", [personalId, communityId]);
+    // A linked community is a controlled profile created by an already authenticated
+    // and legally gated operator, so it inherits the currently published documents.
+    // This keeps the first profile switch usable without inventing a second consent UI.
+    await recordLegalAcceptances(connection, communityId, await activeLegalDocuments(connection, requestLocale(request)));
     await replaceAccountActionToken(connection, { userId: communityId, purpose: "email_verify", token: verificationToken, ttlMinutes: EMAIL_VERIFICATION_TTL_MINUTES });
     return { communityId };
   });
@@ -1434,7 +1613,7 @@ router.post("/linked-profiles/switch", asyncRoute(async (request, response) => {
       throw Object.assign(new Error("Связанный профиль недоступен"), { statusCode: 409 });
     }
     await connection.query("DELETE FROM sessions WHERE token_hash = ?", [request.bookMeetUser.tokenHash]);
-    return { token: await createSession(connection, targetId), targetId };
+    return { token: await createSession(connection, targetId, request), targetId };
   });
   response.setHeader("Set-Cookie", sessionCookie(token.token, request));
   response.json(await loadBootstrap(token.targetId));
@@ -1483,25 +1662,30 @@ router.delete("/users/me/profile", asyncRoute(async (request, response) => {
   if (!account || account.role === "admin") return response.status(403).json({ error: "Профиль администратора нельзя удалить этим способом" });
   if (!account.deleted_at) {
     await withTransaction(async (connection) => {
-      await connection.query("DELETE FROM messages WHERE sender_user_id = ? OR recipient_user_id = ?", [userId, userId]);
       await connection.query("DELETE FROM sessions WHERE user_id = ?", [userId]);
       await connection.query(
-        "UPDATE users SET avatar_path = NULL, deleted_at = UTC_TIMESTAMP(), deletion_expires_at = DATE_ADD(UTC_TIMESTAMP(), INTERVAL 1 YEAR), last_seen_at = NULL WHERE id = ?",
+        "UPDATE users SET avatar_path = NULL, deleted_at = UTC_TIMESTAMP(), deletion_expires_at = DATE_ADD(UTC_TIMESTAMP(), INTERVAL 15 DAY), consent_withdrawn_at = UTC_TIMESTAMP(), last_seen_at = NULL WHERE id = ?",
         [userId],
       );
+      await logSecurityEvent(connection, request, { userId, eventType: "profile_deletion_requested", result: "success", details: "grace_period_days:15" });
     });
     await removeAvatarFile(account.avatar_path);
   }
   response.setHeader("Set-Cookie", clearSessionCookie(request));
-  response.json({ ok: true, retentionDays: 365 });
+  response.json({ ok: true, retentionDays: 15 });
 }));
 
 router.use(asyncRoute(async (request, response, next) => {
-  if (["GET", "HEAD", "OPTIONS"].includes(request.method)
-    || request.path === "/users/me/state"
-    || request.path === "/users/me/home-view"
+  const alwaysAllowed = request.path === "/users/me/state"
     || request.path === "/users/me/profile-complete"
-    || request.path === "/auth/logout") return next();
+    || request.path === "/legal/acceptances"
+    || request.path === "/auth/logout"
+    || request.path.startsWith("/admin/");
+  if (["GET", "HEAD", "OPTIONS"].includes(request.method) || alwaysAllowed) return next();
+  const legalGate = await legalAccessState(getPool(), request.bookMeetUser.id, requestLocale(request));
+  if (legalGate.pending.length) return response.status(428).json({ code: "LEGAL_REACCEPTANCE_REQUIRED", error: "Необходимо принять новую версию юридических документов", documents: legalGate.pending });
+  const profileGate = await profileAccessState(getPool(), request.bookMeetUser.id);
+  if (!profileGate.complete) return response.status(428).json({ code: "PROFILE_COMPLETION_REQUIRED", error: "Заполните имя, город и дату рождения в профиле", missing: profileGate.missing });
   await withTransaction((connection) => requireApprovedPublisher(connection, request.bookMeetUser.id));
   next();
 }));
@@ -1778,6 +1962,7 @@ router.patch("/admin/events/:id", asyncRoute(async (request, response) => {
     if (!(await isAdmin(connection, adminId))) throw Object.assign(new Error("Доступно только администратору"), { statusCode: 403 });
     const [[current]] = await connection.query("SELECT * FROM events WHERE id = ? FOR UPDATE", [eventId]);
     if (!current) throw Object.assign(new Error("Событие не найдено"), { statusCode: 404 });
+    let moderationStatus = current.status;
     if (action === "edit") {
       const payload = eventPayload(request.body?.event);
       const city = await knownCity(connection, payload.city, request.body?.event?.cityId);
@@ -1791,6 +1976,7 @@ router.patch("/admin/events/:id", asyncRoute(async (request, response) => {
       const statuses = { accept: "published", revision: "needs_changes", reject: "rejected" };
       const status = statuses[action];
       if (!status) throw Object.assign(new Error("Неизвестное действие модерации"), { statusCode: 400 });
+      moderationStatus = status;
       const pinned = action === "accept" && Boolean(request.body?.pinned);
       await connection.query("UPDATE events SET status = ?, moderation_note = ?, is_pinned = ? WHERE id = ?", [status, note || null, pinned ? 1 : 0, eventId]);
       if (Number(current.creator_user_id) !== adminId) {
@@ -1803,6 +1989,7 @@ router.patch("/admin/events/:id", asyncRoute(async (request, response) => {
         );
       }
     }
+    await logModerationAction(connection, { adminUserId: adminId, actionType: action === "edit" ? "event_edit" : "event_moderate", objectType: "event", objectId: eventId, oldStatus: current.status, newStatus: moderationStatus, reason: note || null });
     return { ok: true };
   });
   response.json(updated);
@@ -1884,6 +2071,7 @@ router.patch("/admin/occasions/:id", asyncRoute(async (request, response) => {
     if (!(await isAdmin(connection, adminId))) throw Object.assign(new Error("Доступно только администратору"), { statusCode: 403 });
     const [[current]] = await connection.query("SELECT * FROM occasions WHERE id = ? FOR UPDATE", [occasionId]);
     if (!current) throw Object.assign(new Error("Повод не найден"), { statusCode: 404 });
+    let moderationStatus = current.status;
     if (action === "edit") {
       const payload = occasionPayload(request.body?.occasion);
       const cities = await knownCities(connection, payload.targetCities);
@@ -1900,6 +2088,7 @@ router.patch("/admin/occasions/:id", asyncRoute(async (request, response) => {
       const statuses = { accept: "published", revision: "needs_changes", reject: "rejected" };
       const status = statuses[action];
       if (!status) throw Object.assign(new Error("Неизвестное действие модерации"), { statusCode: 400 });
+      moderationStatus = status;
       await connection.query("UPDATE occasions SET status = ?, moderation_note = ? WHERE id = ?", [status, note || null, occasionId]);
       if (Number(current.creator_user_id) !== adminId) {
         const titles = { accept: "Повод опубликован", revision: "Повод требует доработки", reject: "Повод отклонён" };
@@ -1910,6 +2099,7 @@ router.patch("/admin/occasions/:id", asyncRoute(async (request, response) => {
         );
       }
     }
+    await logModerationAction(connection, { adminUserId: adminId, actionType: action === "edit" ? "occasion_edit" : "occasion_moderate", objectType: "occasion", objectId: occasionId, oldStatus: current.status, newStatus: moderationStatus, reason: note || null });
   });
   response.json({ ok: true });
 }));
@@ -1933,6 +2123,7 @@ router.patch("/admin/publishers/:id", asyncRoute(async (request, response) => {
       "UPDATE profiles SET publisher_status = ?, publisher_moderation_note = ? WHERE user_id = ?",
       [status, note || null, publisherId],
     );
+    await logModerationAction(connection, { adminUserId: adminId, actionType: "organization_moderate", objectType: publisher.profile_type === "Сообщество" ? "community" : "publisher", objectId: publisherId, oldStatus: publisher.publisher_status, newStatus: status, reason: note || null });
     const organizationName = publisher.profile_type === "Сообщество" ? "сообщества" : "издательства";
     const titles = {
       accept: `Профиль ${organizationName} подтверждён`,
@@ -1967,7 +2158,12 @@ router.put("/users/me/state", asyncRoute(async (request, response) => {
     : [];
   await withTransaction(async (connection) => {
     const city = await knownCity(connection, profile.city, profile.cityId);
-    const [[currentProfile]] = await connection.query("SELECT profile_type, publisher_status FROM profiles WHERE user_id = ? FOR UPDATE", [userId]);
+    const [[currentProfile]] = await connection.query(
+      `SELECT profile_type, publisher_status, publisher_legal_name, publisher_bin, publisher_account,
+              publisher_bik, publisher_bank, publisher_legal_address, publisher_postal_address
+         FROM profiles WHERE user_id = ? FOR UPDATE`,
+      [userId],
+    );
     const changesCommunitySemantics = currentProfile?.profile_type !== requestedType
       && (currentProfile?.profile_type === "Сообщество" || requestedType === "Сообщество");
     if (changesCommunitySemantics) {
@@ -1985,11 +2181,20 @@ router.put("/users/me/state", asyncRoute(async (request, response) => {
     const isCommunity = requestedType === "Сообщество";
     const isPublisher = requestedType === "Издатель";
     const salesLinks = isPublisher ? publisherSalesLinks(profile.publisherSalesLinks) : [];
+    const publisherLegal = {
+      name: String(profile.publisherLegalName ?? "").trim() || String(currentProfile?.publisher_legal_name ?? "").trim(),
+      bin: (String(profile.publisherBin ?? "").trim() || String(currentProfile?.publisher_bin ?? "").trim()).replace(/\D/g, "").slice(0, 12),
+      account: String(profile.publisherAccount ?? "").trim() || String(currentProfile?.publisher_account ?? "").trim(),
+      bik: String(profile.publisherBik ?? "").trim() || String(currentProfile?.publisher_bik ?? "").trim(),
+      bank: String(profile.publisherBank ?? "").trim() || String(currentProfile?.publisher_bank ?? "").trim(),
+      legalAddress: String(profile.publisherLegalAddress ?? "").trim() || String(currentProfile?.publisher_legal_address ?? "").trim(),
+      postalAddress: String(profile.publisherPostalAddress ?? "").trim() || String(currentProfile?.publisher_postal_address ?? "").trim(),
+    };
     if (isPublisher) {
       const requiredPublisherFields = [
-        profile.publisherWebsite, profile.bio, profile.publisherLegalName, profile.publisherBin,
-        profile.publisherAccount, profile.publisherBik, profile.publisherBank,
-        profile.publisherLegalAddress, profile.publisherPostalAddress,
+        profile.publisherWebsite, profile.bio, publisherLegal.name, publisherLegal.bin,
+        publisherLegal.account, publisherLegal.bik, publisherLegal.bank,
+        publisherLegal.legalAddress, publisherLegal.postalAddress,
       ];
       if (requiredPublisherFields.some((value) => !String(value ?? "").trim())) {
         throw Object.assign(new Error(`Заполните обязательные поля ${requestedType === "Сообщество" ? "сообщества" : "издательства"}`), { statusCode: 400 });
@@ -2041,13 +2246,13 @@ router.put("/users/me/state", asyncRoute(async (request, response) => {
         isOrganization ? "[]" : JSON.stringify(profile.favoriteGenres ?? []), isOrganization ? "[]" : JSON.stringify(profile.dislikedGenres ?? []),
         publisherStatus, isPublisher ? cleanUrl(profile.publisherWebsite) : null,
         isPublisher ? JSON.stringify(salesLinks) : null,
-        isPublisher ? String(profile.publisherLegalName).trim() : null,
-        isPublisher ? String(profile.publisherBin).replace(/\D/g, "").slice(0, 12) : null,
-        isPublisher ? String(profile.publisherAccount).trim() : null,
-        isPublisher ? String(profile.publisherBik).trim() : null,
-        isPublisher ? String(profile.publisherBank).trim() : null,
-        isPublisher ? String(profile.publisherLegalAddress).trim() : null,
-        isPublisher ? String(profile.publisherPostalAddress).trim() : null,
+        isPublisher ? publisherLegal.name : null,
+        isPublisher ? publisherLegal.bin : null,
+        isPublisher ? publisherLegal.account : null,
+        isPublisher ? publisherLegal.bik : null,
+        isPublisher ? publisherLegal.bank : null,
+        isPublisher ? publisherLegal.legalAddress : null,
+        isPublisher ? publisherLegal.postalAddress : null,
         isCommunity ? String(profile.communityType).trim().slice(0, 255) : null,
         isCommunity ? String(profile.communityRules).trim() : null,
         publisherStatus, userId,
@@ -2166,6 +2371,8 @@ router.patch("/users/me/home-view", asyncRoute(async (request, response) => {
 }));
 
 router.patch("/users/me/profile-complete", asyncRoute(async (request, response) => {
+  const state = await profileAccessState(getPool(), request.bookMeetUser.id);
+  if (!state.complete) return response.status(400).json({ code: "PROFILE_COMPLETION_REQUIRED", error: "Заполните имя, город и дату рождения", missing: state.missing });
   await getPool().query("UPDATE users SET profile_completed = 1 WHERE id = ?", [request.bookMeetUser.id]);
   response.json({ ok: true });
 }));
@@ -2711,19 +2918,79 @@ router.post("/reports", asyncRoute(async (request, response) => {
   const reason = String(request.body?.reason ?? "").trim().slice(0, 5000);
   const shouldBlock = Boolean(request.body?.blockUser);
   if (!reason) return response.status(400).json({ error: "Опишите причину жалобы" });
+  if (!REPORT_TARGET_KINDS.has(targetKind) || !targetId) return response.status(400).json({ error: "Некорректный объект жалобы" });
   const result = await withTransaction(async (connection) => {
     const target = await reportTarget(connection, targetKind, targetId);
     if (!target) throw Object.assign(new Error("Материал или пользователь не найден"), { statusCode: 404 });
     if (Number(target.owner_id) === reporterId) throw Object.assign(new Error("Нельзя пожаловаться на собственный материал"), { statusCode: 400 });
+    const provisionalReference = `pending-${randomBytes(12).toString("hex")}`;
     const [created] = await connection.query(
-      "INSERT INTO reports (reporter_user_id, target_kind, target_id, target_user_id, reason) VALUES (?, ?, ?, ?, ?)",
-      [reporterId, targetKind, targetId, target.owner_id || null, reason],
+      "INSERT INTO reports (reference_code, reporter_user_id, target_kind, target_id, target_user_id, reason, status, due_at) VALUES (?, ?, ?, ?, ?, ?, 'new', DATE_ADD(DATE(UTC_TIMESTAMP()), INTERVAL 21 DAY))",
+      [provisionalReference, reporterId, targetKind, targetId, target.owner_id || null, reason],
     );
+    const reference = `BMC-${new Date().getUTCFullYear()}-${String(created.insertId).padStart(6, "0")}`;
+    await connection.query("UPDATE reports SET reference_code = ? WHERE id = ?", [reference, created.insertId]);
+    await connection.query("INSERT INTO report_status_history (report_id, actor_user_id, old_status, new_status, note) VALUES (?, ?, NULL, 'new', ?)", [created.insertId, reporterId, reason]);
     await enqueueTelegramAlert(connection, { eventType: "report_created", entityId: created.insertId, actorUserId: reporterId, summary: targetKind });
     if (targetKind === "user" && shouldBlock) await applyPersonalBlock(connection, reporterId, targetId);
-    return { id: Number(created.insertId), blocked: targetKind === "user" && shouldBlock };
+    return { id: Number(created.insertId), reference, status: "new", blocked: targetKind === "user" && shouldBlock };
   });
   response.status(201).json(result);
+}));
+
+router.get("/reports/mine", asyncRoute(async (request, response) => {
+  const [reports] = await getPool().query(
+    `SELECT id, reference_code, target_kind, target_id, target_user_id, reason, status, created_at, due_at,
+            motivated_response, response_at, appealed_at, appeal_text
+       FROM reports WHERE reporter_user_id = ? ORDER BY created_at DESC`,
+    [request.bookMeetUser.id],
+  );
+  response.json({ reports: reports.map((row) => ({
+    id: Number(row.id), reference: row.reference_code, targetKind: row.target_kind, targetId: Number(row.target_id),
+    targetUserId: row.target_user_id ? Number(row.target_user_id) : undefined, reason: row.reason, status: row.status,
+    createdAt: new Date(row.created_at).toISOString(), dueAt: row.due_at ? new Date(row.due_at).toISOString() : undefined,
+    motivatedResponse: row.motivated_response ?? undefined, responseAt: row.response_at ? new Date(row.response_at).toISOString() : undefined,
+    appealedAt: row.appealed_at ? new Date(row.appealed_at).toISOString() : undefined, appealText: row.appeal_text ?? undefined,
+  })) });
+}));
+
+router.post("/reports/:id/appeal", asyncRoute(async (request, response) => {
+  const userId = request.bookMeetUser.id;
+  const reportId = Number(request.params.id);
+  const text = String(request.body?.text ?? "").trim().slice(0, 5000);
+  if (!text) return response.status(400).json({ error: "Опишите причину обжалования" });
+  await withTransaction(async (connection) => {
+    const [[report]] = await connection.query("SELECT reporter_user_id, status, appealed_at FROM reports WHERE id = ? FOR UPDATE", [reportId]);
+    if (!report || Number(report.reporter_user_id) !== userId) throw Object.assign(new Error("Жалоба не найдена"), { statusCode: 404 });
+    if (!["satisfied", "rejected"].includes(report.status) || report.appealed_at) throw Object.assign(new Error("Это решение нельзя обжаловать"), { statusCode: 409 });
+    await connection.query("INSERT INTO report_appeals (report_id, appellant_user_id, appeal_text) VALUES (?, ?, ?)", [reportId, userId, text]);
+    await connection.query("UPDATE reports SET appealed_at = UTC_TIMESTAMP(), appeal_text = ? WHERE id = ?", [text, reportId]);
+    await connection.query("INSERT INTO report_status_history (report_id, actor_user_id, old_status, new_status, note) VALUES (?, ?, ?, ?, ?)", [reportId, userId, report.status, report.status, `appeal:${text}`]);
+  });
+  response.status(201).json({ appealed: true });
+}));
+
+router.patch("/admin/reports/:id", asyncRoute(async (request, response) => {
+  const adminId = request.bookMeetUser.id;
+  const reportId = Number(request.params.id);
+  const status = String(request.body?.status ?? "");
+  const responseText = String(request.body?.response ?? "").trim().slice(0, 10_000);
+  if (!(await isAdmin(getPool(), adminId))) return response.status(403).json({ error: "Доступно только администратору" });
+  if (!REPORT_STATUSES.has(status)) return response.status(400).json({ error: "Некорректный статус жалобы" });
+  if (["satisfied", "rejected"].includes(status) && !responseText) return response.status(400).json({ error: "Перед закрытием укажите мотивированный ответ" });
+  await withTransaction(async (connection) => {
+    const [[report]] = await connection.query("SELECT status FROM reports WHERE id = ? FOR UPDATE", [reportId]);
+    if (!report) throw Object.assign(new Error("Жалоба не найдена"), { statusCode: 404 });
+    await connection.query(
+      `UPDATE reports SET status = ?, reviewed_by_user_id = ?, reviewed_at = UTC_TIMESTAMP(),
+              motivated_response = ?, response_at = ${["satisfied", "rejected"].includes(status) ? "UTC_TIMESTAMP()" : "NULL"}
+        WHERE id = ?`,
+      [status, adminId, responseText || null, reportId],
+    );
+    await connection.query("INSERT INTO report_status_history (report_id, actor_user_id, old_status, new_status, note) VALUES (?, ?, ?, ?, ?)", [reportId, adminId, report.status, status, responseText || null]);
+    await logModerationAction(connection, { adminUserId: adminId, actionType: "report_status_change", objectType: "report", objectId: reportId, oldStatus: report.status, newStatus: status, reason: responseText || null, reportId });
+  });
+  response.json({ ok: true });
 }));
 
 router.post("/social/blocks", asyncRoute(async (request, response) => {
@@ -2746,11 +3013,16 @@ router.patch("/admin/reports/:id/processed", asyncRoute(async (request, response
   const adminId = request.bookMeetUser.id;
   await withTransaction(async (connection) => {
     if (!(await isAdmin(connection, adminId))) throw Object.assign(new Error("Доступно только администратору"), { statusCode: 403 });
+    const responseText = String(request.body?.response ?? request.body?.reason ?? "").trim().slice(0, 10000);
+    if (!responseText) throw Object.assign(new Error("Перед закрытием укажите мотивированный ответ"), { statusCode: 400 });
+    const [[current]] = await connection.query("SELECT status FROM reports WHERE id = ? FOR UPDATE", [Number(request.params.id)]);
     const [updated] = await connection.query(
-      "UPDATE reports SET status = 'reviewed', reviewed_by_user_id = ?, reviewed_at = UTC_TIMESTAMP() WHERE id = ?",
-      [adminId, Number(request.params.id)],
+      "UPDATE reports SET status = 'satisfied', reviewed_by_user_id = ?, reviewed_at = UTC_TIMESTAMP(), motivated_response = ?, response_at = UTC_TIMESTAMP() WHERE id = ?",
+      [adminId, responseText, Number(request.params.id)],
     );
     if (!updated.affectedRows) throw Object.assign(new Error("Жалоба не найдена"), { statusCode: 404 });
+    await connection.query("INSERT INTO report_status_history (report_id, actor_user_id, old_status, new_status, note) VALUES (?, ?, ?, 'satisfied', ?)", [Number(request.params.id), adminId, current?.status ?? null, responseText]);
+    await logModerationAction(connection, { adminUserId: adminId, actionType: "report_close", objectType: "report", objectId: Number(request.params.id), oldStatus: current?.status, newStatus: "satisfied", reason: responseText, reportId: Number(request.params.id) });
   });
   response.json({ ok: true });
 }));
@@ -2776,7 +3048,9 @@ router.post("/admin/reports/:id/delete-material", asyncRoute(async (request, res
         [adminId, report.target_user_id, `Служба поддержки удалила ваш материал. Причина: ${reason}`],
       );
     }
-    await connection.query("UPDATE reports SET status = 'reviewed', reviewed_by_user_id = ?, reviewed_at = UTC_TIMESTAMP() WHERE id = ?", [adminId, report.id]);
+    await connection.query("UPDATE reports SET status = 'satisfied', reviewed_by_user_id = ?, reviewed_at = UTC_TIMESTAMP(), motivated_response = ?, response_at = UTC_TIMESTAMP() WHERE id = ?", [adminId, reason, report.id]);
+    await connection.query("INSERT INTO report_status_history (report_id, actor_user_id, old_status, new_status, note) VALUES (?, ?, ?, 'satisfied', ?)", [report.id, adminId, report.status, reason]);
+    await logModerationAction(connection, { adminUserId: adminId, actionType: "delete_reported_material", objectType: report.target_kind, objectId: report.target_id, oldStatus: report.status, newStatus: "satisfied", reason, reportId: report.id });
   });
   response.json({ ok: true });
 }));
@@ -2799,7 +3073,12 @@ router.post("/admin/users/:id/suspension", asyncRoute(async (request, response) 
         WHERE id = ?`,
       permanent ? [reason, 1, targetId] : [reason, 0, days, targetId],
     );
-    if (reportId) await connection.query("UPDATE reports SET status = 'reviewed', reviewed_by_user_id = ?, reviewed_at = UTC_TIMESTAMP() WHERE id = ?", [adminId, reportId]);
+    if (reportId) {
+      const [[report]] = await connection.query("SELECT status FROM reports WHERE id = ? FOR UPDATE", [reportId]);
+      await connection.query("UPDATE reports SET status = 'satisfied', reviewed_by_user_id = ?, reviewed_at = UTC_TIMESTAMP(), motivated_response = ?, response_at = UTC_TIMESTAMP() WHERE id = ?", [adminId, reason, reportId]);
+      await connection.query("INSERT INTO report_status_history (report_id, actor_user_id, old_status, new_status, note) VALUES (?, ?, ?, 'satisfied', ?)", [reportId, adminId, report?.status ?? null, reason]);
+    }
+    await logModerationAction(connection, { adminUserId: adminId, actionType: "user_suspend", objectType: "user", objectId: targetId, newStatus: permanent ? "suspended_permanently" : "suspended", reason, reportId });
   });
   response.json({ ok: true });
 }));
@@ -2809,6 +3088,7 @@ router.delete("/admin/users/:id/suspension", asyncRoute(async (request, response
   await withTransaction(async (connection) => {
     if (!(await isAdmin(connection, adminId))) throw Object.assign(new Error("Доступно только администратору"), { statusCode: 403 });
     await connection.query("UPDATE users SET suspension_reason = NULL, suspended_until = NULL, suspended_permanently = 0 WHERE id = ?", [Number(request.params.id)]);
+    await logModerationAction(connection, { adminUserId: adminId, actionType: "user_unsuspend", objectType: "user", objectId: Number(request.params.id), newStatus: "active" });
   });
   response.json({ ok: true });
 }));
@@ -2820,7 +3100,8 @@ router.post("/admin/users/:id/restore", asyncRoute(async (request, response) => 
     if (!(await isAdmin(connection, adminId))) throw Object.assign(new Error("Доступно только администратору"), { statusCode: 403 });
     const [[target]] = await connection.query("SELECT role, deleted_at, purged_at FROM users WHERE id = ? FOR UPDATE", [targetId]);
     if (!target || target.role === "admin" || !target.deleted_at || target.purged_at) throw Object.assign(new Error("Удалённый профиль не найден или уже удалён окончательно"), { statusCode: 404 });
-    await connection.query("UPDATE users SET deleted_at = NULL, deletion_expires_at = NULL WHERE id = ?", [targetId]);
+    await connection.query("UPDATE users SET deleted_at = NULL, deletion_expires_at = NULL, consent_withdrawn_at = NULL WHERE id = ?", [targetId]);
+    await logModerationAction(connection, { adminUserId: adminId, actionType: "profile_restore", objectType: "user", objectId: targetId, oldStatus: "deleted", newStatus: "active" });
   });
   response.json({ ok: true });
 }));
@@ -2833,6 +3114,7 @@ router.delete("/admin/users/:id/permanent", asyncRoute(async (request, response)
     const [[target]] = await connection.query("SELECT role, deleted_at, purged_at FROM users WHERE id = ? FOR UPDATE", [targetId]);
     if (!target || target.role === "admin" || !target.deleted_at || target.purged_at) throw Object.assign(new Error("Удалённый профиль не найден или уже удалён окончательно"), { statusCode: 404 });
     await purgeDeletedProfile(connection, targetId);
+    await logModerationAction(connection, { adminUserId: adminId, actionType: "profile_finalize_deletion", objectType: "user", objectId: targetId, oldStatus: "deleted", newStatus: "purged" });
   });
   response.json({ ok: true, irreversible: true });
 }));
@@ -2973,6 +3255,7 @@ router.post("/social/friend-requests", asyncRoute(async (request, response) => {
   if (!targetId || targetId === userId) return response.status(400).json({ error: "Некорректный пользователь" });
   await withTransaction(async (connection) => {
     await assertUsersCanInteract(connection, userId, targetId);
+    await assertAgeCompatible(connection, userId, targetId);
     const [profiles] = await connection.query(
       "SELECT u.id, u.role, p.profile_type, p.display_name FROM users u JOIN profiles p ON p.user_id = u.id WHERE u.id IN (?, ?) ORDER BY u.id FOR UPDATE",
       [userId, targetId],
@@ -3023,6 +3306,7 @@ router.post("/social/friends/:targetId/accept", asyncRoute(async (request, respo
     const sourceProfile = profiles.find((item) => Number(item.user_id) === targetId);
     const membership = currentProfile?.profile_type === "Сообщество";
     await assertUsersCanInteract(connection, userId, targetId);
+    if (!membership) await assertAgeCompatible(connection, userId, targetId);
     if (!canCreateFriendRequest(currentProfile?.profile_type, sourceProfile?.profile_type, { communityMembership: membership })) throw Object.assign(new Error("Издательствам недоступны запросы дружбы"), { statusCode: 403 });
     if (sourceProfile?.profile_type === "Сообщество") throw Object.assign(new Error("Сообщество не может отправлять запросы дружбы"), { statusCode: 403 });
     const [updated] = await connection.query("UPDATE friend_requests SET status = 'accepted' WHERE status = 'pending' AND from_user_id = ? AND to_user_id = ?", [targetId, userId]);
@@ -3127,8 +3411,9 @@ router.post("/social/messages", asyncRoute(async (request, response) => {
     const [participants] = await connection.query("SELECT u.id, u.role, p.profile_type FROM users u JOIN profiles p ON p.user_id = u.id WHERE u.id IN (?, ?)", [userId, targetId]);
     const hasAdmin = participants.some((participant) => participant.role === "admin");
     const [firstParticipant, secondParticipant] = participants;
+    if (!membership && !hasAdmin) await assertAgeCompatible(connection, userId, targetId);
     if (!canMessagePair({ friends: Boolean(friendship), communityMembers: Boolean(membership), hasAdmin, firstProfileType: firstParticipant?.profile_type, secondProfileType: secondParticipant?.profile_type })) throw Object.assign(new Error("Переписка доступна только друзьям, участникам сообщества, издательствам и службе поддержки"), { statusCode: 403 });
-    const attachment = await validatedChatAttachment(connection, request.body?.attachment);
+    const attachment = await validatedChatAttachment(connection, request.body?.attachment, userId, targetId);
     const [created] = await connection.query("INSERT INTO messages (sender_user_id, recipient_user_id, body, attachment_kind, attachment_id) VALUES (?, ?, ?, ?, ?)", [userId, targetId, body, attachment?.kind ?? null, attachment?.id ?? null]);
     if (shouldEnqueueSupportAlert(participants, userId, targetId)) {
       await enqueueTelegramAlert(connection, { eventType: "support_message", entityId: created.insertId, actorUserId: userId, summary: "Новое сообщение пользователя" });

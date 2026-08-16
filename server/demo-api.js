@@ -14,7 +14,31 @@ const passwords = new Map([
   [2, process.env.PUBLISHER_TEST_PASSWORD || "publisher2026"],
 ]);
 const demoAccountActionTokens = new Map();
+const demoLegalAcceptances = new Map([
+  [1, new Set([1, 2, 3])],
+  [2, new Set([1, 2, 3])],
+]);
 let nextId = 100;
+
+const demoLegalDocuments = [
+  { id: 1, type: "user_agreement", version: "demo-1", language: "ru", title: "Пользовательское соглашение", content: "Демонстрационная версия пользовательского соглашения.", requiresReacceptance: true },
+  { id: 2, type: "privacy_policy", version: "demo-1", language: "ru", title: "Политика конфиденциальности", content: "Демонстрационная версия политики конфиденциальности.", requiresReacceptance: true },
+  { id: 3, type: "personal_data_consent", version: "demo-1", language: "ru", title: "Согласие на обработку персональных данных", content: "Демонстрационная версия согласия.", requiresReacceptance: true },
+];
+
+function demoProfileAccess(user) {
+  if (user?.isAdmin) return { complete: true, missing: [] };
+  const missing = [];
+  if (!String(user?.profile?.name ?? "").trim()) missing.push("name");
+  if (!String(user?.profile?.city ?? "").trim() && !user?.profile?.cityId) missing.push("city");
+  if (!["Издатель", "Сообщество"].includes(user?.profile?.type) && !/^\d{4}-\d{2}-\d{2}$/.test(String(user?.profile?.birthDate ?? ""))) missing.push("birthDate");
+  return { complete: missing.length === 0, missing };
+}
+
+function demoLegalAccess(userId) {
+  const accepted = demoLegalAcceptances.get(userId) ?? new Set();
+  return { configured: true, pending: demoLegalDocuments.filter((document) => document.requiresReacceptance && !accepted.has(document.id)), documents: demoLegalDocuments };
+}
 
 function hasMultipleOccasionCities(body = {}) {
   return body.type !== "invite" && new Set((Array.isArray(body.targetCities) ? body.targetCities : []).map((city) => String(city).trim()).filter(Boolean)).size > 1;
@@ -201,6 +225,8 @@ function requireUser(request, response, next) {
 
 function bootstrap(userId) {
   const viewer = users.find((user) => user.id === userId);
+  const profileGate = demoProfileAccess(viewer);
+  const legalGate = demoLegalAccess(userId);
   const adultStatus = viewer?.isAdmin || Number(viewer?.profile.age ?? -1) >= 18 ? "adult" : viewer?.profile.birthDate ? "minor" : "missing";
   const restricted = adultStatus === "adult" ? {} : {
     book: users.flatMap((user) => [...(user.books ?? []), ...(user.authorBooks ?? [])]).filter((item) => item.isAdult).map((item) => item.id),
@@ -230,7 +256,7 @@ function bootstrap(userId) {
   const link = state.linkedProfiles.find((item) => item.personalUserId === userId || item.communityUserId === userId);
   const linked = link ? users.find((item) => item.id === (link.personalUserId === userId ? link.communityUserId : link.personalUserId)) : undefined;
   const { linkedProfiles: _linkedProfiles, ...publicState } = state;
-  return structuredClone({ activeUserId: userId, profileCompleted: viewer?.profileCompleted !== false, adultAccess: { status: adultStatus, restricted }, users: visibleUsers, ...publicState, linkedProfile: linked ? { id: linked.id, name: linked.profile.name, type: linked.profile.type, avatarUrl: linked.avatarUrl, profileCompleted: linked.profileCompleted !== false } : undefined, books: state.catalogBooks.filter((item) => adultStatus === "adult" || !item.isAdult), blocks: relatedBlocks, blockedByUserIds, reports: viewer?.isAdmin ? state.reports : [], events: state.events.filter((item) => (viewer?.isAdmin || adultStatus === "adult" || !item.isAdult) && (viewer?.isAdmin || item.status === "published" || item.creatorId === userId)), occasions: state.occasions.filter((item) => (viewer?.isAdmin || adultStatus === "adult" || !item.isAdult) && (viewer?.isAdmin || item.creatorId === userId || item.status === "published" && (item.targetGender === "Все" || item.targetGender === viewer?.profile.gender) && (item.targetProfileType === "Все" || item.targetProfileType === viewer?.profile.type))) });
+  return structuredClone({ activeUserId: userId, profileCompleted: profileGate.complete, accessGate: { profileComplete: profileGate.complete, missingProfileFields: profileGate.missing, legalConfigured: legalGate.configured, pendingLegalDocuments: legalGate.pending, legalDocuments: legalGate.documents }, adultAccess: { status: adultStatus, restricted }, users: visibleUsers, ...publicState, linkedProfile: linked ? { id: linked.id, name: linked.profile.name, type: linked.profile.type, avatarUrl: linked.avatarUrl, profileCompleted: demoProfileAccess(linked).complete } : undefined, books: state.catalogBooks.filter((item) => adultStatus === "adult" || !item.isAdult), blocks: relatedBlocks, blockedByUserIds, reports: viewer?.isAdmin ? state.reports : [], events: state.events.filter((item) => (viewer?.isAdmin || adultStatus === "adult" || !item.isAdult) && (viewer?.isAdmin || item.status === "published" || item.creatorId === userId)), occasions: state.occasions.filter((item) => (viewer?.isAdmin || adultStatus === "adult" || !item.isAdult) && (viewer?.isAdmin || item.creatorId === userId || item.status === "published" && (item.targetGender === "Все" || item.targetGender === viewer?.profile.gender) && (item.targetProfileType === "Все" || item.targetProfileType === viewer?.profile.type))) });
 }
 
 function conversationKey(first, second) {
@@ -246,6 +272,7 @@ router.get("/health", (_request, response) => {
 });
 
 router.get("/auth/providers", (_request, response) => response.json({ google: false }));
+router.get("/auth/legal-documents", (_request, response) => response.json({ configured: true, documents: demoLegalDocuments }));
 
 // Local visual QA helper. This router is only mounted when DEMO_MODE=1 and is
 // never part of the production API.
@@ -292,12 +319,14 @@ router.get("/cities", (request, response) => {
 router.post("/auth/register", async (request, response) => {
   const email = String(request.body?.email ?? "").trim().toLocaleLowerCase("en");
   const password = String(request.body?.password ?? "");
+  const acceptedDocumentIds = new Set((Array.isArray(request.body?.legal?.documentIds) ? request.body.legal.documentIds : []).map(Number));
   if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) || password.length < 8) return response.status(400).json({ error: "Укажите корректный e-mail и пароль не короче 8 знаков" });
+  if (!request.body?.legal?.agreementAccepted || !request.body?.legal?.personalDataAccepted || demoLegalDocuments.some((document) => !acceptedDocumentIds.has(document.id))) return response.status(400).json({ error: "Для регистрации необходимо принять пользовательское соглашение и согласие на обработку персональных данных", code: "LEGAL_ACCEPTANCE_REQUIRED" });
   if (users.some((user) => user.email?.toLocaleLowerCase("en") === email)) return response.status(409).json({ error: "Профиль с таким e-mail уже существует" });
   const displayName = email.split("@")[0];
   const user = { id: nextId++, email, emailVerifiedAt: undefined, passwordLoginEnabled: true, profileCompleted: false, username: displayName, initials: displayName.slice(0, 2).toLocaleUpperCase("ru"), color: "blue", joined: "сегодня", joinedAt: new Date().toISOString(), profile: { name: displayName, city: "", type: "Читатель", gender: "Не указан", bio: "", authorInfluences: "", writingThemes: "", weekend: "", joy: "", talk: "", strangerMessage: "", favoriteGenres: [], dislikedGenres: [] }, books: [], authorBooks: [], reviews: [], excerpts: [], wishBooks: [] };
   const verificationToken = createOpaqueActionToken();
-  users.push(user); passwords.set(user.id, password); await replaceDemoActionToken(user.id, "email_verify", verificationToken, EMAIL_VERIFICATION_TTL_MINUTES); const token = randomBytes(24).toString("hex"); sessions.set(token, user.id); response.setHeader("Set-Cookie", `book_meet_demo=${token}; Path=/; HttpOnly; SameSite=Lax`); response.status(201).json(bootstrap(user.id));
+  users.push(user); passwords.set(user.id, password); demoLegalAcceptances.set(user.id, new Set(demoLegalDocuments.map((document) => document.id))); await replaceDemoActionToken(user.id, "email_verify", verificationToken, EMAIL_VERIFICATION_TTL_MINUTES); const token = randomBytes(24).toString("hex"); sessions.set(token, user.id); response.setHeader("Set-Cookie", `book_meet_demo=${token}; Path=/; HttpOnly; SameSite=Lax`); response.status(201).json(bootstrap(user.id));
 });
 
 router.post("/auth/email-verification/confirm", async (request, response) => {
@@ -352,7 +381,7 @@ router.get("/bootstrap/:section", (request, response) => {
   if (user?.deletedAt || user?.purged) return response.status(410).json({ deletedProfile: true, purged: Boolean(user.purged), daysRemaining: user.deletionExpiresAt ? Math.max(0, Math.ceil((new Date(user.deletionExpiresAt).getTime() - Date.now()) / 86_400_000)) : 0 });
   if (user?.suspension && (user.suspension.permanent || new Date(user.suspension.until).getTime() > Date.now())) return response.status(423).json({ suspended: true, ...user.suspension });
   const keys = {
-    session: ["activeUserId", "profileCompleted"],
+    session: ["activeUserId", "profileCompleted", "accessGate"],
     catalog: ["activeUserId", "adultAccess", "users", "books", "events", "occasions"],
     social: ["activeUserId", "blocks", "blockedByUserIds", "friendRequests", "friendships", "communityMemberships", "follows", "notifications", "messages", "likes"],
     moderation: ["activeUserId", "reports"],
@@ -464,13 +493,25 @@ router.delete(["/linked-profiles", "/linked-profiles/unlink"], (request, respons
   state.linkedProfiles.splice(index, 1); response.json({ unlinked: true });
 });
 
+router.post("/legal/acceptances", (request, response) => {
+  const ids = new Set((Array.isArray(request.body?.documentIds) ? request.body.documentIds : []).map(Number));
+  if (!request.body?.agreementAccepted || !request.body?.personalDataAccepted || demoLegalDocuments.some((document) => !ids.has(document.id))) return response.status(400).json({ error: "Необходимо принять все актуальные документы", code: "LEGAL_ACCEPTANCE_REQUIRED" });
+  demoLegalAcceptances.set(request.demoUserId, new Set(demoLegalDocuments.map((document) => document.id)));
+  response.json({ accepted: true });
+});
+
 router.use((request, response, next) => {
   if (["GET", "HEAD", "OPTIONS"].includes(request.method)
     || request.path === "/users/me/state"
     || request.path === "/users/me/home-view"
     || request.path === "/users/me/profile-complete"
+    || request.path === "/legal/acceptances"
     || request.path === "/auth/logout") return next();
   const user = users.find((item) => item.id === request.demoUserId);
+  const legalGate = demoLegalAccess(request.demoUserId);
+  if (legalGate.pending.length) return response.status(428).json({ code: "LEGAL_REACCEPTANCE_REQUIRED", error: "Необходимо принять новую версию юридических документов", documents: legalGate.pending });
+  const profileGate = demoProfileAccess(user);
+  if (!profileGate.complete) return response.status(428).json({ code: "PROFILE_COMPLETION_REQUIRED", error: "Укажите имя, город и дату рождения в профиле", missingFields: profileGate.missing });
   if (["Издатель", "Сообщество"].includes(user?.profile.type) && user.profile.publisherStatus !== "approved") {
     return response.status(403).json({ error: "Профиль организации ожидает официального подтверждения" });
   }
@@ -481,9 +522,9 @@ router.delete("/users/me/profile", (request, response) => {
   const user = users.find((item) => item.id === request.demoUserId);
   if (!user || user.isAdmin) return response.status(403).json({ error: "Профиль администратора нельзя удалить" });
   user.deletedAt = new Date().toISOString();
-  user.deletionExpiresAt = new Date(Date.now() + 365 * 86_400_000).toISOString();
+  user.deletionExpiresAt = new Date(Date.now() + 15 * 86_400_000).toISOString();
+  user.consentWithdrawnAt = new Date().toISOString();
   delete user.avatarUrl;
-  for (const key of Object.keys(state.messages)) if (key.split("-").map(Number).includes(user.id)) delete state.messages[key];
   for (const [token, userId] of sessions) if (userId === user.id) sessions.delete(token);
   response.setHeader("Set-Cookie", "book_meet_demo=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0");
   response.json({ ok: true, deletionExpiresAt: user.deletionExpiresAt });
@@ -496,6 +537,7 @@ router.post("/admin/users/:id/restore", (request, response) => {
   if (!user?.deletedAt || user.purged) return response.status(409).json({ error: "Профиль нельзя восстановить" });
   delete user.deletedAt;
   delete user.deletionExpiresAt;
+  delete user.consentWithdrawnAt;
   response.json({ ok: true });
 });
 
@@ -507,6 +549,7 @@ router.delete("/admin/users/:id/permanent", (request, response) => {
   user.purged = true;
   user.email = `deleted-${user.id}@invalid.local`;
   user.profile = { ...user.profile, name: "Удалённый пользователь", city: "", cityId: undefined, bio: "", birthDate: undefined, age: undefined };
+  for (const report of state.reports) if (report.reporterId === user.id) { report.reporterId = undefined; report.reporterName = "Удалённый пользователь"; report.reporterAnonymized = true; }
   response.json({ ok: true });
 });
 
@@ -553,7 +596,9 @@ router.post("/reports", (request, response) => {
     targetTitle = item?.title ?? item?.bookTitle ?? "Материал";
   }
   if (!targetUserId || targetUserId === request.demoUserId) return response.status(400).json({ error: "Объект жалобы не найден" });
-  const report = { id: nextId++, reporterId: request.demoUserId, reporterName: reporter.profile.name, targetKind, targetId, targetUserId, targetUserName: users.find((user) => user.id === targetUserId)?.profile.name, targetTitle, reason, status: "new", createdAt: new Date().toISOString(), ...(request.reportContext ?? {}), ...(targetKind === "chat" ? { conversationMessages: structuredClone(state.messages[conversationKey(request.demoUserId, targetId)] ?? []) } : {}) };
+  const id = nextId++;
+  const createdAt = new Date().toISOString();
+  const report = { id, reference: `BMC-${new Date().getUTCFullYear()}-${String(id).padStart(6, "0")}`, reporterId: request.demoUserId, reporterName: reporter.profile.name, targetKind, targetId, targetUserId, targetUserName: users.find((user) => user.id === targetUserId)?.profile.name, targetTitle, reason, status: "new", createdAt, dueAt: new Date(new Date(createdAt).setUTCHours(0, 0, 0, 0) + 21 * 86_400_000).toISOString(), statusHistory: [{ oldStatus: null, newStatus: "new", createdAt }], ...(request.reportContext ?? {}), ...(targetKind === "chat" ? { conversationMessages: structuredClone(state.messages[conversationKey(request.demoUserId, targetId)] ?? []) } : {}) };
   state.reports.unshift(report);
   if (targetKind === "user" && request.body?.blockUser) {
     state.blocks.push({ blockerId: request.demoUserId, blockedId: targetId, createdAt: new Date().toISOString() });
@@ -563,7 +608,18 @@ router.post("/reports", (request, response) => {
     state.friendRequests = state.friendRequests.filter((item) => ![item.fromId, item.toId].every((id) => [request.demoUserId, targetId].includes(id)));
     delete state.messages[conversationKey(request.demoUserId, targetId)];
   }
-  response.status(201).json({ id: report.id, blocked: Boolean(request.body?.blockUser) });
+  response.status(201).json({ id: report.id, reference: report.reference, status: report.status, blocked: Boolean(request.body?.blockUser) });
+});
+
+router.get("/reports/mine", (request, response) => response.json({ reports: state.reports.filter((item) => item.reporterId === request.demoUserId) }));
+
+router.post("/reports/:id/appeal", (request, response) => {
+  const report = state.reports.find((item) => item.id === Number(request.params.id) && item.reporterId === request.demoUserId);
+  const text = String(request.body?.text ?? "").trim();
+  if (!report || !["satisfied", "rejected"].includes(report.status)) return response.status(409).json({ error: "Обжаловать можно только рассмотренное решение" });
+  if (!text) return response.status(400).json({ error: "Опишите причины обжалования" });
+  report.appealText = text; report.appealedAt = new Date().toISOString();
+  response.status(201).json({ appealed: true });
 });
 
 router.delete("/social/blocks/:targetId", (request, response) => {
@@ -578,7 +634,25 @@ router.patch("/admin/reports/:id/processed", (request, response) => {
   if (!admin?.isAdmin) return response.status(403).json({ error: "Доступно только администратору" });
   const report = state.reports.find((item) => item.id === Number(request.params.id));
   if (!report) return response.status(404).json({ error: "Жалоба не найдена" });
-  report.status = "reviewed";
+  const motivatedResponse = String(request.body?.motivatedResponse ?? request.body?.reason ?? "").trim();
+  if (!motivatedResponse) return response.status(400).json({ error: "Заполните мотивированный ответ" });
+  report.statusHistory ??= []; report.statusHistory.push({ oldStatus: report.status, newStatus: "satisfied", createdAt: new Date().toISOString() });
+  report.status = "satisfied"; report.motivatedResponse = motivatedResponse; report.responseAt = new Date().toISOString();
+  response.json({ ok: true });
+});
+
+router.patch("/admin/reports/:id", (request, response) => {
+  const admin = users.find((user) => user.id === request.demoUserId);
+  const report = state.reports.find((item) => item.id === Number(request.params.id));
+  const status = String(request.body?.status ?? "");
+  const motivatedResponse = String(request.body?.motivatedResponse ?? "").trim();
+  if (!admin?.isAdmin) return response.status(403).json({ error: "Доступно только администратору" });
+  if (!report) return response.status(404).json({ error: "Жалоба не найдена" });
+  if (!["new", "reviewing", "satisfied", "rejected"].includes(status)) return response.status(400).json({ error: "Некорректный статус" });
+  if (["satisfied", "rejected"].includes(status) && !motivatedResponse) return response.status(400).json({ error: "Заполните мотивированный ответ" });
+  report.statusHistory ??= []; report.statusHistory.push({ oldStatus: report.status, newStatus: status, createdAt: new Date().toISOString() });
+  report.status = status;
+  if (["satisfied", "rejected"].includes(status)) { report.motivatedResponse = motivatedResponse; report.responseAt = new Date().toISOString(); }
   response.json({ ok: true });
 });
 
@@ -598,7 +672,8 @@ router.post("/admin/reports/:id/delete-material", (request, response) => {
   });
   const key = conversationKey(admin.id, report.targetUserId);
   (state.messages[key] ??= []).push({ id: nextId++, senderId: admin.id, mine: true, text: `Служба поддержки удалила ваш материал. Причина: ${reason}`, createdAt: new Date().toISOString(), time: "сейчас" });
-  report.status = "reviewed";
+  report.statusHistory ??= []; report.statusHistory.push({ oldStatus: report.status, newStatus: "satisfied", createdAt: new Date().toISOString() });
+  report.status = "satisfied"; report.motivatedResponse = reason; report.responseAt = new Date().toISOString();
   response.json({ ok: true });
 });
 
@@ -610,7 +685,7 @@ router.post("/admin/users/:id/suspension", (request, response) => {
   if (!target || !reason) return response.status(400).json({ error: "Укажите причину блокировки" });
   target.suspension = { permanent: Boolean(request.body?.permanent), until: request.body?.permanent ? undefined : new Date(Date.now() + Math.max(1, Number(request.body?.days) || 1) * 86400000).toISOString(), reason };
   const report = state.reports.find((item) => item.id === Number(request.body?.reportId));
-  if (report) report.status = "reviewed";
+  if (report) { report.statusHistory ??= []; report.statusHistory.push({ oldStatus: report.status, newStatus: "satisfied", createdAt: new Date().toISOString() }); report.status = "satisfied"; report.motivatedResponse = reason; report.responseAt = new Date().toISOString(); }
   response.json({ ok: true });
 });
 
@@ -737,8 +812,10 @@ router.patch("/users/me/home-view", (request, response) => {
 
 router.patch("/users/me/profile-complete", (request, response) => {
   const user = users.find((item) => item.id === request.demoUserId);
+  const gate = demoProfileAccess(user);
+  if (!gate.complete) return response.status(400).json({ error: "Сначала заполните имя, город и дату рождения", missingFields: gate.missing });
   if (user) user.profileCompleted = true;
-  response.json({ ok: true });
+  response.json({ ok: true, profileComplete: true });
 });
 
 router.get("/books/catalog", (request, response) => {

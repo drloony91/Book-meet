@@ -90,6 +90,7 @@ test("linked community profiles have a strict one-to-one, session-safe contract"
   assert.match(api, /DELETE FROM sessions WHERE token_hash = \?/);
   assert.match(api, /verifyGoogleIdToken\(credential\)/);
   assert.match(api, /PERSONAL_LINK_TYPES/);
+  assert.match(api, /recordLegalAcceptances\(connection, communityId, await activeLegalDocuments/);
   assert.match(data, /linkedProfile: linkedProfileRow/);
   assert.match(demo, /const \{ linkedProfiles: _linkedProfiles, \.\.\.publicState \} = state/);
   assert.match(demo, /router\.post\("\/linked-profiles\/switch"/);
@@ -443,8 +444,8 @@ test("профили сообществ, видимость меню и изда
   assert.match(migration, /community_rules TEXT/);
   assert.match(migration, /hidden_profile_tabs LONGTEXT/);
   assert.match(migration, /DELETE fr[\s\S]+target_profile\.profile_type <> 'Сообщество'/);
-  assert.match(data, /hiddenProfileTabs: parseJson\(row\.hidden_profile_tabs\)/);
-  assert.match(data, /communityType: row\.community_type/);
+  assert.match(data, /hiddenProfileTabs: deletedView \? \[\] : parseJson\(row\.hidden_profile_tabs\)/);
+  assert.match(data, /communityType: deletedView \? "" : row\.community_type \?\? ""/);
   assert.match(api, /tab !== "main" && tab !== "settings"/);
   assert.match(api, /communityMembership: target\.profile_type === "Сообщество"/);
   assert.match(api, /canMessagePair\(\{ friends: Boolean\(friendship\)/);
@@ -633,7 +634,8 @@ test("publisher profiles are moderated, private and separated from writer public
   assert.match(migration, /CREATE TABLE IF NOT EXISTS publisher_news/);
   assert.match(api, /router\.patch\("\/admin\/publishers\/:id"/);
   assert.match(api, /Профиль организации ожидает официального подтверждения/);
-  assert.match(data, /viewerIsAdmin \|\| Number\(row\.id\) === Number\(viewerId\) \? row\.publisher_bin/);
+  assert.match(data, /publisherBin: viewerIsAdmin && !deletedView \? row\.publisher_bin/);
+  assert.doesNotMatch(data, /viewerIsAdmin \|\| Number\(row\.id\) === Number\(viewerId\) \? row\.publisher_bin/);
   assert.match(routes, /publishing: "\/publishing"/);
   assertLocalized(profile, "profile.publisherBooks");
   assertLocalized(profile, "admin.publisherNews");
@@ -662,4 +664,35 @@ test("communities, membership chats and responsive conversation panels share pro
   assert.match(css, /workspace\.mobile-friends-closed > \.friends-panel/);
   assert.match(css, /grid-template-columns: repeat\(6,minmax\(0,1fr\)\)/);
   assert.match(css, /\.rich-editor-toolbar \{ flex-wrap: nowrap/);
+});
+
+test("legal, complaint, age and deletion compliance is enforced beyond the frontend", async () => {
+  const migration = await readFile(path.join(root, "mysql", "migrations", "030_legal_safety_compliance.sql"), "utf8");
+  const api = await readFile(path.join(root, "server", "api.js"), "utf8");
+  const compliance = await readFile(path.join(root, "server", "modules", "compliance.js"), "utf8");
+  const data = await readFile(path.join(root, "server", "data.js"), "utf8");
+  const auth = await readFile(path.join(root, "app", "screens", "AuthScreens.tsx"), "utf8");
+  const audit = await readFile(path.join(root, "DATA-PROCESSING-AUDIT.md"), "utf8");
+
+  for (const table of ["legal_documents", "legal_acceptances", "report_status_history", "report_appeals", "moderation_audit_log", "security_event_log", "security_incidents", "finalized_profile_deletions"]) assert.match(migration, new RegExp(`CREATE TABLE IF NOT EXISTS ${table}`));
+  assert.match(api, /router\.get\("\/auth\/legal-documents"/);
+  assert.match(api, /router\.post\("\/legal\/acceptances"/);
+  assert.match(api, /LEGAL_REACCEPTANCE_REQUIRED/);
+  assert.match(api, /PROFILE_COMPLETION_REQUIRED/);
+  assert.match(api, /await assertAgeCompatible\(connection, userId, targetId\)/);
+  assert.match(api, /await assertAdultMaterialReadable\(connection, senderUserId/);
+  assert.match(api, /await assertAdultMaterialReadable\(connection, recipientUserId/);
+  assert.match(api, /reference = `BMC-/);
+  assert.match(api, /INTERVAL 21 DAY/);
+  assert.match(api, /(?:укажите|заполните) мотивированный ответ/i);
+  assert.match(api, /UPDATE reports SET reporter_user_id = NULL, reporter_anonymized = 1/);
+  assert.doesNotMatch(api, /DELETE FROM reports WHERE reporter_user_id/);
+  assert.doesNotMatch(api, /DELETE FROM messages WHERE sender_user_id/);
+  assert.match(compliance, /CROSS_AGE_INTERACTION_FORBIDDEN/);
+  assert.match(compliance, /INSERT INTO moderation_audit_log/);
+  assert.match(data, /publisherBin: viewerIsAdmin && !deletedView \? row\.publisher_bin/);
+  assert.match(auth, /agreementAccepted/);
+  assert.match(auth, /personalDataAccepted/);
+  assert.match(audit, /openid email profile/);
+  assert.match(audit, /finalized_profile_deletions/);
 });
