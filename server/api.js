@@ -19,7 +19,7 @@ import { authText, requestLocale } from "./modules/i18n.js";
 import { enqueueTelegramAlert, shouldEnqueueSupportAlert } from "./modules/telegram-outbox.js";
 import { loadPublicCatalog } from "./modules/public-catalog.js";
 import { nextTopRank, top3Eligibility } from "./modules/top3.js";
-import { REPORT_STATUSES, REPORT_TARGET_KINDS, activeLegalDocuments, assertAgeCompatible, legalAccessState, legalConsentRequired, logModerationAction, logSecurityEvent, profileAccessState, recordLegalAcceptances, removeCrossAgeRelationships, requestAuditMetadata, validateLegalAcceptance } from "./modules/compliance.js";
+import { REPORT_STATUSES, REPORT_TARGET_KINDS, activeLegalDocuments, assertAgeCompatible, assertLegalDocumentDeletable, legalAccessState, legalConsentRequired, legalDocumentWriteMode, logModerationAction, logSecurityEvent, profileAccessState, recordLegalAcceptances, removeCrossAgeRelationships, requestAuditMetadata, validateLegalAcceptance } from "./modules/compliance.js";
 import { clearSessionCookie, clearTransientCookie, createSessionToken, generateRecoveryCodes, generateTotpSecret, hashPassword, hashRecoveryCode, hashSessionToken, isValidEmail, normalizeEmail, normalizeIdentity, readCookie, recoveryCodeIndex, sessionCookie, transientCookie, verifyPassword, verifyTotp } from "./security.js";
 
 const router = Router();
@@ -1393,7 +1393,12 @@ router.post("/legal/acceptances", asyncRoute(async (request, response) => {
 
 router.get("/admin/legal-documents", asyncRoute(async (request, response) => {
   if (!(await isAdmin(getPool(), request.bookMeetUser.id))) return response.status(403).json({ error: "Доступно только администратору" });
-  const [documents] = await getPool().query("SELECT * FROM legal_documents ORDER BY document_type, created_at DESC, language_code");
+  const [documents] = await getPool().query(
+    `SELECT ld.*,
+            (SELECT COUNT(*) FROM legal_acceptances la WHERE la.document_id = ld.id) AS acceptance_count
+       FROM legal_documents ld
+      ORDER BY ld.document_type, ld.language_code, ld.created_at DESC`,
+  );
   response.json({ documents });
 }));
 
@@ -1420,6 +1425,68 @@ router.post("/admin/legal-documents", asyncRoute(async (request, response) => {
     return Number(created.insertId);
   });
   response.status(201).json({ id: documentId });
+}));
+
+router.patch("/admin/legal-documents/:id", asyncRoute(async (request, response) => {
+  const adminId = request.bookMeetUser.id;
+  const documentId = Number(request.params.id);
+  const version = String(request.body?.version ?? "").trim().slice(0, 40);
+  const title = String(request.body?.title ?? "").trim().slice(0, 255);
+  const content = String(request.body?.content ?? "").trim().slice(0, 2_000_000);
+  const fileName = String(request.body?.fileName ?? "").trim().slice(0, 255) || null;
+  const activate = request.body?.activate !== false;
+  const requiresReacceptance = Boolean(request.body?.requiresReacceptance);
+  if (!(await isAdmin(getPool(), adminId))) return response.status(403).json({ error: "Доступно только администратору" });
+  if (!Number.isInteger(documentId) || documentId <= 0) return response.status(400).json({ error: "Некорректный идентификатор документа" });
+  if (!version || !title || !content) return response.status(400).json({ error: "Заполните версию, заголовок и текст документа" });
+  const result = await withTransaction(async (connection) => {
+    const [[current]] = await connection.query("SELECT * FROM legal_documents WHERE id = ? FOR UPDATE", [documentId]);
+    if (!current) throw Object.assign(new Error("Документ не найден"), { statusCode: 404 });
+    const [[duplicate]] = await connection.query(
+      "SELECT id FROM legal_documents WHERE document_type = ? AND language_code = ? AND version = ? AND id <> ? LIMIT 1 FOR UPDATE",
+      [current.document_type, current.language_code, version, documentId],
+    );
+    if (duplicate) throw Object.assign(new Error("Документ этого типа, языка и версии уже существует"), { statusCode: 409, code: "LEGAL_DOCUMENT_VERSION_EXISTS" });
+    const [[usage]] = await connection.query("SELECT COUNT(*) AS count FROM legal_acceptances WHERE document_id = ?", [documentId]);
+    const acceptanceCount = Number(usage?.count) || 0;
+    const writeMode = legalDocumentWriteMode(acceptanceCount, current.version, version);
+    if (activate) await connection.query("UPDATE legal_documents SET is_active = 0 WHERE document_type = ? AND language_code = ?", [current.document_type, current.language_code]);
+    if (writeMode === "revision") {
+      const [created] = await connection.query(
+        `INSERT INTO legal_documents (document_type, version, language_code, title, content, file_name, is_active, requires_reacceptance, uploaded_by_user_id, published_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ${activate ? "UTC_TIMESTAMP()" : "NULL"})`,
+        [current.document_type, version, current.language_code, title, content, fileName, activate ? 1 : 0, requiresReacceptance ? 1 : 0, adminId],
+      );
+      await logModerationAction(connection, { adminUserId: adminId, actionType: "legal_document_revise", objectType: "legal_document", objectId: created.insertId, oldStatus: current.is_active ? "active" : "inactive", newStatus: activate ? "active" : "draft", reason: `revised_from:${documentId};acceptances:${acceptanceCount}` });
+      return { id: Number(created.insertId), revisedFrom: documentId };
+    }
+    await connection.query(
+      `UPDATE legal_documents
+          SET version = ?, title = ?, content = ?, file_name = ?, is_active = ?, requires_reacceptance = ?,
+              uploaded_by_user_id = ?, published_at = CASE WHEN ? = 1 THEN COALESCE(published_at, UTC_TIMESTAMP()) ELSE published_at END
+        WHERE id = ?`,
+      [version, title, content, fileName, activate ? 1 : 0, requiresReacceptance ? 1 : 0, adminId, activate ? 1 : 0, documentId],
+    );
+    await logModerationAction(connection, { adminUserId: adminId, actionType: "legal_document_update", objectType: "legal_document", objectId: documentId, oldStatus: current.is_active ? "active" : "inactive", newStatus: activate ? "active" : "inactive", reason: requiresReacceptance ? "requires_reacceptance" : null });
+    return { id: documentId };
+  });
+  response.json(result);
+}));
+
+router.delete("/admin/legal-documents/:id", asyncRoute(async (request, response) => {
+  const adminId = request.bookMeetUser.id;
+  const documentId = Number(request.params.id);
+  if (!(await isAdmin(getPool(), adminId))) return response.status(403).json({ error: "Доступно только администратору" });
+  if (!Number.isInteger(documentId) || documentId <= 0) return response.status(400).json({ error: "Некорректный идентификатор документа" });
+  await withTransaction(async (connection) => {
+    const [[document]] = await connection.query("SELECT id, title, is_active FROM legal_documents WHERE id = ? FOR UPDATE", [documentId]);
+    if (!document) throw Object.assign(new Error("Документ не найден"), { statusCode: 404 });
+    const [[usage]] = await connection.query("SELECT COUNT(*) AS count FROM legal_acceptances WHERE document_id = ?", [documentId]);
+    assertLegalDocumentDeletable(usage?.count);
+    await connection.query("DELETE FROM legal_documents WHERE id = ?", [documentId]);
+    await logModerationAction(connection, { adminUserId: adminId, actionType: "legal_document_delete", objectType: "legal_document", objectId: documentId, oldStatus: document.is_active ? "active" : "inactive", reason: String(document.title).slice(0, 500) });
+  });
+  response.json({ deleted: true });
 }));
 
 router.get("/admin/audit-log", asyncRoute(async (request, response) => {

@@ -1219,13 +1219,55 @@ select option {
 .admin-report-list > button { position: relative; }
 .admin-report-list .report-deadline,
 .admin-report-list .report-overdue { justify-self: start; font-size: 12px; }
-.admin-compliance-panel { display: grid; gap: 20px; }
+.admin-compliance-panel { display: grid; gap: 20px; min-width: 0; }
 .admin-compliance-tabs { display: flex; flex-wrap: wrap; gap: 8px; }
 .admin-compliance-tabs button { border: 1px solid #cbd5dc; border-radius: 999px; padding: 9px 14px; background: #fff; color: #58636b; }
 .admin-compliance-tabs button.active { border-color: #1769c2; background: #e9f3ff; color: #1769c2; }
-.admin-compliance-form { display: grid; gap: 14px; max-width: 760px; }
-.admin-compliance-form label { display: grid; gap: 6px; }
-.admin-compliance-form label:has(> input[type="checkbox"]) { display: flex; align-items: center; gap: 8px; }
+.admin-compliance-section { display: grid; gap: 22px; }
+.admin-compliance-editor,
+.admin-legal-overview { display: grid; gap: 18px; border: 1px solid #dce3e8; border-radius: 20px; padding: 22px; background: #fff; box-shadow: 0 8px 28px rgba(27,53,77,.05); }
+.admin-compliance-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; }
+.admin-compliance-heading h2 { margin: 0 0 6px; font-size: 21px; }
+.admin-compliance-heading p { margin: 0; max-width: 780px; color: #6e777e; line-height: 1.5; }
+.admin-compliance-form { display: grid; gap: 16px; width: 100%; }
+.admin-compliance-form label { display: grid; gap: 7px; color: #4f5b63; font-size: 13px; font-weight: 650; }
+.admin-compliance-form input:not([type="checkbox"]),
+.admin-compliance-form select,
+.admin-compliance-form textarea { width: 100%; border: 1px solid #cbd5dc; border-radius: 12px; background: #fff; color: #20282e; padding: 11px 13px; font: inherit; font-weight: 400; outline: none; transition: border-color .18s ease, box-shadow .18s ease, background .18s ease; }
+.admin-compliance-form input:not([type="checkbox"]):focus,
+.admin-compliance-form select:focus,
+.admin-compliance-form textarea:focus { border-color: #1769c2; box-shadow: 0 0 0 3px rgba(23,105,194,.12); }
+.admin-compliance-form input:disabled,
+.admin-compliance-form select:disabled { color: #7a848b; background: #f2f5f7; }
+.admin-compliance-form textarea { min-height: 112px; resize: vertical; line-height: 1.5; }
+.admin-compliance-form label.admin-file-field input { padding: 8px; background: #f8fafb; }
+.admin-compliance-form label.admin-file-field input::file-selector-button { margin-right: 12px; border: 1px solid #b9c8d3; border-radius: 9px; padding: 7px 12px; background: #fff; color: #1769c2; cursor: pointer; }
+.admin-form-row { display: grid; grid-template-columns: repeat(3,minmax(0,1fr)); gap: 14px; }
+.admin-form-row-text { grid-template-columns: repeat(2,minmax(0,1fr)); }
+.admin-checkbox-row { display: flex; flex-wrap: wrap; gap: 12px 22px; border: 1px solid #dce3e8; border-radius: 12px; padding: 13px 15px; background: #f8fafb; }
+.admin-checkbox-row label,
+.admin-compliance-form label:has(> input[type="checkbox"]) { display: flex; align-items: center; gap: 9px; }
+.admin-checkbox-row input[type="checkbox"] { width: 18px; height: 18px; accent-color: #1769c2; }
+.admin-legal-grid { display: grid; grid-template-columns: repeat(auto-fill,minmax(280px,1fr)); gap: 14px; }
+.admin-legal-card { display: grid; align-content: start; gap: 10px; min-width: 0; border: 1px solid #dce3e8; border-radius: 16px; padding: 17px; background: #fbfcfd; }
+.admin-legal-card h3 { margin: 0; font-size: 17px; line-height: 1.35; overflow-wrap: anywhere; }
+.admin-legal-card small { color: #6c767d; }
+.admin-legal-card-top { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+.admin-status-pill,
+.admin-language-pill { display: inline-flex; align-items: center; min-height: 26px; border-radius: 999px; padding: 4px 9px; font-size: 11px; font-weight: 750; }
+.admin-status-pill.active { color: #23704b; background: #e5f5eb; }
+.admin-status-pill.draft { color: #8a6518; background: #fff3d6; }
+.admin-status-pill.archived { color: #657078; background: #edf1f3; }
+.admin-language-pill { color: #1769c2; background: #e9f3ff; }
+.admin-legal-meta { display: grid; gap: 5px; color: #68727a; font-size: 12px; }
+.admin-legal-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 4px; }
+.admin-legal-actions button { min-height: 38px; padding: 8px 12px; }
+.admin-legal-actions button:disabled { opacity: .48; cursor: not-allowed; }
+.admin-legal-preview { position: relative; max-height: 84vh; overflow: auto; padding: 28px; background: #fff; border-radius: 22px; box-shadow: 0 24px 70px rgba(22,43,66,.24); }
+.admin-legal-preview h2 { margin: 12px 0 18px; }
+.admin-incident-list dl { display: grid; grid-template-columns: minmax(150px,auto) 1fr; gap: 7px 14px; margin: 6px 0 0; }
+.admin-incident-list dt { color: #737d84; }
+.admin-incident-list dd { margin: 0; white-space: pre-wrap; }
 .admin-audit-list { display: grid; gap: 10px; }
 .admin-audit-list article { display: grid; gap: 5px; border: 1px solid #dfe5e9; border-radius: 14px; padding: 14px; background: #fff; }
 
@@ -1235,6 +1277,14 @@ select option {
   .complaint-detail-modal { width: calc(100vw - 20px); padding: 24px 18px; border-radius: 18px; }
   .complaint-detail-modal dl { grid-template-columns: 1fr; gap: 4px; }
   .complaint-detail-modal dd { margin-bottom: 10px; }
+  .admin-compliance-editor,
+  .admin-legal-overview { padding: 17px; border-radius: 16px; }
+  .admin-compliance-heading { display: grid; }
+  .admin-form-row,
+  .admin-form-row-text { grid-template-columns: 1fr; }
+  .admin-legal-grid { grid-template-columns: 1fr; }
+  .admin-incident-list dl { grid-template-columns: 1fr; gap: 4px; }
+  .admin-incident-list dd { margin-bottom: 8px; }
 }
 
 @media (max-width: 480px) {

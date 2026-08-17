@@ -20,6 +20,20 @@ export function legalConsentRequired(environment = process.env) {
   return !["0", "false", "off", "no"].includes(value);
 }
 
+export function legalDocumentWriteMode(acceptanceCount, currentVersion, nextVersion) {
+  const accepted = Math.max(0, Number(acceptanceCount) || 0);
+  if (accepted > 0 && String(currentVersion) === String(nextVersion)) {
+    throw Object.assign(new Error("Эту версию уже принимали пользователи. Укажите новую версию, чтобы сохранить изменения без потери юридической истории"), { statusCode: 409, code: "LEGAL_DOCUMENT_NEW_VERSION_REQUIRED" });
+  }
+  return accepted > 0 ? "revision" : "update";
+}
+
+export function assertLegalDocumentDeletable(acceptanceCount) {
+  if (Math.max(0, Number(acceptanceCount) || 0) > 0) {
+    throw Object.assign(new Error("Документ нельзя удалить: пользователи уже принимали эту версию. Можно опубликовать новую версию и оставить эту в истории"), { statusCode: 409, code: "LEGAL_DOCUMENT_IN_USE" });
+  }
+}
+
 export function metadataHash(value) {
   const secret = process.env.AUDIT_HASH_SECRET || (process.env.NODE_ENV === "production" ? "" : "book-meet-development-only");
   if (!secret) throw new Error("AUDIT_HASH_SECRET is required");

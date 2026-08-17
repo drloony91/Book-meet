@@ -673,12 +673,21 @@ test("legal, complaint, age and deletion compliance is enforced beyond the front
   const compliance = await readFile(path.join(root, "server", "modules", "compliance.js"), "utf8");
   const data = await readFile(path.join(root, "server", "data.js"), "utf8");
   const auth = await readFile(path.join(root, "app", "screens", "AuthScreens.tsx"), "utf8");
+  const adminCompliance = await readFile(path.join(root, "app", "components", "admin", "AdminCompliancePanel.tsx"), "utf8");
+  const css = await readFile(path.join(root, "app", "globals.css"), "utf8");
   const audit = await readFile(path.join(root, "DATA-PROCESSING-AUDIT.md"), "utf8");
 
   for (const table of ["legal_documents", "legal_acceptances", "report_status_history", "report_appeals", "moderation_audit_log", "security_event_log", "security_incidents", "finalized_profile_deletions"]) assert.match(migration, new RegExp(`CREATE TABLE IF NOT EXISTS ${table}`));
   assert.match(api, /router\.get\("\/auth\/legal-documents"/);
   assert.match(api, /required: legalConsentRequired\(\)/);
   assert.match(api, /router\.post\("\/legal\/acceptances"/);
+  assert.match(api, /router\.patch\("\/admin\/legal-documents\/:id"/);
+  assert.match(api, /router\.delete\("\/admin\/legal-documents\/:id"/);
+  assert.match(api, /legalDocumentWriteMode\(acceptanceCount, current\.version, version\)/);
+  assert.match(api, /assertLegalDocumentDeletable\(usage\?\.count\)/);
+  assert.match(compliance, /LEGAL_DOCUMENT_NEW_VERSION_REQUIRED/);
+  assert.match(compliance, /LEGAL_DOCUMENT_IN_USE/);
+  assert.match(api, /acceptance_count/);
   assert.match(api, /LEGAL_REACCEPTANCE_REQUIRED/);
   assert.match(api, /PROFILE_COMPLETION_REQUIRED/);
   assert.match(api, /await assertAgeCompatible\(connection, userId, targetId\)/);
@@ -697,6 +706,12 @@ test("legal, complaint, age and deletion compliance is enforced beyond the front
   assert.match(data, /publisherBin: viewerIsAdmin && !deletedView \? row\.publisher_bin/);
   assert.match(auth, /agreementAccepted/);
   assert.match(auth, /personalDataAccepted/);
+  assert.match(adminCompliance, /jsonRequest\("\/api\/admin\/legal-documents"\)/);
+  assert.match(adminCompliance, /method: editingDocumentId \? "PATCH" : "POST"/);
+  assert.match(adminCompliance, /method: "DELETE"/);
+  assert.match(adminCompliance, /admin\.legalOverview/);
+  assert.match(adminCompliance, /admin\.incidentFormTitle/);
+  assert.match(css, /\.admin-compliance-form input:not\(\[type="checkbox"\]\)/);
   assert.match(audit, /openid email profile/);
   assert.match(audit, /finalized_profile_deletions/);
 });

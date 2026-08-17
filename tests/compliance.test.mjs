@@ -2,8 +2,10 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import {
   assertAgeCompatible,
+  assertLegalDocumentDeletable,
   legalAccessState,
   legalConsentRequired,
+  legalDocumentWriteMode,
   metadataHash,
   profileAccessState,
   validateLegalAcceptance,
@@ -78,4 +80,12 @@ test("legal consent can be temporarily disabled without recording a false accept
   assert.equal(state.configured, true);
   assert.deepEqual(state.pending, []);
   assert.equal(state.documents.length, 3);
+});
+
+test("accepted legal text is revised instead of overwritten or deleted", () => {
+  assert.equal(legalDocumentWriteMode(0, "1.0", "1.0"), "update");
+  assert.equal(legalDocumentWriteMode(3, "1.0", "1.1"), "revision");
+  assert.throws(() => legalDocumentWriteMode(3, "1.0", "1.0"), (error) => error?.code === "LEGAL_DOCUMENT_NEW_VERSION_REQUIRED" && error?.statusCode === 409);
+  assert.doesNotThrow(() => assertLegalDocumentDeletable(0));
+  assert.throws(() => assertLegalDocumentDeletable(1), (error) => error?.code === "LEGAL_DOCUMENT_IN_USE" && error?.statusCode === 409);
 });
