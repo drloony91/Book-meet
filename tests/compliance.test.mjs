@@ -1,6 +1,8 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import {
+  LEGAL_DOCUMENT_TYPES,
+  REQUIRED_LEGAL_DOCUMENT_TYPES,
   assertAgeCompatible,
   assertLegalDocumentDeletable,
   legalAccessState,
@@ -10,6 +12,11 @@ import {
   profileAccessState,
   validateLegalAcceptance,
 } from "../server/modules/compliance.js";
+
+test("community moderation rules are managed without becoming an implicit registration consent", () => {
+  assert.deepEqual(LEGAL_DOCUMENT_TYPES, ["user_agreement", "privacy_policy", "personal_data_consent", "community_moderation_rules"]);
+  assert.deepEqual(REQUIRED_LEGAL_DOCUMENT_TYPES, ["user_agreement", "privacy_policy", "personal_data_consent"]);
+});
 
 test("audit metadata is deterministic and never stores the raw network value", () => {
   const previous = process.env.AUDIT_HASH_SECRET;
@@ -74,12 +81,13 @@ test("legal consent can be temporarily disabled without recording a false accept
     { id: 1, document_type: "user_agreement", version: "1", language_code: "ru", title: "Agreement", content: "Text", requires_reacceptance: 1, published_at: new Date("2026-08-16T00:00:00Z") },
     { id: 2, document_type: "privacy_policy", version: "1", language_code: "ru", title: "Privacy", content: "Text", requires_reacceptance: 1, published_at: new Date("2026-08-16T00:00:00Z") },
     { id: 3, document_type: "personal_data_consent", version: "1", language_code: "ru", title: "Consent", content: "Text", requires_reacceptance: 1, published_at: new Date("2026-08-16T00:00:00Z") },
+    { id: 4, document_type: "community_moderation_rules", version: "1", language_code: "ru", title: "Rules", content: "Text", requires_reacceptance: 0, published_at: new Date("2026-08-16T00:00:00Z") },
   ];
   const accessConnection = { query: async (sql) => sql.includes("FROM legal_documents") ? [documents] : [[{ document_id: 1 }]] };
   const state = await legalAccessState(accessConnection, 7, "ru", { LEGAL_CONSENT_REQUIRED: "false" });
   assert.equal(state.configured, true);
   assert.deepEqual(state.pending, []);
-  assert.equal(state.documents.length, 3);
+  assert.equal(state.documents.length, 4);
 });
 
 test("accepted legal text is revised instead of overwritten or deleted", () => {

@@ -19,7 +19,7 @@ import { authText, requestLocale } from "./modules/i18n.js";
 import { enqueueTelegramAlert, shouldEnqueueSupportAlert } from "./modules/telegram-outbox.js";
 import { loadPublicCatalog } from "./modules/public-catalog.js";
 import { nextTopRank, top3Eligibility } from "./modules/top3.js";
-import { REPORT_STATUSES, REPORT_TARGET_KINDS, activeLegalDocuments, assertAgeCompatible, assertLegalDocumentDeletable, legalAccessState, legalConsentRequired, legalDocumentWriteMode, logModerationAction, logSecurityEvent, profileAccessState, recordLegalAcceptances, removeCrossAgeRelationships, requestAuditMetadata, validateLegalAcceptance } from "./modules/compliance.js";
+import { LEGAL_DOCUMENT_TYPES, REQUIRED_LEGAL_DOCUMENT_TYPES, REPORT_STATUSES, REPORT_TARGET_KINDS, activeLegalDocuments, assertAgeCompatible, assertLegalDocumentDeletable, legalAccessState, legalConsentRequired, legalDocumentWriteMode, logModerationAction, logSecurityEvent, profileAccessState, recordLegalAcceptances, removeCrossAgeRelationships, requestAuditMetadata, validateLegalAcceptance } from "./modules/compliance.js";
 import { clearSessionCookie, clearTransientCookie, createSessionToken, generateRecoveryCodes, generateTotpSecret, hashPassword, hashRecoveryCode, hashSessionToken, isValidEmail, normalizeEmail, normalizeIdentity, readCookie, recoveryCodeIndex, sessionCookie, transientCookie, verifyPassword, verifyTotp } from "./security.js";
 
 const router = Router();
@@ -1016,7 +1016,7 @@ router.get("/auth/providers", (_request, response) => {
 router.get("/auth/legal-documents", asyncRoute(async (request, response) => {
   response.setHeader("Cache-Control", "no-store");
   const documents = await activeLegalDocuments(getPool(), requestLocale(request));
-  response.json({ required: legalConsentRequired(), configured: documents.length === 3, documents });
+  response.json({ required: legalConsentRequired(), configured: REQUIRED_LEGAL_DOCUMENT_TYPES.every((type) => documents.some((document) => document.type === type)), documents });
 }));
 
 router.post("/auth/login", asyncRoute(async (request, response) => {
@@ -1413,7 +1413,7 @@ router.post("/admin/legal-documents", asyncRoute(async (request, response) => {
   const activate = request.body?.activate !== false;
   const requiresReacceptance = Boolean(request.body?.requiresReacceptance);
   if (!(await isAdmin(getPool(), adminId))) return response.status(403).json({ error: "Доступно только администратору" });
-  if (!["user_agreement", "privacy_policy", "personal_data_consent"].includes(type) || !version || !title || !content) return response.status(400).json({ error: "Заполните тип, версию, заголовок и текст документа" });
+  if (!LEGAL_DOCUMENT_TYPES.includes(type) || !version || !title || !content) return response.status(400).json({ error: "Заполните тип, версию, заголовок и текст документа" });
   const documentId = await withTransaction(async (connection) => {
     if (activate) await connection.query("UPDATE legal_documents SET is_active = 0 WHERE document_type = ? AND language_code = ?", [type, language]);
     const [created] = await connection.query(

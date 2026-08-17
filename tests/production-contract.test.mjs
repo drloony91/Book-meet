@@ -669,6 +669,7 @@ test("communities, membership chats and responsive conversation panels share pro
 
 test("legal, complaint, age and deletion compliance is enforced beyond the frontend", async () => {
   const migration = await readFile(path.join(root, "mysql", "migrations", "030_legal_safety_compliance.sql"), "utf8");
+  const legalDocumentMigration = await readFile(path.join(root, "mysql", "migrations", "031_community_moderation_legal_document.sql"), "utf8");
   const api = await readFile(path.join(root, "server", "api.js"), "utf8");
   const compliance = await readFile(path.join(root, "server", "modules", "compliance.js"), "utf8");
   const data = await readFile(path.join(root, "server", "data.js"), "utf8");
@@ -678,8 +679,13 @@ test("legal, complaint, age and deletion compliance is enforced beyond the front
   const audit = await readFile(path.join(root, "DATA-PROCESSING-AUDIT.md"), "utf8");
 
   for (const table of ["legal_documents", "legal_acceptances", "report_status_history", "report_appeals", "moderation_audit_log", "security_event_log", "security_incidents", "finalized_profile_deletions"]) assert.match(migration, new RegExp(`CREATE TABLE IF NOT EXISTS ${table}`));
+  assert.match(legalDocumentMigration, /community_moderation_rules/);
+  assert.match(legalDocumentMigration, /Согласие на сбор и обработку персональных данных/);
+  assert.match(legalDocumentMigration, /WHERE document_type = 'personal_data_consent'/);
   assert.match(api, /router\.get\("\/auth\/legal-documents"/);
   assert.match(api, /required: legalConsentRequired\(\)/);
+  assert.match(api, /LEGAL_DOCUMENT_TYPES\.includes\(type\)/);
+  assert.match(compliance, /REQUIRED_LEGAL_DOCUMENT_TYPES/);
   assert.match(api, /router\.post\("\/legal\/acceptances"/);
   assert.match(api, /router\.patch\("\/admin\/legal-documents\/:id"/);
   assert.match(api, /router\.delete\("\/admin\/legal-documents\/:id"/);
@@ -710,6 +716,7 @@ test("legal, complaint, age and deletion compliance is enforced beyond the front
   assert.match(adminCompliance, /method: editingDocumentId \? "PATCH" : "POST"/);
   assert.match(adminCompliance, /method: "DELETE"/);
   assert.match(adminCompliance, /admin\.legalOverview/);
+  assert.match(adminCompliance, /legal\.communityModerationRules/);
   assert.match(adminCompliance, /admin\.incidentFormTitle/);
   assert.match(css, /\.admin-compliance-form input:not\(\[type="checkbox"\]\)/);
   assert.match(audit, /openid email profile/);

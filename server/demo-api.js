@@ -24,8 +24,10 @@ let nextId = 100;
 const demoLegalDocuments = [
   { id: 1, type: "user_agreement", version: "demo-1", language: "ru", title: "Пользовательское соглашение", content: "Демонстрационная версия пользовательского соглашения.", requiresReacceptance: true },
   { id: 2, type: "privacy_policy", version: "demo-1", language: "ru", title: "Политика конфиденциальности", content: "Демонстрационная версия политики конфиденциальности.", requiresReacceptance: true },
-  { id: 3, type: "personal_data_consent", version: "demo-1", language: "ru", title: "Согласие на обработку персональных данных", content: "Демонстрационная версия согласия.", requiresReacceptance: true },
+  { id: 3, type: "personal_data_consent", version: "demo-1", language: "ru", title: "Согласие на сбор и обработку персональных данных", content: "Демонстрационная версия согласия.", requiresReacceptance: true },
+  { id: 4, type: "community_moderation_rules", version: "demo-1", language: "ru", title: "Правила сообщества и модерации", content: "Демонстрационная версия правил сообщества и модерации.", requiresReacceptance: false },
 ];
+const demoRequiredLegalDocuments = demoLegalDocuments.filter((document) => document.type !== "community_moderation_rules");
 
 function demoProfileAccess(user) {
   if (user?.isAdmin) return { complete: true, missing: [] };
@@ -326,12 +328,12 @@ router.post("/auth/register", async (request, response) => {
   const legalAcceptance = request.body?.legalAcceptance ?? request.body?.legal;
   const acceptedDocumentIds = new Set((Array.isArray(legalAcceptance?.documentIds) ? legalAcceptance.documentIds : []).map(Number));
   if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) || password.length < 8) return response.status(400).json({ error: "Укажите корректный e-mail и пароль не короче 8 знаков" });
-  if (legalConsentRequired() && (!legalAcceptance?.agreementAccepted || !legalAcceptance?.personalDataAccepted || demoLegalDocuments.some((document) => !acceptedDocumentIds.has(document.id)))) return response.status(400).json({ error: "Для регистрации необходимо принять пользовательское соглашение и согласие на обработку персональных данных", code: "LEGAL_ACCEPTANCE_REQUIRED" });
+  if (legalConsentRequired() && (!legalAcceptance?.agreementAccepted || !legalAcceptance?.personalDataAccepted || demoRequiredLegalDocuments.some((document) => !acceptedDocumentIds.has(document.id)))) return response.status(400).json({ error: "Для регистрации необходимо принять пользовательское соглашение и согласие на обработку персональных данных", code: "LEGAL_ACCEPTANCE_REQUIRED" });
   if (users.some((user) => user.email?.toLocaleLowerCase("en") === email)) return response.status(409).json({ error: "Профиль с таким e-mail уже существует" });
   const displayName = email.split("@")[0];
   const user = { id: nextId++, email, emailVerifiedAt: undefined, passwordLoginEnabled: true, profileCompleted: false, username: displayName, initials: displayName.slice(0, 2).toLocaleUpperCase("ru"), color: "blue", joined: "сегодня", joinedAt: new Date().toISOString(), profile: { name: displayName, city: "", type: "Читатель", gender: "Не указан", bio: "", authorInfluences: "", writingThemes: "", weekend: "", joy: "", talk: "", strangerMessage: "", favoriteGenres: [], dislikedGenres: [] }, books: [], authorBooks: [], reviews: [], excerpts: [], wishBooks: [] };
   const verificationToken = createOpaqueActionToken();
-  users.push(user); passwords.set(user.id, password); demoLegalAcceptances.set(user.id, new Set(legalConsentRequired() ? demoLegalDocuments.map((document) => document.id) : [])); await replaceDemoActionToken(user.id, "email_verify", verificationToken, EMAIL_VERIFICATION_TTL_MINUTES); const token = randomBytes(24).toString("hex"); sessions.set(token, user.id); response.setHeader("Set-Cookie", `book_meet_demo=${token}; Path=/; HttpOnly; SameSite=Lax`); response.status(201).json(bootstrap(user.id));
+  users.push(user); passwords.set(user.id, password); demoLegalAcceptances.set(user.id, new Set(legalConsentRequired() ? demoRequiredLegalDocuments.map((document) => document.id) : [])); await replaceDemoActionToken(user.id, "email_verify", verificationToken, EMAIL_VERIFICATION_TTL_MINUTES); const token = randomBytes(24).toString("hex"); sessions.set(token, user.id); response.setHeader("Set-Cookie", `book_meet_demo=${token}; Path=/; HttpOnly; SameSite=Lax`); response.status(201).json(bootstrap(user.id));
 });
 
 router.post("/auth/email-verification/confirm", async (request, response) => {

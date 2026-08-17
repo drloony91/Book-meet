@@ -11,7 +11,8 @@ function ageFromBirthDate(value, now = new Date()) {
   return age;
 }
 
-export const LEGAL_DOCUMENT_TYPES = ["user_agreement", "privacy_policy", "personal_data_consent"];
+export const LEGAL_DOCUMENT_TYPES = ["user_agreement", "privacy_policy", "personal_data_consent", "community_moderation_rules"];
+export const REQUIRED_LEGAL_DOCUMENT_TYPES = ["user_agreement", "privacy_policy", "personal_data_consent"];
 export const REPORT_TARGET_KINDS = new Set(["user", "book", "review", "excerpt", "event", "occasion", "publisher_news", "chat", "comment", "partner", "admin_action", "interface"]);
 export const REPORT_STATUSES = new Set(["new", "reviewing", "satisfied", "rejected"]);
 
@@ -89,8 +90,8 @@ export async function activeLegalDocuments(connection, locale = "ru") {
 }
 
 export async function requiredLegalDocuments(connection, locale = "ru") {
-  const documents = await activeLegalDocuments(connection, locale);
-  if (documents.length !== LEGAL_DOCUMENT_TYPES.length) {
+  const documents = (await activeLegalDocuments(connection, locale)).filter((document) => REQUIRED_LEGAL_DOCUMENT_TYPES.includes(document.type));
+  if (documents.length !== REQUIRED_LEGAL_DOCUMENT_TYPES.length) {
     throw Object.assign(new Error("Юридические документы ещё не опубликованы администратором"), { statusCode: 503, code: "LEGAL_DOCUMENTS_NOT_CONFIGURED" });
   }
   return documents;
@@ -119,12 +120,13 @@ export async function recordLegalAcceptances(connection, userId, documents) {
 
 export async function legalAccessState(connection, userId, locale = "ru", environment = process.env) {
   const documents = await activeLegalDocuments(connection, locale);
-  if (!legalConsentRequired(environment)) return { configured: documents.length === LEGAL_DOCUMENT_TYPES.length, pending: [], documents };
+  const configured = REQUIRED_LEGAL_DOCUMENT_TYPES.every((type) => documents.some((document) => document.type === type));
+  if (!legalConsentRequired(environment)) return { configured, pending: [], documents };
   if (!documents.length) return { configured: false, pending: [] };
   const [acceptedRows] = await connection.query("SELECT document_id FROM legal_acceptances WHERE user_id = ?", [userId]);
   const accepted = new Set(acceptedRows.map((row) => Number(row.document_id)));
   const pending = documents.filter((document) => document.requiresReacceptance && !accepted.has(document.id));
-  return { configured: documents.length === LEGAL_DOCUMENT_TYPES.length, pending, documents };
+  return { configured, pending, documents };
 }
 
 export async function profileAccessState(connection, userId) {
