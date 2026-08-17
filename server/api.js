@@ -19,7 +19,7 @@ import { authText, requestLocale } from "./modules/i18n.js";
 import { enqueueTelegramAlert, shouldEnqueueSupportAlert } from "./modules/telegram-outbox.js";
 import { loadPublicCatalog } from "./modules/public-catalog.js";
 import { nextTopRank, top3Eligibility } from "./modules/top3.js";
-import { REPORT_STATUSES, REPORT_TARGET_KINDS, activeLegalDocuments, assertAgeCompatible, legalAccessState, logModerationAction, logSecurityEvent, profileAccessState, recordLegalAcceptances, removeCrossAgeRelationships, requestAuditMetadata, validateLegalAcceptance } from "./modules/compliance.js";
+import { REPORT_STATUSES, REPORT_TARGET_KINDS, activeLegalDocuments, assertAgeCompatible, legalAccessState, legalConsentRequired, logModerationAction, logSecurityEvent, profileAccessState, recordLegalAcceptances, removeCrossAgeRelationships, requestAuditMetadata, validateLegalAcceptance } from "./modules/compliance.js";
 import { clearSessionCookie, clearTransientCookie, createSessionToken, generateRecoveryCodes, generateTotpSecret, hashPassword, hashRecoveryCode, hashSessionToken, isValidEmail, normalizeEmail, normalizeIdentity, readCookie, recoveryCodeIndex, sessionCookie, transientCookie, verifyPassword, verifyTotp } from "./security.js";
 
 const router = Router();
@@ -1016,7 +1016,7 @@ router.get("/auth/providers", (_request, response) => {
 router.get("/auth/legal-documents", asyncRoute(async (request, response) => {
   response.setHeader("Cache-Control", "no-store");
   const documents = await activeLegalDocuments(getPool(), requestLocale(request));
-  response.json({ configured: documents.length === 3, documents });
+  response.json({ required: legalConsentRequired(), configured: documents.length === 3, documents });
 }));
 
 router.post("/auth/login", asyncRoute(async (request, response) => {
@@ -1545,10 +1545,10 @@ router.post("/linked-profiles/create", asyncRoute(async (request, response) => {
     await connection.query("INSERT INTO profiles (user_id, display_name, city, city_id, profile_type, gender, publisher_status, bio, author_influences, writing_themes, weekend, joy, talk, stranger_message, favorite_genres, disliked_genres) VALUES (?, ?, '', NULL, 'Сообщество', 'Не указан', 'draft', '', '', '', '', '', '', '', '[]', '[]')", [communityId, name]);
     await assertLinkedProfilePair(connection, personalId, communityId);
     await connection.query("INSERT INTO linked_profiles (personal_user_id, community_user_id) VALUES (?, ?)", [personalId, communityId]);
-    // A linked community is a controlled profile created by an already authenticated
-    // and legally gated operator, so it inherits the currently published documents.
-    // This keeps the first profile switch usable without inventing a second consent UI.
-    await recordLegalAcceptances(connection, communityId, await activeLegalDocuments(connection, requestLocale(request)));
+    // A linked community inherits current documents only while consent is mandatory.
+    // When the temporary bypass is active, no acceptance is recorded on its behalf.
+    const legalDocuments = legalConsentRequired() ? await activeLegalDocuments(connection, requestLocale(request)) : [];
+    await recordLegalAcceptances(connection, communityId, legalDocuments);
     await replaceAccountActionToken(connection, { userId: communityId, purpose: "email_verify", token: verificationToken, ttlMinutes: EMAIL_VERIFICATION_TTL_MINUTES });
     return { communityId };
   });

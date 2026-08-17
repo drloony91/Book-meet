@@ -6,6 +6,7 @@ import { canCreateFriendRequest, canMessagePair } from "./modules/social-permiss
 import { nextTopRank, top3Eligibility } from "./modules/top3.js";
 import { consumeAccountActionToken, createOpaqueActionToken, EMAIL_VERIFICATION_TTL_MINUTES, PASSWORD_RESET_TTL_MINUTES, replaceAccountActionToken } from "./modules/account-tokens.js";
 import { isPublicOccasion, isPublicUpcomingEvent } from "./modules/public-catalog.js";
+import { legalConsentRequired } from "./modules/compliance.js";
 
 const router = Router();
 const sessions = new Map();
@@ -37,7 +38,10 @@ function demoProfileAccess(user) {
 
 function demoLegalAccess(userId) {
   const accepted = demoLegalAcceptances.get(userId) ?? new Set();
-  return { configured: true, pending: demoLegalDocuments.filter((document) => document.requiresReacceptance && !accepted.has(document.id)), documents: demoLegalDocuments };
+  const pending = legalConsentRequired()
+    ? demoLegalDocuments.filter((document) => document.requiresReacceptance && !accepted.has(document.id))
+    : [];
+  return { configured: true, pending, documents: demoLegalDocuments };
 }
 
 function hasMultipleOccasionCities(body = {}) {
@@ -272,7 +276,7 @@ router.get("/health", (_request, response) => {
 });
 
 router.get("/auth/providers", (_request, response) => response.json({ google: false }));
-router.get("/auth/legal-documents", (_request, response) => response.json({ configured: true, documents: demoLegalDocuments }));
+router.get("/auth/legal-documents", (_request, response) => response.json({ required: legalConsentRequired(), configured: true, documents: demoLegalDocuments }));
 
 // Local visual QA helper. This router is only mounted when DEMO_MODE=1 and is
 // never part of the production API.
@@ -319,14 +323,15 @@ router.get("/cities", (request, response) => {
 router.post("/auth/register", async (request, response) => {
   const email = String(request.body?.email ?? "").trim().toLocaleLowerCase("en");
   const password = String(request.body?.password ?? "");
-  const acceptedDocumentIds = new Set((Array.isArray(request.body?.legal?.documentIds) ? request.body.legal.documentIds : []).map(Number));
+  const legalAcceptance = request.body?.legalAcceptance ?? request.body?.legal;
+  const acceptedDocumentIds = new Set((Array.isArray(legalAcceptance?.documentIds) ? legalAcceptance.documentIds : []).map(Number));
   if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) || password.length < 8) return response.status(400).json({ error: "Укажите корректный e-mail и пароль не короче 8 знаков" });
-  if (!request.body?.legal?.agreementAccepted || !request.body?.legal?.personalDataAccepted || demoLegalDocuments.some((document) => !acceptedDocumentIds.has(document.id))) return response.status(400).json({ error: "Для регистрации необходимо принять пользовательское соглашение и согласие на обработку персональных данных", code: "LEGAL_ACCEPTANCE_REQUIRED" });
+  if (legalConsentRequired() && (!legalAcceptance?.agreementAccepted || !legalAcceptance?.personalDataAccepted || demoLegalDocuments.some((document) => !acceptedDocumentIds.has(document.id)))) return response.status(400).json({ error: "Для регистрации необходимо принять пользовательское соглашение и согласие на обработку персональных данных", code: "LEGAL_ACCEPTANCE_REQUIRED" });
   if (users.some((user) => user.email?.toLocaleLowerCase("en") === email)) return response.status(409).json({ error: "Профиль с таким e-mail уже существует" });
   const displayName = email.split("@")[0];
   const user = { id: nextId++, email, emailVerifiedAt: undefined, passwordLoginEnabled: true, profileCompleted: false, username: displayName, initials: displayName.slice(0, 2).toLocaleUpperCase("ru"), color: "blue", joined: "сегодня", joinedAt: new Date().toISOString(), profile: { name: displayName, city: "", type: "Читатель", gender: "Не указан", bio: "", authorInfluences: "", writingThemes: "", weekend: "", joy: "", talk: "", strangerMessage: "", favoriteGenres: [], dislikedGenres: [] }, books: [], authorBooks: [], reviews: [], excerpts: [], wishBooks: [] };
   const verificationToken = createOpaqueActionToken();
-  users.push(user); passwords.set(user.id, password); demoLegalAcceptances.set(user.id, new Set(demoLegalDocuments.map((document) => document.id))); await replaceDemoActionToken(user.id, "email_verify", verificationToken, EMAIL_VERIFICATION_TTL_MINUTES); const token = randomBytes(24).toString("hex"); sessions.set(token, user.id); response.setHeader("Set-Cookie", `book_meet_demo=${token}; Path=/; HttpOnly; SameSite=Lax`); response.status(201).json(bootstrap(user.id));
+  users.push(user); passwords.set(user.id, password); demoLegalAcceptances.set(user.id, new Set(legalConsentRequired() ? demoLegalDocuments.map((document) => document.id) : [])); await replaceDemoActionToken(user.id, "email_verify", verificationToken, EMAIL_VERIFICATION_TTL_MINUTES); const token = randomBytes(24).toString("hex"); sessions.set(token, user.id); response.setHeader("Set-Cookie", `book_meet_demo=${token}; Path=/; HttpOnly; SameSite=Lax`); response.status(201).json(bootstrap(user.id));
 });
 
 router.post("/auth/email-verification/confirm", async (request, response) => {
@@ -494,6 +499,7 @@ router.delete(["/linked-profiles", "/linked-profiles/unlink"], (request, respons
 });
 
 router.post("/legal/acceptances", (request, response) => {
+  if (!legalConsentRequired()) return response.json({ accepted: true });
   const ids = new Set((Array.isArray(request.body?.documentIds) ? request.body.documentIds : []).map(Number));
   if (!request.body?.agreementAccepted || !request.body?.personalDataAccepted || demoLegalDocuments.some((document) => !ids.has(document.id))) return response.status(400).json({ error: "Необходимо принять все актуальные документы", code: "LEGAL_ACCEPTANCE_REQUIRED" });
   demoLegalAcceptances.set(request.demoUserId, new Set(demoLegalDocuments.map((document) => document.id)));

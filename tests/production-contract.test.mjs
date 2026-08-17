@@ -90,7 +90,8 @@ test("linked community profiles have a strict one-to-one, session-safe contract"
   assert.match(api, /DELETE FROM sessions WHERE token_hash = \?/);
   assert.match(api, /verifyGoogleIdToken\(credential\)/);
   assert.match(api, /PERSONAL_LINK_TYPES/);
-  assert.match(api, /recordLegalAcceptances\(connection, communityId, await activeLegalDocuments/);
+  assert.match(api, /const legalDocuments = legalConsentRequired\(\) \? await activeLegalDocuments/);
+  assert.match(api, /recordLegalAcceptances\(connection, communityId, legalDocuments\)/);
   assert.match(data, /linkedProfile: linkedProfileRow/);
   assert.match(demo, /const \{ linkedProfiles: _linkedProfiles, \.\.\.publicState \} = state/);
   assert.match(demo, /router\.post\("\/linked-profiles\/switch"/);
@@ -676,6 +677,7 @@ test("legal, complaint, age and deletion compliance is enforced beyond the front
 
   for (const table of ["legal_documents", "legal_acceptances", "report_status_history", "report_appeals", "moderation_audit_log", "security_event_log", "security_incidents", "finalized_profile_deletions"]) assert.match(migration, new RegExp(`CREATE TABLE IF NOT EXISTS ${table}`));
   assert.match(api, /router\.get\("\/auth\/legal-documents"/);
+  assert.match(api, /required: legalConsentRequired\(\)/);
   assert.match(api, /router\.post\("\/legal\/acceptances"/);
   assert.match(api, /LEGAL_REACCEPTANCE_REQUIRED/);
   assert.match(api, /PROFILE_COMPLETION_REQUIRED/);
@@ -690,6 +692,8 @@ test("legal, complaint, age and deletion compliance is enforced beyond the front
   assert.doesNotMatch(api, /DELETE FROM messages WHERE sender_user_id/);
   assert.match(compliance, /CROSS_AGE_INTERACTION_FORBIDDEN/);
   assert.match(compliance, /INSERT INTO moderation_audit_log/);
+  assert.match(compliance, /LEGAL_CONSENT_REQUIRED/);
+  assert.match(auth, /legalConfig\.required/);
   assert.match(data, /publisherBin: viewerIsAdmin && !deletedView \? row\.publisher_bin/);
   assert.match(auth, /agreementAccepted/);
   assert.match(auth, /personalDataAccepted/);

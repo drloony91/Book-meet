@@ -15,6 +15,11 @@ export const LEGAL_DOCUMENT_TYPES = ["user_agreement", "privacy_policy", "person
 export const REPORT_TARGET_KINDS = new Set(["user", "book", "review", "excerpt", "event", "occasion", "publisher_news", "chat", "comment", "partner", "admin_action", "interface"]);
 export const REPORT_STATUSES = new Set(["new", "reviewing", "satisfied", "rejected"]);
 
+export function legalConsentRequired(environment = process.env) {
+  const value = String(environment.LEGAL_CONSENT_REQUIRED ?? "1").trim().toLocaleLowerCase("en");
+  return !["0", "false", "off", "no"].includes(value);
+}
+
 export function metadataHash(value) {
   const secret = process.env.AUDIT_HASH_SECRET || (process.env.NODE_ENV === "production" ? "" : "book-meet-development-only");
   if (!secret) throw new Error("AUDIT_HASH_SECRET is required");
@@ -77,7 +82,8 @@ export async function requiredLegalDocuments(connection, locale = "ru") {
   return documents;
 }
 
-export async function validateLegalAcceptance(connection, payload, locale = "ru") {
+export async function validateLegalAcceptance(connection, payload, locale = "ru", environment = process.env) {
+  if (!legalConsentRequired(environment)) return [];
   const documents = await requiredLegalDocuments(connection, locale);
   const ids = new Set((Array.isArray(payload?.documentIds) ? payload.documentIds : []).map(Number));
   if (!payload?.agreementAccepted || !payload?.personalDataAccepted || documents.some((document) => !ids.has(document.id))) {
@@ -97,8 +103,9 @@ export async function recordLegalAcceptances(connection, userId, documents) {
   }
 }
 
-export async function legalAccessState(connection, userId, locale = "ru") {
+export async function legalAccessState(connection, userId, locale = "ru", environment = process.env) {
   const documents = await activeLegalDocuments(connection, locale);
+  if (!legalConsentRequired(environment)) return { configured: documents.length === LEGAL_DOCUMENT_TYPES.length, pending: [], documents };
   if (!documents.length) return { configured: false, pending: [] };
   const [acceptedRows] = await connection.query("SELECT document_id FROM legal_acceptances WHERE user_id = ?", [userId]);
   const accepted = new Set(acceptedRows.map((row) => Number(row.document_id)));

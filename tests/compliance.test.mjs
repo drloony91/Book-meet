@@ -2,6 +2,8 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import {
   assertAgeCompatible,
+  legalAccessState,
+  legalConsentRequired,
   metadataHash,
   profileAccessState,
   validateLegalAcceptance,
@@ -53,4 +55,27 @@ test("registration accepts only the complete current legal document set", async 
   const accepted = await validateLegalAcceptance(connection, { agreementAccepted: true, personalDataAccepted: true, documentIds: [1, 2, 3] }, "ru");
   assert.equal(accepted.length, 3);
   await assert.rejects(() => validateLegalAcceptance(connection, { agreementAccepted: true, personalDataAccepted: false, documentIds: [1, 2, 3] }, "ru"), (error) => error?.code === "LEGAL_ACCEPTANCE_REQUIRED");
+});
+
+test("legal consent can be temporarily disabled without recording a false acceptance", async () => {
+  assert.equal(legalConsentRequired({}), true);
+  assert.equal(legalConsentRequired({ LEGAL_CONSENT_REQUIRED: "0" }), false);
+  assert.equal(legalConsentRequired({ LEGAL_CONSENT_REQUIRED: "off" }), false);
+
+  let queries = 0;
+  const validationConnection = { query: async () => { queries += 1; return [[]]; } };
+  const accepted = await validateLegalAcceptance(validationConnection, null, "ru", { LEGAL_CONSENT_REQUIRED: "0" });
+  assert.deepEqual(accepted, []);
+  assert.equal(queries, 0);
+
+  const documents = [
+    { id: 1, document_type: "user_agreement", version: "1", language_code: "ru", title: "Agreement", content: "Text", requires_reacceptance: 1, published_at: new Date("2026-08-16T00:00:00Z") },
+    { id: 2, document_type: "privacy_policy", version: "1", language_code: "ru", title: "Privacy", content: "Text", requires_reacceptance: 1, published_at: new Date("2026-08-16T00:00:00Z") },
+    { id: 3, document_type: "personal_data_consent", version: "1", language_code: "ru", title: "Consent", content: "Text", requires_reacceptance: 1, published_at: new Date("2026-08-16T00:00:00Z") },
+  ];
+  const accessConnection = { query: async (sql) => sql.includes("FROM legal_documents") ? [documents] : [[{ document_id: 1 }]] };
+  const state = await legalAccessState(accessConnection, 7, "ru", { LEGAL_CONSENT_REQUIRED: "false" });
+  assert.equal(state.configured, true);
+  assert.deepEqual(state.pending, []);
+  assert.equal(state.documents.length, 3);
 });

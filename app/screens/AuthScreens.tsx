@@ -29,7 +29,7 @@ export function LoginScreen({ onLogin, onRegister, initialError = "" }: { onLogi
   const [totp, setTotp] = useState("");
   const [totpRequired, setTotpRequired] = useState(false);
   const [providers, setProviders] = useState({ google: false, googleClientId: "" });
-  const [legalConfig, setLegalConfig] = useState<{ configured: boolean; documents: LegalDocument[] }>({ configured: false, documents: [] });
+  const [legalConfig, setLegalConfig] = useState<{ required: boolean; configured: boolean; documents: LegalDocument[] }>({ required: true, configured: false, documents: [] });
   const [agreementAccepted, setAgreementAccepted] = useState(false);
   const [personalDataAccepted, setPersonalDataAccepted] = useState(false);
   const [openedLegal, setOpenedLegal] = useState<LegalDocument | null>(null);
@@ -51,7 +51,13 @@ export function LoginScreen({ onLogin, onRegister, initialError = "" }: { onLogi
 
   useEffect(() => {
     apiFetch(`/api/auth/legal-documents?locale=${locale}&v=${Date.now()}`, { cache: "no-store" })
-      .then((response) => response.json()).then((value) => setLegalConfig(value)).catch(() => setLegalConfig({ configured: false, documents: [] }));
+      .then((response) => response.json())
+      .then((value: { required?: boolean; configured?: boolean; documents?: LegalDocument[] }) => setLegalConfig({
+        required: value.required !== false,
+        configured: value.configured === true,
+        documents: Array.isArray(value.documents) ? value.documents : [],
+      }))
+      .catch(() => setLegalConfig({ required: true, configured: false, documents: [] }));
   }, [locale]);
 
   useEffect(() => {
@@ -85,7 +91,7 @@ export function LoginScreen({ onLogin, onRegister, initialError = "" }: { onLogi
       window.google.accounts.id.initialize({
         client_id: providers.googleClientId,
         callback: async ({ credential }) => {
-          if (mode === "register" && (!legalConfig.configured || !agreementAccepted || !personalDataAccepted)) {
+          if (mode === "register" && legalConfig.required && (!legalConfig.configured || !agreementAccepted || !personalDataAccepted)) {
             setError(t("legal.acceptRequired"));
             return;
           }
@@ -170,7 +176,7 @@ export function LoginScreen({ onLogin, onRegister, initialError = "" }: { onLogi
     event.preventDefault();
     setSubmitting(true);
     setError("");
-    if (mode === "register" && (!legalConfig.configured || !agreementAccepted || !personalDataAccepted)) {
+    if (mode === "register" && legalConfig.required && (!legalConfig.configured || !agreementAccepted || !personalDataAccepted)) {
       setError(legalConfig.configured ? t("legal.acceptRequired") : t("legal.notConfigured")); setSubmitting(false); return;
     }
     const result = mode === "login" ? await onLogin(email, password, totp) : await onRegister({ email, password, legalAcceptance: { agreementAccepted, personalDataAccepted, documentIds: legalConfig.documents.map((item) => item.id) } });
@@ -226,14 +232,14 @@ export function LoginScreen({ onLogin, onRegister, initialError = "" }: { onLogi
       <form onSubmit={submit}>
         <label>E-mail<input required type="email" autoComplete="email" value={email} onChange={(event) => setEmail(event.target.value)} placeholder="you@example.com" /></label>
         <label>{t("auth.password")}<input required minLength={8} type="password" autoComplete={formMode === "login" ? "current-password" : "new-password"} value={password} onChange={(event) => setPassword(event.target.value)} placeholder={t("auth.passwordPlaceholder")} /></label>
-        {formMode === "register" && <div className="auth-legal-acceptances">
+        {formMode === "register" && legalConfig.required && <div className="auth-legal-acceptances">
           <label><input type="checkbox" checked={agreementAccepted} onChange={(event) => setAgreementAccepted(event.target.checked)} /><span>{t("legal.agreementAccept")} <button className="inline-legal-link" type="button" onClick={(event) => { event.preventDefault(); event.stopPropagation(); setOpenedLegal(legalConfig.documents.find((item) => item.type === "user_agreement") ?? null); }}>{t("legal.userAgreement")}</button></span></label>
           <label><input type="checkbox" checked={personalDataAccepted} onChange={(event) => setPersonalDataAccepted(event.target.checked)} /><span>{t("legal.personalDataAccept")} <button className="inline-legal-link" type="button" onClick={(event) => { event.preventDefault(); event.stopPropagation(); setOpenedLegal(legalConfig.documents.find((item) => item.type === "personal_data_consent") ?? legalConfig.documents.find((item) => item.type === "privacy_policy") ?? null); }}>{t("legal.consent")}</button></span></label>
           {!legalConfig.configured && <small className="form-error">{t("legal.notConfigured")}</small>}
         </div>}
         {formMode === "login" && totpRequired && <label>{t("auth.totp")}<input required autoComplete="one-time-code" maxLength={19} value={totp} onChange={(event) => setTotp(event.target.value.toUpperCase().replace(/[^A-Z0-9-]/g, "").slice(0, 19))} placeholder="000000 / BM-XXXX-XXXX-XXXX" /></label>}
         {error && <span className="login-error">{error}</span>}
-        <button className="primary-button" type="submit" disabled={submitting || formMode === "register" && (!legalConfig.configured || !agreementAccepted || !personalDataAccepted)}>{submitting ? t("auth.checking") : formMode === "login" ? t("auth.login") : t("auth.createProfile")}</button>
+        <button className="primary-button" type="submit" disabled={submitting || formMode === "register" && legalConfig.required && (!legalConfig.configured || !agreementAccepted || !personalDataAccepted)}>{submitting ? t("auth.checking") : formMode === "login" ? t("auth.login") : t("auth.createProfile")}</button>
       </form>
       <div className="auth-provider-actions">
         {providers.google ? <div className="google-provider-button" ref={googleButtonRef} /> : <span>{t("auth.googleUnavailable")}</span>}
