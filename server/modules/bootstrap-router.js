@@ -4,7 +4,7 @@ import { loadBootstrap } from "../data.js";
 const sectionKeys = {
   session: ["activeUserId", "profileCompleted", "accessGate", "linkedProfile"],
   catalog: ["activeUserId", "adultAccess", "users", "books", "events", "occasions"],
-  social: ["activeUserId", "blocks", "blockedByUserIds", "friendRequests", "friendships", "communityMemberships", "follows", "notifications", "messages", "likes"],
+  social: ["activeUserId", "blocks", "blockedByUserIds", "friendRequests", "friendships", "communityMemberships", "follows", "notifications", "messages", "likes", "saves", "likedMaterialRefs", "savedMaterialRefs"],
   moderation: ["activeUserId", "reports"],
 };
 

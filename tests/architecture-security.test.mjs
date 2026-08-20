@@ -95,7 +95,7 @@ test("public catalog maps only the minimal read-only DTO", async () => {
   const data = await loadPublicCatalog({ query: async () => results.shift() }, { now: new Date("2026-08-12T12:00:00Z") });
   assert.deepEqual(Object.keys(data.materials[0]).sort(), ["createdAt", "id", "kind", "owner", "ownerName", "preview", "title"]);
   assert.deepEqual(Object.keys(data.materials[0].owner).sort(), ["avatarUrl", "color", "id", "initials", "name"]);
-  assert.deepEqual(Object.keys(data.organizations[0]).sort(), ["avatarUrl", "bio", "city", "color", "communityType", "id", "initials", "name", "type"].sort());
+  assert.deepEqual(Object.keys(data.organizations[0]).sort(), ["avatarUrl", "bio", "city", "color", "communityIsClosed", "communityType", "id", "initials", "name", "type"].sort());
   assert.equal(data.events.length, 1);
   assert.equal(data.events[0].date, "2026-08-20");
   assert.equal(data.occasions.length, 1);
@@ -107,7 +107,7 @@ test("public catalog maps only the minimal read-only DTO", async () => {
 
 test("demo public catalog reuses the safe event and occasion policies", async () => {
   const demo = await readFile(path.join(root, "server", "demo-api.js"), "utf8");
-  assert.match(demo, /state\.events\.filter\(isPublicUpcomingEvent\)/);
+  assert.match(demo, /state\.events\.filter\(\(item\) => isPublicUpcomingEvent\(item\)\)/);
   assert.match(demo, /state\.occasions\.filter\(isPublicOccasion\)/);
 });
 

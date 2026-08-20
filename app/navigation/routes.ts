@@ -14,6 +14,8 @@ export type MainView =
   | "communities"
   | "partners"
   | "chat"
+  | "liked"
+  | "saved"
   | "profile";
 
 export type RoutableMainView = Exclude<MainView, "profile">;
@@ -44,6 +46,8 @@ export const mainViewPaths: Record<RoutableMainView, string> = {
   publications: "/blog",
   occasions: "/meet",
   chat: "/chat",
+  liked: "/liked",
+  saved: "/saved",
 };
 
 export const mainViewTitleKeys: Record<RoutableMainView, MessageKey> = {
@@ -58,6 +62,8 @@ export const mainViewTitleKeys: Record<RoutableMainView, MessageKey> = {
   publications: "content.publications",
   occasions: "content.occasions",
   chat: "header.chats",
+  liked: "feed.liked",
+  saved: "feed.saved",
 };
 
 export function mainViewTitle(view: RoutableMainView, t: Translate) {
@@ -84,7 +90,7 @@ export type RoutableProfileTab = keyof typeof profileTabPaths;
 export function profileTabFromPathname(pathname: string): RoutableProfileTab {
   const normalized = normalizedPathname(pathname);
   const entry = Object.entries(profileTabPaths).find(([, path]) => path === normalized);
-  return entry ? entry[0] as RoutableProfileTab : "main";
+  return entry && !["friends", "excerpts", "reviews", "events", "occasions"].includes(entry[0]) ? entry[0] as RoutableProfileTab : "main";
 }
 
 export function normalizedPathname(pathname: string) {

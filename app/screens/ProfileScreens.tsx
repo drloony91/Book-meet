@@ -13,16 +13,20 @@ import {
   AuthorBooksTab,
   CityAutocomplete,
   EventForm,
+  EventCard,
+  EventModal,
   EventStatusLabel,
   ExcerptsTab,
   GenrePicker,
   LibraryTab,
+  MaterialPreviewCard,
   MyEventsTab,
   OccasionCard,
   OccasionForm,
   OccasionModal,
   PublisherNewsTab,
   ProfileFriendsTab,
+  ReadingModal,
   ReviewsTab,
   UnifiedBookModal,
   WishlistTab,
@@ -41,6 +45,7 @@ import type {
   AdminStatistics,
   AuthorBook,
   BookEvent,
+  CommunityMembership,
   DemoUser,
   FriendRequest,
   Follow,
@@ -54,6 +59,44 @@ import type {
   TotpStatus,
   UserProfileData,
 } from "../types/domain";
+
+type ProfileSocialMode = "friends" | "follows" | "communities";
+
+function ProfileSocialDialog({ initialMode, friends, incoming, outgoing, followers, subscriptions, communities, pendingCommunities, onClose, onOpenUser, onAccept, onReject, onCancel, onRemove }: { initialMode: ProfileSocialMode; friends: DemoUser[]; incoming: DemoUser[]; outgoing: DemoUser[]; followers: DemoUser[]; subscriptions: DemoUser[]; communities: DemoUser[]; pendingCommunities: DemoUser[]; onClose: () => void; onOpenUser: (id: number) => void; onAccept: (id: number) => void; onReject: (id: number) => void; onCancel: (id: number) => void; onRemove: (id: number) => void }) {
+  const { t, domainLabel } = useI18n();
+  const [mode, setMode] = useState<ProfileSocialMode>(initialMode);
+  const [followMode, setFollowMode] = useState<"followers" | "subscriptions">("followers");
+  const closeButtonRef = useRef<HTMLButtonElement>(null);
+  useEffect(() => { closeButtonRef.current?.focus(); const close = (event: KeyboardEvent) => { if (event.key === "Escape") onClose(); }; window.addEventListener("keydown", close); return () => window.removeEventListener("keydown", close); }, [onClose]);
+  const person = (user: DemoUser, action?: React.ReactNode) => <article className="profile-social-person" key={user.id}><button type="button" onClick={() => onOpenUser(user.id)}><span className={`avatar avatar-sm avatar-${user.color} ${user.avatarUrl ? "has-photo" : ""}`} style={user.avatarUrl ? { backgroundImage: `url(${user.avatarUrl})` } : undefined}>{!user.avatarUrl && user.initials}</span><span><strong data-i18n-skip>{user.profile.name}</strong><small data-i18n-skip>@{user.username} · {domainLabel(user.profile.type)}</small></span></button>{action}</article>;
+  const group = (title: string, rows: DemoUser[], action?: (user: DemoUser) => React.ReactNode) => <section className="profile-social-group"><h3>{title} <span>{rows.length}</span></h3>{rows.length ? <div>{rows.map((user) => person(user, action?.(user)))}</div> : <p>{t("common.empty")}</p>}</section>;
+  return <div className="notice-backdrop profile-social-backdrop" role="presentation" onMouseDown={onClose}><section className="profile-social-dialog" role="dialog" aria-modal="true" aria-labelledby="profile-social-title" onMouseDown={(event) => event.stopPropagation()}><button ref={closeButtonRef} className="modal-close" type="button" aria-label={t("common.close")} onClick={onClose}>×</button><h2 id="profile-social-title">{t("profile.connections")}</h2><div className="profile-social-tabs" role="tablist"><button type="button" className={mode === "friends" ? "active" : ""} onClick={() => setMode("friends")}>{t("profile.friends")}</button><button type="button" className={mode === "follows" ? "active" : ""} onClick={() => setMode("follows")}>{t("profile.subscriptions")}</button><button type="button" className={mode === "communities" ? "active" : ""} onClick={() => setMode("communities")}>{t("nav.communities")}</button></div>{mode === "friends" && <>{group(t("friends.current"), friends, (user) => <button className="quiet-danger-button" type="button" onClick={() => onRemove(user.id)}>{t("profile.unfriend")}</button>)}{group(t("friends.incoming"), incoming, (user) => <span className="profile-social-row-actions"><button className="primary-button" type="button" onClick={() => onAccept(user.id)}>{t("profile.accept")}</button><button className="outline-button" type="button" onClick={() => onReject(user.id)}>{t("profile.reject")}</button></span>)}{group(t("friends.outgoing"), outgoing, (user) => <button className="outline-button" type="button" onClick={() => onCancel(user.id)}>{t("profile.cancelRequest")}</button>)}</>}{mode === "follows" && <><div className="profile-social-subtabs"><button type="button" className={followMode === "followers" ? "active" : ""} onClick={() => setFollowMode("followers")}>{t("profile.followers")}</button><button type="button" className={followMode === "subscriptions" ? "active" : ""} onClick={() => setFollowMode("subscriptions")}>{t("profile.subscriptions")}</button></div>{group(followMode === "followers" ? t("profile.followers") : t("profile.subscriptions"), followMode === "followers" ? followers : subscriptions)}</>}{mode === "communities" && <>{group(t("communities.memberOf"), communities)}{group(t("communities.pending"), pendingCommunities, (user) => <button className="outline-button" type="button" onClick={() => onCancel(user.id)}>{t("profile.cancelRequest")}</button>)}</>}</section></div>;
+}
+
+function ProfileMaterialStream({ profileUser, viewer, users, events, occasions, likes, saves, commentCounts, saveCounts, onToggleLike, onToggleSave, onComment, onOpenUser }: { profileUser: DemoUser; viewer: DemoUser; users: DemoUser[]; events: BookEvent[]; occasions: Occasion[]; likes: Record<string, number[]>; saves: Record<string, number[]>; commentCounts: Record<string, number>; saveCounts: Record<string, number>; onToggleLike: (item: ReadingItem) => void; onToggleSave: (item: ReadingItem) => void; onComment: (item: ReadingItem, text: string) => Promise<MaterialComment | null>; onOpenUser: (id: number) => void }) {
+  const { t } = useI18n();
+  const [queryDraft, setQueryDraft] = useState("");
+  const [query, setQuery] = useState("");
+  const [shown, setShown] = useState(12);
+  const [openedReading, setOpenedReading] = useState<ReadingItem | null>(null);
+  const [openedEvent, setOpenedEvent] = useState<BookEvent | null>(null);
+  const [openedOccasion, setOpenedOccasion] = useState<Occasion | null>(null);
+  const sentinel = useRef<HTMLDivElement>(null);
+  useEffect(() => { const timer = window.setTimeout(() => setQuery(queryDraft.trim().toLocaleLowerCase()), 260); return () => window.clearTimeout(timer); }, [queryDraft]);
+  useEffect(() => { setShown(12); }, [query]);
+  const entries = useMemo(() => {
+    const reading = [
+      ...profileUser.reviews.map((source) => ({ kind: "reading" as const, id: source.id, time: Date.parse(source.createdAtValue ?? source.createdAt) || source.id, search: `${source.bookTitle} ${source.preview} ${source.fullText}`, item: { id: source.id, kind: "review", title: source.bookTitle, author: profileUser.profile.name, text: source.fullText, preview: source.preview, bodyHtml: source.bodyHtml, ownerId: profileUser.id, createdAt: source.createdAt, bookAuthor: source.bookAuthor, rating: source.rating } as ReadingItem })),
+      ...(profileUser.excerpts ?? []).map((source) => ({ kind: "reading" as const, id: source.id, time: Date.parse(source.createdAtValue ?? source.createdAt) || source.id, search: `${source.bookTitle} ${source.previewText} ${source.text}`, item: { id: source.id, kind: "excerpt", title: source.bookTitle || t("content.publications"), author: profileUser.profile.name, text: source.text, preview: source.previewText, bodyHtml: source.bodyHtml, ownerId: profileUser.id, createdAt: source.createdAt, linkedBookId: source.bookId, linkedBookIds: source.bookIds } as ReadingItem })),
+      ...events.filter((source) => source.creatorId === profileUser.id && (profileUser.id === viewer.id || source.status === "published")).map((source) => ({ kind: "event" as const, id: source.id, time: Date.parse(source.createdAt) || source.id, search: `${source.title} ${source.summary} ${source.description}`, item: source })),
+      ...occasions.filter((source) => source.creatorId === profileUser.id && (profileUser.id === viewer.id || source.status === "published")).map((source) => ({ kind: "occasion" as const, id: source.id, time: Date.parse(source.createdAt) || source.id, search: `${source.primaryText} ${source.audienceText} ${source.meetingAddress}`, item: source })),
+    ];
+    return reading.filter((entry) => !query || entry.search.toLocaleLowerCase().includes(query)).sort((left, right) => right.time - left.time);
+  }, [profileUser, viewer.id, events, occasions, query, t]);
+  useEffect(() => { const node = sentinel.current; if (!node || shown >= entries.length || !("IntersectionObserver" in window)) return; const observer = new IntersectionObserver(([entry]) => { if (entry.isIntersecting) setShown((count) => Math.min(entries.length, count + 12)); }); observer.observe(node); return () => observer.disconnect(); }, [shown, entries.length]);
+  const actions = (item: ReadingItem) => { const key = `${item.kind}-${item.id}`; return { likesCount: likes[key]?.length ?? 0, commentsCount: commentCounts[key] ?? 0, savesCount: saveCounts[key] ?? 0, liked: Boolean(likes[key]?.includes(viewer.id)), saved: Boolean(saves[key]?.includes(viewer.id)), onToggleLike: () => onToggleLike(item), onToggleSave: () => onToggleSave(item) }; };
+  return <section className="profile-material-stream"><label className="profile-material-search"><span aria-hidden="true">⌕</span><input type="search" maxLength={120} value={queryDraft} onChange={(event) => setQueryDraft(event.target.value)} placeholder={t("profile.searchMaterials")} aria-label={t("profile.searchMaterials")} /></label><div className="profile-material-list">{entries.slice(0, shown).map((entry, index) => { if (entry.kind === "reading") return <MaterialPreviewCard key={`reading-${entry.item.kind}-${entry.id}`} item={entry.item} index={index} owner={profileUser} {...actions(entry.item)} onOpen={() => setOpenedReading(entry.item)} onOpenComments={() => setOpenedReading(entry.item)} onOpenUser={onOpenUser} />; if (entry.kind === "event") { const item: ReadingItem = { id: entry.item.id, kind: "event", title: entry.item.title, author: profileUser.profile.name, text: entry.item.description, preview: entry.item.summary, ownerId: profileUser.id, createdAt: entry.item.createdAt }; return <EventCard key={`event-${entry.id}`} item={entry.item} own={profileUser.id === viewer.id} {...actions(item)} onOpen={() => setOpenedEvent(entry.item)} onOpenComments={() => setOpenedEvent(entry.item)} />; } const item: ReadingItem = { id: entry.item.id, kind: "occasion", title: entry.item.primaryText, author: profileUser.profile.name, text: entry.item.audienceText, preview: entry.item.primaryText, ownerId: profileUser.id, createdAt: entry.item.createdAt }; return <OccasionCard key={`occasion-${entry.id}`} item={entry.item} own={profileUser.id === viewer.id} {...actions(item)} onOpen={() => setOpenedOccasion(entry.item)} onOpenComments={() => setOpenedOccasion(entry.item)} />; })}</div>{!entries.length && <p className="profile-tab-placeholder">{query ? t("common.nothingFound") : t("profile.noMaterials")}</p>}{shown < entries.length && <div ref={sentinel} className="profile-material-sentinel" />}{entries.length > 0 && shown >= entries.length && <p className="feed-end">{t("feed.end")}</p>}{openedReading && <ReadingModal item={openedReading} currentUser={viewer} users={users} likedUserIds={likes[`${openedReading.kind}-${openedReading.id}`] ?? []} saved={Boolean(saves[`${openedReading.kind}-${openedReading.id}`]?.includes(viewer.id))} savesCount={saveCounts[`${openedReading.kind}-${openedReading.id}`] ?? 0} onToggleLike={() => onToggleLike(openedReading)} onToggleSave={() => onToggleSave(openedReading)} onComment={(text) => onComment(openedReading, text)} onOpenUser={onOpenUser} onClose={() => setOpenedReading(null)} />}{openedEvent && <EventModal item={openedEvent} users={users} currentUser={viewer} currentUserId={viewer.id} onOpenUser={onOpenUser} onClose={() => setOpenedEvent(null)} />}{openedOccasion && <OccasionModal item={openedOccasion} users={users} currentUser={viewer} onOpenUser={onOpenUser} onClose={() => setOpenedOccasion(null)} />}</section>;
+}
 
 type LinkedProfileCard = { id: number; name: string; type: string; avatarUrl?: string; profileCompleted?: boolean };
 
@@ -415,7 +458,7 @@ export function AdminProfile({ onBack, onLogout, events, occasions, users, catal
   return <main className="my-profile-page admin-profile-page"><div className="profile-page-topbar"><button type="button" className="back-button" onClick={onBack}>← {t("common.home")}</button><div className="admin-profile-top-actions">{!securityOpen && !complianceOpen && <><button type="button" className="outline-button" onClick={() => setComplianceOpen(true)}>{t("admin.compliance")}</button><button type="button" className="outline-button" onClick={() => setSecurityOpen(true)}>{t("security.title")}</button></>}<button type="button" className="back-button" onClick={onLogout}>{t("common.logout")}</button></div></div><section className="admin-profile-card">{securityOpen ? <AdminSecurityPanel onBack={() => setSecurityOpen(false)} /> : complianceOpen ? <AdminCompliancePanel onBack={() => setComplianceOpen(false)} onLogout={onLogout} /> : <AdminTab events={events} occasions={occasions} users={users} catalog={catalog} reports={reports} onModerate={onModerateEvent} onModerateOccasion={onModerateOccasion} onModeratePublisher={onModeratePublisher} onOpenChat={onOpenChat} onOpenUser={onOpenUser} onRefresh={onRefresh} onDeleteMaterial={onDeleteMaterial} />}</section></main>;
 }
 
-export function MyProfile({ onBack, user, users, catalog, friends, friendRequests, follows, events, occasions, likes, initialAction, initialEditId, initialEditing = false, onProfileCompleted, onToggleLike, onComment, onEditEvent, onDeleteEvent, onEditOccasion, onDeleteOccasion, onModerateEvent, onModerateOccasion, onLogout, onUserChange, onHomeViewChange, onOpenUser, onOpenChat }: { onBack: () => void; user: DemoUser; users: DemoUser[]; catalog: (LibraryBook | AuthorBook)[]; friends: DemoUser[]; friendRequests: FriendRequest[]; follows: Follow[]; events: BookEvent[]; occasions: Occasion[]; likes: Record<string, number[]>; initialAction?: "review" | "excerpt" | "book" | null; initialEditId?: number | null; initialEditing?: boolean; onProfileCompleted?: () => void; onToggleLike: (item: ReadingItem) => void; onComment: (item: ReadingItem, text: string) => Promise<MaterialComment | null>; onEditEvent: (item: BookEvent) => void; onDeleteEvent: (id: number) => void; onEditOccasion: (item: Occasion) => void; onDeleteOccasion: (id: number) => void; onModerateEvent: (id: number, action: "accept" | "revision" | "reject" | "edit", note?: string, event?: typeof emptyEvent, pinned?: boolean) => Promise<void>; onModerateOccasion: (id: number, action: "accept" | "revision" | "reject" | "edit", note?: string, occasion?: typeof emptyOccasion) => Promise<void>; onLogout: () => void; onUserChange: (user: DemoUser) => Promise<void>; onHomeViewChange: (homeView: "classic" | "feed") => Promise<void>; onOpenUser: (userId: number) => void; onOpenChat: (userId: number) => void }) {
+export function MyProfile({ onBack, user, users, catalog, friends, friendRequests, communityMemberships, follows, events, occasions, likes, saves, commentCounts, saveCounts, initialAction, initialEditId, initialEditing = false, onProfileCompleted, onToggleLike, onToggleSave, onComment, onEditEvent, onDeleteEvent, onEditOccasion, onDeleteOccasion, onModerateEvent, onModerateOccasion, onLogout, onUserChange, onHomeViewChange, onOpenUser, onOpenChat, onAcceptFriend, onRejectFriend, onCancelFriendRequest, onRemoveFriend }: { onBack: () => void; user: DemoUser; users: DemoUser[]; catalog: (LibraryBook | AuthorBook)[]; friends: DemoUser[]; friendRequests: FriendRequest[]; communityMemberships: CommunityMembership[]; follows: Follow[]; events: BookEvent[]; occasions: Occasion[]; likes: Record<string, number[]>; saves: Record<string, number[]>; commentCounts: Record<string, number>; saveCounts: Record<string, number>; initialAction?: "review" | "excerpt" | "book" | null; initialEditId?: number | null; initialEditing?: boolean; onProfileCompleted?: () => void; onToggleLike: (item: ReadingItem) => void; onToggleSave: (item: ReadingItem) => void; onComment: (item: ReadingItem, text: string) => Promise<MaterialComment | null>; onEditEvent: (item: BookEvent) => void; onDeleteEvent: (id: number) => void; onEditOccasion: (item: Occasion) => void; onDeleteOccasion: (id: number) => void; onModerateEvent: (id: number, action: "accept" | "revision" | "reject" | "edit", note?: string, event?: typeof emptyEvent, pinned?: boolean) => Promise<void>; onModerateOccasion: (id: number, action: "accept" | "revision" | "reject" | "edit", note?: string, occasion?: typeof emptyOccasion) => Promise<void>; onLogout: () => void; onUserChange: (user: DemoUser) => Promise<void>; onHomeViewChange: (homeView: "classic" | "feed") => Promise<void>; onOpenUser: (userId: number) => void; onOpenChat: (userId: number) => void; onAcceptFriend: (userId: number) => void; onRejectFriend: (userId: number) => void; onCancelFriendRequest: (userId: number) => void; onRemoveFriend: (userId: number) => void }) {
   const { t, domainLabel, formatNumber } = useI18n();
   const [activeTab, setActiveTab] = useState<ProfileTab>(initialAction === "review" ? "reviews" : initialAction === "excerpt" ? "excerpts" : initialAction === "book" ? "library" : profileTabFromPathname(window.location.pathname));
   const [openedOwnOccasion, setOpenedOwnOccasion] = useState<Occasion | null>(null);
@@ -429,6 +472,7 @@ export function MyProfile({ onBack, user, users, catalog, friends, friendRequest
   const [publisherNews, setPublisherNews] = useState(user.publisherNews ?? []);
   const [wishBooks, setWishBooks] = useState(user.wishBooks ?? []);
   const [profile, setProfile] = useState(user.profile);
+  const [username, setUsername] = useState(user.username);
   const [tabOrderDraft, setTabOrderDraft] = useState<ProfileTab[]>(user.profile.tabOrder ?? []);
   const [hiddenTabsDraft, setHiddenTabsDraft] = useState<ProfileTab[]>(user.profile.hiddenProfileTabs ?? []);
   const [reorderingTabs, setReorderingTabs] = useState(false);
@@ -440,6 +484,7 @@ export function MyProfile({ onBack, user, users, catalog, friends, friendRequest
   const [publisherTypeNotice, setPublisherTypeNotice] = useState(false);
   const [pendingOrganizationType, setPendingOrganizationType] = useState<"Издатель" | "Сообщество">("Издатель");
   const [deleteProfileConfirm, setDeleteProfileConfirm] = useState(false);
+  const [socialMode, setSocialMode] = useState<ProfileSocialMode | null>(null);
   const [homeView, setHomeView] = useState<"classic" | "feed">(user.profile.homeView ?? "feed");
   const avatarInputRef = useRef<HTMLInputElement>(null);
   const tabRowRefs = useRef(new Map<ProfileTab, HTMLDivElement>());
@@ -498,6 +543,22 @@ export function MyProfile({ onBack, user, users, catalog, friends, friendRequest
     }
   }
 
+  async function savePrivacyPatch(patch: Pick<typeof profile, "showBirthDateToFriends" | "communityIsClosed">) {
+    const previousProfile = profile;
+    const nextProfile = { ...profile, ...patch };
+    setProfile(nextProfile);
+    try {
+      await onUserChange({ ...user, profile: nextProfile });
+      savedProfileRef.current = nextProfile;
+      setSaved(true);
+      window.setTimeout(() => setSaved(false), 2200);
+    } catch (error) {
+      console.warn(error);
+      setProfile(previousProfile);
+      window.alert(error instanceof Error ? error.message : t("profile.saveError"));
+    }
+  }
+
   function discardChangesAndLeave() {
     const action = pendingExitRef.current;
     setProfile(savedProfileRef.current);
@@ -526,10 +587,10 @@ export function MyProfile({ onBack, user, users, catalog, friends, friendRequest
     }
     const cleanProfile = { ...profile, name: profile.name.trim(), age: publisher ? undefined : ageFromDateInput(profile.birthDate) };
     try {
-      await onUserChange({ ...user, initials: cleanProfile.name.slice(0, 2).toUpperCase(), avatarUrl, profile: cleanProfile, books, reviews, authorBooks, excerpts: userExcerpts, publisherNews, wishBooks });
+      await onUserChange({ ...user, username: username.trim().toLowerCase(), usernameIsTemporary: false, initials: cleanProfile.name.slice(0, 2).toUpperCase(), avatarUrl, profile: cleanProfile, books, reviews, authorBooks, excerpts: userExcerpts, publisherNews, wishBooks });
     } catch (error) {
       console.warn(error);
-      window.alert(t("profile.saveError"));
+      window.alert(error instanceof Error ? error.message : t("profile.saveError"));
       return;
     }
     savedProfileRef.current = cleanProfile;
@@ -563,8 +624,19 @@ export function MyProfile({ onBack, user, users, catalog, friends, friendRequest
       if (!context) return;
       const side = Math.min(image.naturalWidth, image.naturalHeight);
       context.drawImage(image, (image.naturalWidth - side) / 2, (image.naturalHeight - side) / 2, side, side, 0, 0, 256, 256);
-      setAvatarUrl(canvas.toDataURL("image/webp", 0.82));
-      setEditing(true);
+      const nextAvatarUrl = canvas.toDataURL("image/webp", 0.82);
+      const previousAvatarUrl = avatarUrl;
+      setAvatarUrl(nextAvatarUrl);
+      try {
+        await onUserChange({ ...user, avatarUrl: nextAvatarUrl });
+        savedAvatarUrlRef.current = nextAvatarUrl;
+        setSaved(true);
+        window.setTimeout(() => setSaved(false), 2200);
+      } catch (error) {
+        console.warn(error);
+        setAvatarUrl(previousAvatarUrl);
+        window.alert(t("profile.saveError"));
+      }
     } finally {
       URL.revokeObjectURL(source);
       if (avatarInputRef.current) avatarInputRef.current.value = "";
@@ -587,21 +659,23 @@ export function MyProfile({ onBack, user, users, catalog, friends, friendRequest
     profile.type === "Писатель" ? { key: "author-books", label: `${t("authorBooks.mine")} · ${formatNumber(authorBooks.length)}` } : null,
     profile.type === "Издатель" ? { key: "author-books", label: `${t("profile.publisherBooks")} · ${formatNumber(authorBooks.length)}` } : null,
     profile.type === "Сообщество" ? { key: "author-books", label: `${t("profile.communityBooks")} · ${formatNumber(authorBooks.length)}` } : null,
-    profile.type === "Писатель" || profile.type === "Блогер" ? { key: "excerpts", label: `${t("profile.blog")} · ${formatNumber(userExcerpts.length)}` } : null,
     profile.type === "Издатель" ? { key: "events", label: `${t("profile.publisherEvents")} · ${formatNumber(events.filter((item) => item.creatorId === user.id).length)}` } : null,
     profile.type === "Сообщество" ? { key: "events", label: `${t("profile.communityEvents")} · ${formatNumber(events.filter((item) => item.creatorId === user.id).length)}` } : null,
     profile.type === "Издатель" ? { key: "publisher-news", label: `${t("admin.publisherNews")} · ${formatNumber(publisherNews.length)}` } : null,
     profile.type === "Сообщество" ? { key: "publisher-news", label: `${t("admin.communityNews")} · ${formatNumber(publisherNews.length)}` } : null,
     !["Издатель", "Сообщество"].includes(profile.type) ? { key: "library", label: `${t("profile.library")} · ${formatNumber(books.length)}` } : null,
     profile.type === "Читатель" || profile.type === "Блогер" ? { key: "wishlist", label: `${t("wishlist.title")} · ${formatNumber(wishBooks.length)}` } : null,
-    profile.type === "Читатель" || profile.type === "Блогер" ? { key: "reviews", label: `${t("profile.reviews")} · ${formatNumber(reviews.length)}` } : null,
-    !["Издатель", "Сообщество"].includes(profile.type) ? { key: "events", label: `${t("event.myEvents")} · ${formatNumber(events.filter((item) => item.creatorId === user.id).length + events.filter((item) => item.creatorId !== user.id && item.reminderSet).length)}` } : null,
-    !["Издатель", "Сообщество"].includes(profile.type) ? { key: "occasions", label: `${t("profile.occasions")} · ${formatNumber(occasions.filter((item) => item.creatorId === user.id).length)}` } : null,
-    { key: "friends", label: profile.type === "Сообщество" ? `${t("profile.communityMembers")} · ${formatNumber(friends.length)}` : profile.type === "Издатель" ? `${t("profile.subscriptions")} · ${formatNumber(follows.filter((item) => item.followerId === user.id).length)}` : `${t("profile.friends")} · ${formatNumber(friends.length)}` },
   ].filter(Boolean) as Array<{ key: ProfileTab; label: string }>);
   const defaultTabOrder = profileTabs.map((item) => item.key);
   const normalizedTabOrder = ["main" as ProfileTab, ...tabOrderDraft.filter((tab) => tab !== "main" && defaultTabOrder.includes(tab)), ...defaultTabOrder.filter((tab) => tab !== "main" && !tabOrderDraft.includes(tab))];
   const orderedProfileTabs = normalizedTabOrder.map((tab) => profileTabs.find((item) => item.key === tab)).filter((item): item is { key: ProfileTab; label: string } => Boolean(item)).filter((item) => item.key === "main" || !hiddenTabsDraft.includes(item.key));
+  const friendIds = new Set(friends.map((friend) => friend.id));
+  const incomingFriendUsers = friendRequests.filter((request) => request.status === "pending" && request.toId === user.id).map((request) => users.find((item) => item.id === request.fromId)).filter((item): item is DemoUser => Boolean(item) && !item!.isAdmin && item!.profile.type !== "Сообщество");
+  const outgoingFriendUsers = friendRequests.filter((request) => request.status === "pending" && request.fromId === user.id).map((request) => users.find((item) => item.id === request.toId)).filter((item): item is DemoUser => Boolean(item) && !item!.isAdmin && item!.profile.type !== "Сообщество");
+  const visibleFollowers = follows.filter((follow) => follow.targetId === user.id && !friendIds.has(follow.followerId)).map((follow) => users.find((item) => item.id === follow.followerId)).filter((item): item is DemoUser => Boolean(item) && !item!.isAdmin && item!.profile.type !== "Сообщество");
+  const visibleSubscriptions = follows.filter((follow) => follow.followerId === user.id && !friendIds.has(follow.targetId)).map((follow) => users.find((item) => item.id === follow.targetId)).filter((item): item is DemoUser => Boolean(item) && !item!.isAdmin && item!.profile.type !== "Сообщество");
+  const joinedCommunities = communityMemberships.filter((membership) => membership.memberId === user.id).map((membership) => users.find((item) => item.id === membership.communityId)).filter((item): item is DemoUser => Boolean(item));
+  const pendingCommunities = friendRequests.filter((request) => request.status === "pending" && request.fromId === user.id).map((request) => users.find((item) => item.id === request.toId)).filter((item): item is DemoUser => Boolean(item) && item!.profile.type === "Сообщество");
 
   useEffect(() => {
     if (activeTab === "main" || activeTab === "settings" || !hiddenTabsDraft.includes(activeTab)) return;
@@ -679,13 +753,12 @@ export function MyProfile({ onBack, user, users, catalog, friends, friendRequest
     <main className="my-profile-page">
       <div className="profile-page-topbar">
         <button type="button" className="back-button" onClick={() => leaveOrWarn(onBack)}>← {t("common.home")}</button>
-        <div className="profile-top-actions">{saved && <span className="saved-toast">{t("common.changesSaved")}</span>}<button type="button" className="back-button" onClick={() => leaveOrWarn(onLogout)}>{t("common.logout")}</button></div>
+        <div className="profile-top-actions">{saved && <span className="saved-toast">{t("common.changesSaved")}</span>}{!editing && <button className="outline-button profile-edit-button" type="button" onClick={() => setEditing(true)}>{t("common.edit")}</button>}<LinkedProfileControls profileType={profile.type} /><button type="button" className="back-button" onClick={() => leaveOrWarn(onLogout)}>{t("common.logout")}</button></div>
       </div>
       <section className="my-profile-card">
         <div className="my-profile-aside">
-          <div className={`avatar avatar-xl avatar-user ${avatarUrl ? "has-photo" : ""}`} style={avatarUrl ? { backgroundImage: `url(${avatarUrl})` } : undefined}>{!avatarUrl && user.initials}<span className="online-dot" /></div>
-          <input ref={avatarInputRef} className="visually-hidden" type="file" accept="image/jpeg,image/png,image/webp" onChange={(event) => void changeAvatar(event.target.files?.[0])} />
-          <button type="button" className="change-photo" onClick={() => avatarInputRef.current?.click()}>{t("profile.changePhoto")}</button>
+          <div className="profile-avatar-editor"><div className={`avatar avatar-xl avatar-user ${avatarUrl ? "has-photo" : ""}`} style={avatarUrl ? { backgroundImage: `url(${avatarUrl})` } : undefined}>{!avatarUrl && user.initials}</div><input ref={avatarInputRef} className="visually-hidden" type="file" accept="image/jpeg,image/png,image/webp" onChange={(event) => void changeAvatar(event.target.files?.[0])} /><button type="button" className="profile-avatar-edit-button" onClick={() => avatarInputRef.current?.click()} aria-label={t("profile.changePhoto")} title={t("profile.changePhoto")}><span aria-hidden="true">✎</span></button></div>
+          <div className="profile-aside-identity"><h1 data-i18n-skip style={{ fontSize: `${Math.max(14, 24 - Math.max(0, profile.name.length - 18) * .45)}px` }}>{profile.name}</h1>{!['Издатель', 'Сообщество'].includes(profile.type) && <p data-i18n-skip style={{ fontSize: `${Math.max(10, 14 - Math.max(0, username.length - 20) * .25)}px` }}>@{username}</p>}</div>
           <nav className="profile-nav" aria-label={t("profile.sections")}>
             {orderedProfileTabs.map((item) => <div ref={(element) => { if (element) tabRowRefs.current.set(item.key, element); else tabRowRefs.current.delete(item.key); }} className={`profile-nav-row ${reorderingTabs ? "is-reordering" : ""}`} key={item.key} onDragOver={(event) => { if (reorderingTabs) event.preventDefault(); }} onDragEnter={() => moveDraggedTab(item.key)} onDrop={() => setDraggedTab(null)}>
               {reorderingTabs && item.key !== "main" && <span className="profile-tab-drag-handle" draggable onDragStart={() => { for (const [tab, element] of tabRowRefs.current) previousTabPositions.current.set(tab, element.getBoundingClientRect().top); setDraggedTab(item.key); }} onDragEnd={() => setDraggedTab(null)} aria-label={t("settings.moveTab", { label: item.label })} title={t("settings.dragTab")}>☰</span>}
@@ -697,8 +770,7 @@ export function MyProfile({ onBack, user, users, catalog, friends, friendRequest
         <div className={`my-profile-main ${activeTab === "library" ? "library-main" : ""}`}>
           {activeTab === "main" && <>
             <div className="profile-title-row">
-              <div><h1 data-i18n-skip>{profile.name}</h1><p>{domainLabel(profile.type)}{profile.city ? <> · <span data-i18n-skip>{profile.city}</span></> : ""}</p></div>
-              {!editing && <div className="profile-main-actions"><LinkedProfileControls profileType={profile.type} /><button className="outline-button profile-edit-button" type="button" onClick={() => setEditing(true)}>{t("common.edit")}</button></div>}
+              <div><p>{domainLabel(profile.type)}{profile.city ? <> · <span data-i18n-skip>{profile.city}</span></> : ""}</p><div className="profile-social-summary"><button type="button" onClick={() => setSocialMode("follows")}>{t("profile.followerCount", { count: formatNumber(visibleFollowers.length) })}</button><i aria-hidden="true" /><button type="button" onClick={() => setSocialMode("friends")}>{t("profile.friendCount", { count: formatNumber(friends.length) })}</button></div></div>
             </div>
             {editing ? (
               <form className="profile-form" noValidate onSubmit={save}>
@@ -709,12 +781,13 @@ export function MyProfile({ onBack, user, users, catalog, friends, friendRequest
                    <label>{t("profile.communityType")} *<input required value={profile.communityType ?? ""} onChange={(event) => setProfile({ ...profile, communityType: event.target.value })} placeholder={t("linked.communityPlaceholder")} /></label>
                    <label>{t("profile.aboutCommunity")} *<textarea required rows={5} value={profile.bio} onChange={(event) => setProfile({ ...profile, bio: event.target.value })} /></label>
                    <label>{t("profile.communityRules")} *<textarea required rows={5} value={profile.communityRules ?? ""} onChange={(event) => setProfile({ ...profile, communityRules: event.target.value })} /></label>
-                </div> : <><div className="form-row">
+                 </div> : <><div className="form-row">
                    <label className={invalidFields.name ? "field-invalid" : ""}>{profile.type === "Издатель" ? `${t("directory.publisherName")} *` : `${t("profile.name")} *`}<input required aria-invalid={invalidFields.name} value={profile.name} onChange={(event) => { setProfile({ ...profile, name: event.target.value }); setInvalidFields((current) => ({ ...current, name: false })); }} /></label>
                    <label>{t("profile.profileType")}<CustomSelect ariaLabel={t("profile.profileType")} value={profile.type} onChange={(type) => { if (["Издатель", "Сообщество"].includes(type) && profile.type !== type) { setPendingOrganizationType(type as "Издатель" | "Сообщество"); setPublisherTypeNotice(true); } else setProfile({ ...profile, type }); }} options={["Читатель", "Писатель", "Блогер", "Издатель", "Сообщество"].map((item) => ({ value: item as UserProfileData["type"], label: domainLabel(item) }))} /></label>
                 </div>
+                {!['Издатель', 'Сообщество'].includes(profile.type) && <label>{t("profile.username")}<input required minLength={3} maxLength={30} value={username} onChange={(event) => setUsername(event.target.value.toLowerCase().replace(/[^a-z0-9._-]/g, "").slice(0, 30))} /><small>@{username}</small>{user.usernameIsTemporary && <small className="form-error">{t("profile.usernameTemporary")}</small>}</label>}
                  <div className="form-row profile-identity-row"><CityAutocomplete value={profile.city} required invalid={invalidFields.city} onChange={(city, cityId, country) => { setProfile({ ...profile, city, cityId, country }); setInvalidFields((current) => ({ ...current, city: false })); }} />{!["Издатель", "Сообщество"].includes(profile.type) && <label className={invalidFields.birthDate ? "field-invalid" : ""}>{t("profile.birthDate")} *<input required aria-invalid={invalidFields.birthDate} type="date" max={new Date().toISOString().slice(0, 10)} value={profile.birthDate ?? ""} onChange={(event) => { setProfile({ ...profile, birthDate: event.target.value }); setInvalidFields((current) => ({ ...current, birthDate: false })); }} /></label>}</div>
-                 {!["Издатель", "Сообщество"].includes(profile.type) && <div className="form-row profile-demographics-row"><label>{t("profile.gender")}<CustomSelect ariaLabel={t("profile.gender")} value={profile.gender} onChange={(gender) => setProfile({ ...profile, gender })} options={["Не указан", "Мужской", "Женский"].map((item) => ({ value: item as UserProfileData["gender"], label: domainLabel(item) }))} /></label><label className="profile-checkbox profile-birth-visibility"><input type="checkbox" checked={Boolean(profile.showBirthDateToFriends)} onChange={(event) => setProfile({ ...profile, showBirthDateToFriends: event.target.checked })} />{t("profile.showBirthDate")}</label></div>}
+                 {!["Издатель", "Сообщество"].includes(profile.type) && <div className="form-row profile-demographics-row"><label>{t("profile.gender")}<CustomSelect ariaLabel={t("profile.gender")} value={profile.gender} onChange={(gender) => setProfile({ ...profile, gender })} options={["Не указан", "Мужской", "Женский"].map((item) => ({ value: item as UserProfileData["gender"], label: domainLabel(item) }))} /></label></div>}
                 </>}
                 {profile.type === "Издатель" ? <>
                   <label>{t("profile.publisherWebsite")} *<input required type="url" value={profile.publisherWebsite ?? ""} onChange={(event) => setProfile({ ...profile, publisherWebsite: event.target.value })} /></label>
@@ -728,11 +801,6 @@ export function MyProfile({ onBack, user, users, catalog, friends, friendRequest
                   <label>{t("admin.postalAddress")} *<textarea required rows={3} value={profile.publisherPostalAddress ?? ""} onChange={(event) => setProfile({ ...profile, publisherPostalAddress: event.target.value })} /></label>
                 </> : profile.type === "Сообщество" ? null : <>
                 <label>{t("profile.aboutMe")}<textarea rows={4} value={profile.bio} onChange={(event) => setProfile({ ...profile, bio: event.target.value })} /></label>
-                {profile.type === "Писатель" && <div className="form-row"><label>{t("profile.authorInfluences")}<textarea rows={4} value={profile.authorInfluences} onChange={(event) => setProfile({ ...profile, authorInfluences: event.target.value })} /></label><label>{t("profile.writingThemes")}<textarea rows={4} value={profile.writingThemes} onChange={(event) => setProfile({ ...profile, writingThemes: event.target.value })} /></label></div>}
-                <label>{t("profile.weekend")}<textarea rows={3} value={profile.weekend} onChange={(event) => setProfile({ ...profile, weekend: event.target.value })} /></label>
-                <label>{t("profile.joy")}<textarea rows={3} value={profile.joy} onChange={(event) => setProfile({ ...profile, joy: event.target.value })} /></label>
-                <label>{t("profile.talk")}<textarea rows={3} value={profile.talk} onChange={(event) => setProfile({ ...profile, talk: event.target.value })} /></label>
-                <label>{t("profile.strangerMessage")}<textarea rows={4} value={profile.strangerMessage} onChange={(event) => setProfile({ ...profile, strangerMessage: event.target.value })} /></label>
                 <GenrePicker label={t("profile.favoriteGenres")} value={profile.favoriteGenres} onChange={(favoriteGenres) => setProfile({ ...profile, favoriteGenres })} />
                 <GenrePicker label={t("profile.dislikedGenres")} value={profile.dislikedGenres} onChange={(dislikedGenres) => setProfile({ ...profile, dislikedGenres })} />
                 </>}
@@ -752,19 +820,16 @@ export function MyProfile({ onBack, user, users, catalog, friends, friendRequest
                   <div><span>{t("profile.bookSales")}</span><div className="writer-book-links" data-i18n-skip>{(profile.publisherSalesLinks ?? []).map((link) => <a className="outline-button" key={link.id} href={link.url} target="_blank" rel="noreferrer">{link.label}</a>)}</div></div>
                   <div className="publisher-private-details profile-wide-field"><span>{t("profile.privateLegalTitle")}</span><p data-i18n-skip><b>{profile.publisherLegalName}</b><br />{t("admin.bin")}: {profile.publisherBin}<br />{t("admin.account")}: {profile.publisherAccount}<br />{t("admin.bik")}: {profile.publisherBik} · {profile.publisherBank}<br />{t("admin.legalAddress")}: {profile.publisherLegalAddress}<br />{t("admin.postalAddress")}: {profile.publisherPostalAddress}</p></div>
                 </> : <>
-                <div><span>{t("profile.age")}</span><p>{profile.age !== undefined ? formatNumber(profile.age) : t("profile.ageCalculated")}</p></div>
+                {profile.birthDate && <div><span>{t("profile.birthDate")}</span><p data-i18n-skip>{profile.birthDate}</p></div>}
+                <div><span>{t("profile.gender")}</span><p>{domainLabel(profile.gender)}</p></div>
                 <div><span>{t("profile.aboutMe")}</span><p data-i18n-skip>{profile.bio}</p></div>
-                {profile.type === "Писатель" && <><div><span>{t("profile.authorInfluences")}</span><p data-i18n-skip>{profile.authorInfluences}</p></div><div><span>{t("profile.writingThemes")}</span><p data-i18n-skip>{profile.writingThemes}</p></div></>}
-                <div><span>{t("profile.weekend")}</span><p data-i18n-skip>{profile.weekend}</p></div>
-                <div><span>{t("profile.joy")}</span><p data-i18n-skip>{profile.joy}</p></div>
-                <div><span>{t("profile.talk")}</span><p data-i18n-skip>{profile.talk}</p></div>
-                <div className="stranger-message"><span>{t("profile.strangerMessage")}</span><p data-i18n-skip>{profile.strangerMessage}</p></div>
                 <div><span>{t("profile.favoriteGenres")}</span><div className="profile-tags" data-i18n-skip>{profile.favoriteGenres.map((genre) => <span key={genre}>{genre}</span>)}</div></div>
                 <div><span>{t("profile.dislikedGenres")}</span><div className="profile-tags disliked-tags" data-i18n-skip>{profile.dislikedGenres.map((genre) => <span key={genre}>{genre}</span>)}</div></div>
                 {profile.type === "Писатель" && <div><span>{t("authorBooks.mine")}</span><p data-i18n-skip={Boolean(authorBooks.length)}>{authorBooks.length ? authorBooks.map((book) => book.title).join(" · ") : t("authorBooks.empty")}</p></div>}
                 </>}
               </div>
             )}
+            {!editing && !["Издатель", "Сообщество"].includes(profile.type) && <ProfileMaterialStream profileUser={{ ...user, profile, reviews, excerpts: userExcerpts }} viewer={user} users={users} events={events} occasions={occasions} likes={likes} saves={saves} commentCounts={commentCounts} saveCounts={saveCounts} onToggleLike={onToggleLike} onToggleSave={onToggleSave} onComment={onComment} onOpenUser={onOpenUser} />}
           </>}
           {activeTab === "author-books" && (profile.type === "Писатель" || ["Издатель", "Сообщество"].includes(profile.type)) && <AuthorBooksTab books={authorBooks} setBooks={setAuthorBooks} userId={user.id} author={profile.name} users={users} publisherMode={["Издатель", "Сообщество"].includes(profile.type)} communityMode={profile.type === "Сообщество"} canCreate={profile.type === "Писатель" || profile.publisherStatus === "approved"} />}
           {activeTab === "excerpts" && (profile.type === "Писатель" || profile.type === "Блогер") && <ExcerptsTab excerpts={userExcerpts} setExcerpts={setUserExcerpts} owner={{ ...user, profile, excerpts: userExcerpts }} users={users} catalog={catalog} likes={likes} onToggleLike={onToggleLike} onComment={onComment} onOpenUser={onOpenUser} initialAdd={initialAction === "excerpt" && !initialEditId} initialEditId={initialAction === "excerpt" ? initialEditId : null} />}
@@ -778,7 +843,8 @@ export function MyProfile({ onBack, user, users, catalog, friends, friendRequest
           {activeTab === "settings" && <div className="simple-profile-tab profile-settings-stack"><div className="profile-title-row"><div><h1>{t("profile.settings")}</h1><p>{t("settings.manageProfile")}</p></div></div><section className="profile-home-view-settings"><h2>{t("settings.defaultHome")}</h2><div className="profile-home-view-options"><button className={homeView === "classic" ? "active" : ""} type="button" onClick={() => void chooseHomeView("classic")}>{t("settings.classicHome")}</button><button className={homeView === "feed" ? "active" : ""} type="button" onClick={() => void chooseHomeView("feed")}>{t("content.feed")}</button></div></section><section className="profile-menu-visibility-settings"><h2>{t("settings.showMenu")}</h2><div className="profile-menu-visibility-list">{profileTabs.filter((item) => item.key !== "main").map((item) => <label key={item.key}><input type="checkbox" checked={!hiddenTabsDraft.includes(item.key)} onChange={(event) => void toggleProfileTabVisibility(item.key, event.target.checked)} />{item.label.split(" · ")[0]}</label>)}</div></section><section className="profile-menu-order-settings"><h2>{t("settings.changeOrder")}</h2><div className="profile-menu-order-actions"><button className="outline-button" type="button" onClick={() => { setTabOrderDraft(profile.tabOrder ?? defaultTabOrder); setReorderingTabs(true); }}>{t("common.edit")}</button>{reorderingTabs && <button className="primary-button" type="button" onClick={() => void applyTabOrder()}>{t("settings.apply")}</button>}</div></section><LinkedProfileControls profileType={profile.type} settings /><section className="blocked-users-settings"><h2>{t("profile.blocked")}</h2>{users.some((item) => item.blockedByMe) ? <div className="blocked-user-grid">{users.filter((item) => item.blockedByMe).map((item) => <button type="button" key={item.id} className="blocked-user-card" onClick={() => onOpenUser(item.id)}><span className={`avatar avatar-sm avatar-${item.color} ${item.avatarUrl ? "has-photo" : ""}`} style={item.avatarUrl ? { backgroundImage: `url(${item.avatarUrl})` } : undefined}>{!item.avatarUrl && item.initials}</span><span><strong data-i18n-skip>{item.profile.name}</strong><small>{domainLabel(item.profile.type)} · <span data-i18n-skip>{item.profile.city}</span></small></span></button>)}</div> : <p>{t("settings.noBlocked")}</p>}</section><section className="profile-delete-settings"><h2>{t("profile.delete")}</h2><p>{t("settings.deleteHint")}</p><button className="quiet-danger-button" type="button" onClick={() => setDeleteProfileConfirm(true)}>{t("profile.delete")}</button></section></div>}
         </div>
       </section>
-      {activeTab === "settings" && <UserComplaints />}
+      {activeTab === "settings" && <><section className="simple-profile-tab profile-privacy-settings"><h2>{t("settings.privacy")}</h2>{!["Издатель", "Сообщество"].includes(profile.type) && <label className="profile-checkbox"><input type="checkbox" checked={Boolean(profile.showBirthDateToFriends)} onChange={(event) => void savePrivacyPatch({ showBirthDateToFriends: event.target.checked, communityIsClosed: profile.communityIsClosed })} />{t("profile.showBirthDate")}</label>}{profile.type === "Сообщество" && <label className="profile-checkbox"><input type="checkbox" checked={Boolean(profile.communityIsClosed)} onChange={(event) => void savePrivacyPatch({ showBirthDateToFriends: profile.showBirthDateToFriends, communityIsClosed: event.target.checked })} />{t("settings.closedCommunity")}<small>{t("settings.closedCommunityHint")}</small></label>}</section><UserComplaints /></>}
+      {socialMode && <ProfileSocialDialog initialMode={socialMode} friends={friends} incoming={incomingFriendUsers} outgoing={outgoingFriendUsers} followers={visibleFollowers} subscriptions={visibleSubscriptions} communities={joinedCommunities} pendingCommunities={pendingCommunities} onClose={() => setSocialMode(null)} onOpenUser={(id) => { setSocialMode(null); onOpenUser(id); }} onAccept={onAcceptFriend} onReject={onRejectFriend} onCancel={onCancelFriendRequest} onRemove={onRemoveFriend} />}
       {deleteProfileConfirm && <div className="notice-backdrop" role="presentation" onMouseDown={() => setDeleteProfileConfirm(false)}><section className="confirm-social-modal" role="alertdialog" aria-modal="true" onMouseDown={(event) => event.stopPropagation()}><h2>{t("settings.deleteConfirm")}</h2><p>{t("settings.deleteRestore")}</p><div className="form-actions"><button type="button" onClick={() => setDeleteProfileConfirm(false)}>{t("common.cancel")}</button><button className="quiet-danger-button" type="button" onClick={() => void deleteProfile()}>{t("common.delete")}</button></div></section></div>}
       {requiredNotice && <div className="notice-backdrop" role="presentation" onMouseDown={() => setRequiredNotice(false)}><section className="required-fields-notice" role="alertdialog" aria-modal="true" aria-labelledby="required-fields-title" onMouseDown={(event) => event.stopPropagation()}><h2 id="required-fields-title">{t("form.requiredFields")}</h2><button className="primary-button" type="button" autoFocus onClick={() => setRequiredNotice(false)}>{t("common.ok")}</button></section></div>}
       {publisherTypeNotice && <div className="notice-backdrop" role="presentation"><section className="publisher-type-notice" role="alertdialog" aria-modal="true" onMouseDown={(event) => event.stopPropagation()}><h2>{t("profile.organizationVerification")}</h2><p>{pendingOrganizationType === "Сообщество" ? t("profile.communityVerificationHint") : t("profile.publisherVerificationHint")}</p><div className="form-actions"><button type="button" onClick={() => setPublisherTypeNotice(false)}>{t("common.cancel")}</button><button className="primary-button" type="button" onClick={() => { setProfile({ ...profile, type: pendingOrganizationType, city: "", cityId: undefined, gender: "Не указан", publisherStatus: "draft", publisherSalesLinks: profile.publisherSalesLinks ?? [] }); setPublisherTypeNotice(false); }}>{t("book.continue")}</button></div></section></div>}

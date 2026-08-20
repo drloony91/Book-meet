@@ -26,7 +26,7 @@ function readingItem(item: PublicCatalogMaterial): ReadingItem {
 }
 
 function bookEvent(item: PublicCatalogEvent): BookEvent {
-  return { id: item.id, creatorId: 0, title: item.title, summary: item.summary, description: item.summary, date: item.date, time: item.time, city: item.city, address: item.address, mapUrl: "", detailsUrl: "", status: "published", createdAt: item.createdAt ?? `${item.date}T${item.time || "00:00"}:00` };
+  return { id: item.id, creatorId: 0, creatorName: "Book Meet", title: item.title, summary: item.summary, description: item.summary, date: item.date, time: item.time, city: item.city, address: item.address, mapUrl: "", detailsUrl: "", status: "published", createdAt: item.createdAt ?? `${item.date}T${item.time || "00:00"}:00` };
 }
 
 function occasion(item: PublicCatalogOccasion): Occasion {

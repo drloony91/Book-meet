@@ -43,7 +43,7 @@ export async function loadUsers(connection = getPool(), viewerId = null) {
     [viewerId, viewerId],
   ) : [[]];
   const [userRows] = await connection.query(
-    `SELECT u.id, u.username, u.initials, u.color, u.avatar_path, u.role, u.created_at, u.last_seen_at,
+    `SELECT u.id, u.username, u.username_is_temporary, u.initials, u.color, u.avatar_path, u.role, u.created_at, u.last_seen_at,
             u.deleted_at, u.deletion_expires_at, u.purged_at,
             u.suspension_reason, u.suspended_until, u.suspended_permanently,
             p.display_name, p.city, p.city_id, c.country_name, p.profile_type, p.gender, p.birth_date, p.show_birth_date_to_friends, p.profile_tab_order, p.hidden_profile_tabs, p.home_view,
@@ -51,7 +51,7 @@ export async function loadUsers(connection = getPool(), viewerId = null) {
             p.stranger_message, p.favorite_genres, p.disliked_genres,
             p.publisher_status, p.publisher_website, p.publisher_sales_links, p.publisher_legal_name,
             p.publisher_bin, p.publisher_account, p.publisher_bik, p.publisher_bank,
-            p.publisher_legal_address, p.publisher_postal_address, p.publisher_moderation_note, p.community_type, p.community_rules
+            p.publisher_legal_address, p.publisher_postal_address, p.publisher_moderation_note, p.community_type, p.community_rules, p.community_is_closed
        FROM users u
        JOIN profiles p ON p.user_id = u.id
        LEFT JOIN cities c ON c.id = p.city_id
@@ -170,6 +170,7 @@ export async function loadUsers(connection = getPool(), viewerId = null) {
     return {
       id: Number(row.id),
       username: deletedView ? "deleted-user" : row.username,
+      usernameIsTemporary: !deletedView && Boolean(row.username_is_temporary),
       initials: deletedView ? "—" : row.initials,
       color: row.color,
       avatarUrl: row.deleted_at || row.purged_at ? undefined : row.avatar_path ?? undefined,
@@ -223,6 +224,7 @@ export async function loadUsers(connection = getPool(), viewerId = null) {
         publisherModerationNote: viewerIsAdmin && !deletedView ? row.publisher_moderation_note ?? "" : "",
         communityType: deletedView ? "" : row.community_type ?? "",
         communityRules: deletedView ? "" : row.community_rules ?? "",
+        communityIsClosed: !deletedView && row.profile_type === "Сообщество" ? Boolean(row.community_is_closed) : false,
       },
       books: library,
       authorBooks,
@@ -360,17 +362,23 @@ export async function loadBootstrap(userId, options = {}) {
       WHERE sender_user_id = ? OR recipient_user_id = ?
       ORDER BY created_at`, [userId, userId],
   ) : [[]];
-  const [likeRows] = includeSocial ? await pool.query("SELECT user_id, material_kind, material_id FROM material_likes") : [[]];
+  const [likeRows] = includeSocial ? await pool.query("SELECT user_id, material_kind, material_id, created_at FROM material_likes") : [[]];
+  // Saves are deliberately private: the viewer gets only their own action history.
+  const [saveRows] = includeSocial ? await pool.query(
+    "SELECT material_kind, material_id, created_at FROM material_saves WHERE user_id = ? ORDER BY created_at DESC, material_kind, material_id",
+    [userId],
+  ) : [[]];
   const [eventRows] = includeCatalog ? await pool.query(
     `SELECT e.id, e.creator_user_id, e.title, e.summary, e.description, e.event_date, e.event_time,
             e.city, e.city_id, ec.country_name AS city_country, e.address, e.map_url, e.details_url, e.book_id, e.is_pinned, e.is_adult,
-            e.status, e.moderation_note, e.created_at,
+            e.status, e.moderation_note, e.created_at, p.display_name AS creator_name,
             b.title AS book_title, b.author AS book_author, b.annotation AS book_annotation,
             b.cover_path AS book_cover_path, b.cover_tone AS book_cover_tone,
             er.user_id AS reminder_user_id,
             reminder_users.user_ids AS reminder_user_ids,
             reminder_users.reminder_count
        FROM events e
+       JOIN profiles p ON p.user_id = e.creator_user_id
        LEFT JOIN cities ec ON ec.id = e.city_id
        LEFT JOIN books b ON b.id = e.book_id
        LEFT JOIN event_reminders er ON er.event_id = e.id AND er.user_id = ?
@@ -484,6 +492,17 @@ export async function loadBootstrap(userId, options = {}) {
     likes[key] ??= [];
     likes[key].push(Number(row.user_id));
   }
+  const saves = {};
+  const savedMaterialRefs = [];
+  for (const row of saveRows) {
+    const key = `${row.material_kind}-${row.material_id}`;
+    saves[key] = [Number(userId)];
+    savedMaterialRefs.push({ kind: row.material_kind, id: Number(row.material_id), createdAt: new Date(row.created_at).toISOString() });
+  }
+  const likedMaterialRefs = likeRows
+    .filter((row) => Number(row.user_id) === Number(userId))
+    .sort((left, right) => new Date(right.created_at) - new Date(left.created_at))
+    .map((row) => ({ kind: row.material_kind, id: Number(row.material_id), createdAt: new Date(row.created_at).toISOString() }));
   const visibleWishlistOwnerIds = new Set([Number(userId)]);
   for (const row of friendshipRows) {
     visibleWishlistOwnerIds.add(Number(row.user_low_id) === Number(userId) ? Number(row.user_high_id) : Number(row.user_low_id));
@@ -569,8 +588,11 @@ export async function loadBootstrap(userId, options = {}) {
     notifications: notificationRows.filter((row) => currentUser?.isAdmin || !hiddenUserIds.has(Number(row.actor_user_id))).map((row) => ({ id: Number(row.id), userId: Number(row.user_id), actorId: Number(row.actor_user_id ?? row.user_id), type: row.notification_type, title: row.title, text: row.body, unread: Boolean(row.is_unread), createdAt: formatDate(row.created_at), materialId: row.material_id ? Number(row.material_id) : undefined, materialKind: row.material_kind ?? undefined })),
     messages,
     likes,
+    saves,
+    likedMaterialRefs,
+    savedMaterialRefs,
     events: eventRows.filter((row) => (currentUser?.isAdmin || !hiddenUserIds.has(Number(row.creator_user_id))) && (currentUser?.isAdmin || !row.is_adult || Number(currentUser?.profile.age ?? -1) >= 18)).map((row) => ({
-      id: Number(row.id), creatorId: Number(row.creator_user_id), title: row.title,
+      id: Number(row.id), creatorId: Number(row.creator_user_id), creatorName: row.creator_name, title: row.title,
       summary: row.summary, description: row.description, date: sqlDate(row.event_date),
       isAdult: Boolean(row.is_adult),
       time: String(row.event_time).slice(0, 5), city: row.city, country: row.city_country ?? undefined,

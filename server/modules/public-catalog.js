@@ -85,7 +85,7 @@ export async function loadPublicCatalog(pool = getPool(), { now = new Date() } =
       ORDER BY o.created_at DESC, o.id DESC LIMIT 100`,
   );
   const [organizationRows] = await pool.query(
-    `SELECT u.id, u.initials, u.color, u.avatar_path, p.display_name, p.city, p.profile_type, p.bio, p.community_type
+    `SELECT u.id, u.initials, u.color, u.avatar_path, p.display_name, p.city, p.profile_type, p.bio, p.community_type, p.community_is_closed
        FROM users u JOIN profiles p ON p.user_id = u.id
       WHERE p.profile_type IN ('Издатель', 'Сообщество') AND p.publisher_status = 'approved'
         AND u.deleted_at IS NULL AND u.purged_at IS NULL
@@ -96,6 +96,6 @@ export async function loadPublicCatalog(pool = getPool(), { now = new Date() } =
     materials: [...reviewRows, ...excerptRows, ...newsRows].sort((a, b) => new Date(b.created_at) - new Date(a.created_at)).slice(0, 150).map((row) => ({ id: Number(row.id), kind: row.kind, title: row.title, preview: row.preview ?? "", ownerName: row.owner_name, owner: { id: Number(row.owner_id), name: row.owner_name, initials: row.owner_initials ?? "", color: row.owner_color ?? "blue", avatarUrl: row.owner_avatar_path ?? undefined }, createdAt: iso(row.created_at) })),
     events: eventRows.filter((row) => isPublicUpcomingEvent(row, now)).map((row) => ({ id: Number(row.id), title: row.title, summary: row.summary ?? "", date: sqlDate(row.event_date), time: String(row.event_time).slice(0, 5), city: row.city, address: row.address ?? "", createdAt: iso(row.created_at) })),
     occasions: occasionRows.filter(isPublicOccasion).map((row) => ({ id: Number(row.id), type: row.occasion_type, primaryText: row.primary_text, audienceText: row.audience_text, targetCities: parseJson(row.target_cities), meetingDate: sqlDate(row.meeting_date) || undefined, meetingStartTime: row.meeting_start_time ? String(row.meeting_start_time).slice(0, 5) : undefined, meetingEndTime: row.meeting_end_time ? String(row.meeting_end_time).slice(0, 5) : undefined, meetingCity: row.meeting_city ?? undefined, meetingAddress: row.meeting_address ?? undefined, createdAt: iso(row.created_at) })),
-    organizations: organizationRows.map((row) => ({ id: Number(row.id), name: row.display_name, city: row.city ?? "", type: row.profile_type, bio: row.bio ?? "", communityType: row.community_type ?? undefined, initials: row.initials, color: row.color, avatarUrl: row.avatar_path ?? undefined })),
+    organizations: organizationRows.map((row) => ({ id: Number(row.id), name: row.display_name, city: row.city ?? "", type: row.profile_type, bio: row.bio ?? "", communityType: row.community_type ?? undefined, communityIsClosed: row.profile_type === "Сообщество" ? Boolean(row.community_is_closed) : false, initials: row.initials, color: row.color, avatarUrl: row.avatar_path ?? undefined })),
   };
 }

@@ -93,7 +93,7 @@ test("linked community profiles have a strict one-to-one, session-safe contract"
   assert.match(api, /const legalDocuments = legalConsentRequired\(\) \? await activeLegalDocuments/);
   assert.match(api, /recordLegalAcceptances\(connection, communityId, legalDocuments\)/);
   assert.match(data, /linkedProfile: linkedProfileRow/);
-  assert.match(demo, /const \{ linkedProfiles: _linkedProfiles, \.\.\.publicState \} = state/);
+  assert.match(demo, /const \{ linkedProfiles: _linkedProfiles, saves: saveEntries, \.\.\.publicState \} = state/);
   assert.match(demo, /router\.post\("\/linked-profiles\/switch"/);
   assertLocalized(profile, "linked.attachCommunity");
   assertLocalized(profile, "linked.title");
@@ -368,7 +368,7 @@ test("Google-вход переживает холодный запуск и вр
   assertLocalized(page, "auth.googleSlow");
 });
 
-test("главная страница поддерживает ленту, классический вид и единое меню создания", async () => {
+test("главная страница использует единую ленту и единое меню создания", async () => {
   const page = await readFrontendSource();
   const api = await readFile(path.join(root, "server", "api.js"), "utf8");
   const css = await readFile(path.join(root, "app", "globals.css"), "utf8");
@@ -376,9 +376,9 @@ test("главная страница поддерживает ленту, кл�
   assert.match(page, /eventTimestamp\(item\) > eventClock/);
   assert.match(page, /profile\.homeView \?\? "feed"/);
   assert.match(page, /ContentHubControls/);
-  assert.match(page, /showSwitch=\{\(currentUser\.profile\.homeView \?\? "feed"\) === "feed"\}/);
+  assert.match(page, /showSwitch=\{false\}/);
   assert.match(api, /router\.patch\("\/users\/me\/home-view"/);
-  assert.match(page, /home-mode-\$\{homeMode\}/);
+  assert.match(page, /const homeMode = "feed"/);
   assert.doesNotMatch(page, /className="secondary-action-button"[^\n]*Смотреть всё/);
   assert.match(page, /HomeScopeSwitch city=\{currentCity\}/);
   assert.match(css, /\.home-content > \.content-section \+ \.content-section/);
@@ -418,7 +418,7 @@ test("профили и единые карточки материалов им�
   assert.match(page, /useRoutedPopup\(`\/books\/\$\{book\.id\}`/);
 });
 
-test("диалоги маршрутизируются, а выбор из блока друзей открывает компактный поп-ап", async () => {
+test("диалоги маршрутизируются, а чат открывается отдельной страницей", async () => {
   const page = await readFrontendSource();
   const routes = await readFile(path.join(root, "app", "navigation", "routes.ts"), "utf8");
   const chat = await readFile(path.join(root, "app", "components", "chat", "ChatComponents.tsx"), "utf8");
@@ -429,8 +429,9 @@ test("диалоги маршрутизируются, а выбор из бло
   assert.match(page, /closest\("\.chat-popup, \.friends-panel"\)/);
   assert.match(page, /window\.history\[isSwitchingChat \? "replaceState" : "pushState"\]/);
   assert.match(page, /chatMode: nextExpanded \? "expanded" : "compact"/);
-  assert.match(page, /view === "chat" \? <ChatScreen \/>/);
-  assert.match(chat, /expanded \? "chat-expanded" : "chat-compact"/);
+  assert.match(page, /const chatPage = selectedFriend \? <ChatView/);
+  assert.match(page, /fullPage \/>/);
+  assert.match(chat, /fullPage \? "chat-full-page" : ""/);
 });
 
 test("профили сообществ, видимость меню и издательские разрешения имеют сквозной контракт", async () => {
@@ -656,7 +657,7 @@ test("communities, membership chats and responsive conversation panels share pro
   assert.match(api, /creator_user_id AS owner_id, title FROM events/);
   assert.match(api, /creator_user_id AS owner_id, primary_text AS title FROM occasions/);
   assert.match(api, /publisher_news n JOIN profiles p/);
-  assertLocalized(profile, "profile.communityMembers");
+  assertLocalized(profile, "communities.memberOf");
   assertLocalized(content, "profile.joinCommunity");
   assert.match(content, /profileFriends/);
   assert.match(directory, /export function CommunitiesDirectoryPage/);

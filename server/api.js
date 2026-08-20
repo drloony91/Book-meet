@@ -19,14 +19,16 @@ import { authText, requestLocale } from "./modules/i18n.js";
 import { enqueueTelegramAlert, shouldEnqueueSupportAlert } from "./modules/telegram-outbox.js";
 import { loadPublicCatalog } from "./modules/public-catalog.js";
 import { nextTopRank, top3Eligibility } from "./modules/top3.js";
+import { LoginAttemptTracker } from "./modules/login-attempts.js";
+import { normalizeUsername, usernameStem, usernameValidationError } from "./modules/username.js";
 import { LEGAL_DOCUMENT_TYPES, REQUIRED_LEGAL_DOCUMENT_TYPES, REPORT_STATUSES, REPORT_TARGET_KINDS, activeLegalDocuments, assertAgeCompatible, assertLegalDocumentDeletable, legalAccessState, legalConsentRequired, legalDocumentWriteMode, logModerationAction, logSecurityEvent, profileAccessState, recordLegalAcceptances, removeCrossAgeRelationships, requestAuditMetadata, validateLegalAcceptance } from "./modules/compliance.js";
 import { clearSessionCookie, clearTransientCookie, createSessionToken, generateRecoveryCodes, generateTotpSecret, hashPassword, hashRecoveryCode, hashSessionToken, isValidEmail, normalizeEmail, normalizeIdentity, readCookie, recoveryCodeIndex, sessionCookie, transientCookie, verifyPassword, verifyTotp } from "./security.js";
 
 const router = Router();
 const projectRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
-const loginAttempts = new Map();
 const LOGIN_WINDOW_MS = 15 * 60 * 1000;
 const LOGIN_ATTEMPT_LIMIT = 10;
+const loginAttempts = new LoginAttemptTracker({ limit: LOGIN_ATTEMPT_LIMIT, windowMs: LOGIN_WINDOW_MS });
 const passwordRecoveryAttempts = new Map();
 const PASSWORD_RECOVERY_WINDOW_MS = 15 * 60 * 1000;
 const PASSWORD_RECOVERY_LIMIT = 5;
@@ -71,6 +73,7 @@ async function purgeDeletedProfile(connection, userId) {
   await connection.query("DELETE FROM wishlist_items WHERE user_id = ?", [userId]);
   await connection.query("DELETE FROM user_books WHERE user_id = ? AND is_author = 0", [userId]);
   await connection.query("DELETE FROM material_likes WHERE user_id = ?", [userId]);
+  await connection.query("DELETE FROM material_saves WHERE user_id = ?", [userId]);
   await connection.query("DELETE FROM notifications WHERE user_id = ? OR actor_user_id = ?", [userId, userId]);
   await connection.query("DELETE FROM linked_profiles WHERE personal_user_id = ? OR community_user_id = ?", [userId, userId]);
   await connection.query("UPDATE reports SET reporter_user_id = NULL, reporter_anonymized = 1 WHERE reporter_user_id = ?", [userId]);
@@ -198,19 +201,7 @@ function asyncRoute(handler) {
 
 function loginAttemptState(request, email) {
   const client = request.ip || request.socket.remoteAddress || "unknown";
-  const now = Date.now();
-  const keys = [`ip:${client}`, `identity:${normalizeEmail(email)}`];
-  const buckets = keys.map((key) => {
-    const current = loginAttempts.get(key);
-    const bucket = !current || current.resetAt <= now ? { count: 0, resetAt: now + LOGIN_WINDOW_MS } : current;
-    loginAttempts.set(key, bucket);
-    return { key, bucket };
-  });
-  return {
-    blocked: buckets.some(({ bucket }) => bucket.count >= LOGIN_ATTEMPT_LIMIT),
-    fail: () => { for (const { bucket } of buckets) bucket.count += 1; },
-    clear: () => { for (const { key } of buckets) loginAttempts.delete(key); },
-  };
+  return loginAttempts.state([`ip:${client}`, `identity:${normalizeEmail(email)}`]);
 }
 
 async function createSession(connection, userId, request = null) {
@@ -464,13 +455,13 @@ function safeProfileName(value, fallback) {
 }
 
 async function uniqueInternalUsername(connection, baseValue) {
-  const cleaned = String(baseValue || "reader").replace(/[^a-zA-Zа-яА-ЯёЁ0-9._-]/g, "").slice(0, 50) || "reader";
+  const cleaned = usernameStem(baseValue);
   for (let suffix = 0; suffix < 1000; suffix += 1) {
-    const candidate = suffix ? `${cleaned}-${suffix}` : cleaned;
-    const [[existing]] = await connection.query("SELECT id FROM users WHERE username_key = ? LIMIT 1", [normalizeIdentity(candidate)]);
+    const candidate = suffix ? `${cleaned.slice(0, 30 - String(suffix).length - 1)}-${suffix}` : cleaned;
+    const [[existing]] = await connection.query("SELECT id FROM users WHERE username_key = ? LIMIT 1", [candidate]);
     if (!existing) return candidate;
   }
-  return `reader-${Date.now()}`;
+  return `reader-${Date.now().toString().slice(-12)}`;
 }
 
 async function findOrCreateGoogleUser(identity, { legalAcceptance = null, locale = "ru" } = {}) {
@@ -495,9 +486,9 @@ async function findOrCreateGoogleUser(identity, { legalAcceptance = null, locale
     const colors = ["navy", "blue", "green", "red", "gold"];
     const passwordHash = await hashPassword(randomBytes(32).toString("base64url"));
     const [created] = await connection.query(
-      `INSERT INTO users (username, username_key, email, email_key, email_verified_at, password_hash, password_login_enabled, ${subjectColumn}, initials, color, role, profile_completed)
-       VALUES (?, ?, ?, ?, UTC_TIMESTAMP(), ?, 0, ?, ?, ?, 'user', 0)`,
-      [username, normalizeIdentity(username), identity.email || null, identity.email ? normalizeEmail(identity.email) : null, passwordHash, identity.subject, initials, colors[Date.now() % colors.length]],
+      `INSERT INTO users (username, username_key, username_is_temporary, email, email_key, email_verified_at, password_hash, password_login_enabled, ${subjectColumn}, initials, color, role, profile_completed)
+       VALUES (?, ?, 1, ?, ?, UTC_TIMESTAMP(), ?, 0, ?, ?, ?, 'user', 0)`,
+      [username, username, identity.email || null, identity.email ? normalizeEmail(identity.email) : null, passwordHash, identity.subject, initials, colors[Date.now() % colors.length]],
     );
     const userId = Number(created.insertId);
     await connection.query(
@@ -1020,9 +1011,13 @@ router.get("/auth/legal-documents", asyncRoute(async (request, response) => {
 }));
 
 router.post("/auth/login", asyncRoute(async (request, response) => {
+  const locale = requestLocale(request);
   const email = normalizeEmail(request.body?.email);
   const attempt = loginAttemptState(request, email);
-  if (attempt.blocked) return response.status(429).json({ error: "Слишком много попыток входа. Попробуйте позже" });
+  if (attempt.blocked) {
+    response.setHeader("Retry-After", String(attempt.retryAfterSeconds));
+    return response.status(429).json({ code: "AUTH_TOO_MANY_ATTEMPTS", error: authText(locale, "tooManyAttempts") });
+  }
   const password = String(request.body?.password ?? "");
   const totp = String(request.body?.totp ?? "");
   if (!isValidEmail(email) || !password) return response.status(400).json({ error: "Введите e-mail и пароль" });
@@ -1051,7 +1046,7 @@ router.post("/auth/login", asyncRoute(async (request, response) => {
       reason: account.suspension_reason ?? "",
     });
   }
-  attempt.clear();
+  attempt.clearIdentity();
   if (account.deleted_at && !account.purged_at) {
     if (!account.deletion_expires_at || new Date(account.deletion_expires_at).getTime() <= Date.now()) {
       await withTransaction((connection) => purgeDeletedProfile(connection, account.id));
@@ -1175,19 +1170,24 @@ router.post("/auth/register", asyncRoute(async (request, response) => {
   const locale = requestLocale(request);
   const email = normalizeEmail(request.body?.email);
   const password = String(request.body?.password ?? "");
+  const username = normalizeUsername(request.body?.username);
   if (!isValidEmail(email) || password.length < 8) return response.status(400).json({ code: "AUTH_INVALID_CREDENTIALS", error: authText(locale, "invalidCredentials") });
+  const usernameError = usernameValidationError(username);
+  if (usernameError) return response.status(400).json({
+    code: usernameError,
+    error: authText(locale, usernameError === "USERNAME_RESERVED" ? "usernameReserved" : "usernameInvalid"),
+  });
   const verificationToken = createOpaqueActionToken();
   const result = await withTransaction(async (connection) => {
     const legalDocuments = await validateLegalAcceptance(connection, request.body?.legalAcceptance, locale);
     const [[duplicate]] = await connection.query("SELECT id FROM users WHERE email_key = ?", [email]);
     if (duplicate) throw Object.assign(new Error("Профиль с таким e-mail уже существует"), { statusCode: 409 });
-    const username = await uniqueInternalUsername(connection, email.split("@")[0]);
     const displayName = email.split("@")[0].slice(0, 120);
     const initials = displayName.split(/\s+/).slice(0, 2).map((part) => part[0]).join("").toLocaleUpperCase("ru-RU").slice(0, 4) || "BM";
     const colors = ["navy", "blue", "green", "red", "gold"];
     const [created] = await connection.query(
-      "INSERT INTO users (username, username_key, email, email_key, email_verified_at, password_hash, password_login_enabled, initials, color, role, profile_completed, preferred_locale) VALUES (?, ?, ?, ?, NULL, ?, 1, ?, ?, 'user', 0, ?)",
-      [username, normalizeIdentity(username), email, email, await hashPassword(password), initials, colors[Number(Date.now()) % colors.length], locale],
+      "INSERT INTO users (username, username_key, username_is_temporary, email, email_key, email_verified_at, password_hash, password_login_enabled, initials, color, role, profile_completed, preferred_locale) VALUES (?, ?, 0, ?, ?, NULL, ?, 1, ?, ?, 'user', 0, ?)",
+      [username, username, email, email, await hashPassword(password), initials, colors[Number(Date.now()) % colors.length], locale],
     );
     const userId = Number(created.insertId);
     await connection.query(
@@ -1299,9 +1299,9 @@ router.post("/auth/deleted-profile/new", asyncRoute(async (request, response) =>
     const initials = displayName.split(/\s+/).slice(0, 2).map((part) => part[0]).join("").toLocaleUpperCase("ru-RU").slice(0, 4) || "BM";
     const colors = ["navy", "blue", "green", "red", "gold"];
     const [created] = await connection.query(
-      `INSERT INTO users (username, username_key, email, email_key, password_hash, google_subject, telegram_subject, initials, color, role, profile_completed)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'user', 0)`,
-      [username, normalizeIdentity(username), email, emailKey, passwordHash, googleSubject, telegramSubject, initials, colors[Date.now() % colors.length]],
+      `INSERT INTO users (username, username_key, username_is_temporary, email, email_key, password_hash, google_subject, telegram_subject, initials, color, role, profile_completed)
+       VALUES (?, ?, 1, ?, ?, ?, ?, ?, ?, ?, 'user', 0)`,
+      [username, username, email, emailKey, passwordHash, googleSubject, telegramSubject, initials, colors[Date.now() % colors.length]],
     );
     const newUserId = Number(created.insertId);
     await connection.query(
@@ -1607,7 +1607,7 @@ router.post("/linked-profiles/create", asyncRoute(async (request, response) => {
     const [[duplicate]] = await connection.query("SELECT id FROM users WHERE email_key = ? FOR UPDATE", [email]);
     if (duplicate) throw Object.assign(new Error("Этот e-mail уже используется"), { statusCode: 409 });
     const username = await uniqueInternalUsername(connection, email.split("@")[0]);
-    const [created] = await connection.query("INSERT INTO users (username, username_key, email, email_key, email_verified_at, password_hash, password_login_enabled, initials, color, role, profile_completed) VALUES (?, ?, ?, ?, NULL, ?, 1, ?, 'blue', 'user', 0)", [username, normalizeIdentity(username), email, email, await hashPassword(password), name.slice(0, 4).toLocaleUpperCase("ru") || "BM"]);
+    const [created] = await connection.query("INSERT INTO users (username, username_key, username_is_temporary, email, email_key, email_verified_at, password_hash, password_login_enabled, initials, color, role, profile_completed) VALUES (?, ?, 1, ?, ?, NULL, ?, 1, ?, 'blue', 'user', 0)", [username, username, email, email, await hashPassword(password), name.slice(0, 4).toLocaleUpperCase("ru") || "BM"]);
     const communityId = Number(created.insertId);
     await connection.query("INSERT INTO profiles (user_id, display_name, city, city_id, profile_type, gender, publisher_status, bio, author_influences, writing_themes, weekend, joy, talk, stranger_message, favorite_genres, disliked_genres) VALUES (?, ?, '', NULL, 'Сообщество', 'Не указан', 'draft', '', '', '', '', '', '', '', '[]', '[]')", [communityId, name]);
     await assertLinkedProfilePair(connection, personalId, communityId);
@@ -1657,7 +1657,7 @@ router.post("/linked-profiles/google", asyncRoute(async (request, response) => {
     if (!target) {
       const name = safeProfileName(request.body?.name || identity.name, "Новое сообщество");
       const username = await uniqueInternalUsername(connection, identity.email?.split("@")[0] || "community");
-      const [insertResult] = await connection.query("INSERT INTO users (username, username_key, email, email_key, email_verified_at, password_hash, password_login_enabled, google_subject, initials, color, role, profile_completed) VALUES (?, ?, ?, ?, UTC_TIMESTAMP(), ?, 0, ?, ?, 'blue', 'user', 0)", [username, normalizeIdentity(username), normalizeEmail(identity.email), normalizeEmail(identity.email), await hashPassword(randomBytes(32).toString("base64url")), identity.sub, name.slice(0, 4).toLocaleUpperCase("ru") || "BM"]);
+      const [insertResult] = await connection.query("INSERT INTO users (username, username_key, username_is_temporary, email, email_key, email_verified_at, password_hash, password_login_enabled, google_subject, initials, color, role, profile_completed) VALUES (?, ?, 1, ?, ?, UTC_TIMESTAMP(), ?, 0, ?, ?, 'blue', 'user', 0)", [username, username, normalizeEmail(identity.email), normalizeEmail(identity.email), await hashPassword(randomBytes(32).toString("base64url")), identity.sub, name.slice(0, 4).toLocaleUpperCase("ru") || "BM"]);
       const communityId = Number(insertResult.insertId);
       await connection.query("INSERT INTO profiles (user_id, display_name, city, city_id, profile_type, gender, publisher_status, bio, author_influences, writing_themes, weekend, joy, talk, stranger_message, favorite_genres, disliked_genres) VALUES (?, ?, '', NULL, 'Сообщество', 'Не указан', 'draft', '', '', '', '', '', '', '', '[]', '[]')", [communityId, name]);
       target = { id: communityId };
@@ -2209,6 +2209,12 @@ router.patch("/admin/publishers/:id", asyncRoute(async (request, response) => {
 router.put("/users/me/state", asyncRoute(async (request, response) => {
   const userId = request.bookMeetUser.id;
   const { profile, avatarUrl, reviews = [], excerpts = [], publisherNews = [] } = request.body ?? {};
+  const locale = requestLocale(request);
+  const requestedUsernameValue = profile?.username ?? request.body?.username;
+  const hasRequestedUsername = requestedUsernameValue !== undefined;
+  const requestedUsername = normalizeUsername(requestedUsernameValue);
+  const usernameError = hasRequestedUsername ? usernameValidationError(requestedUsername) : null;
+  if (usernameError) return response.status(400).json({ code: usernameError, error: authText(locale, usernameError === "USERNAME_RESERVED" ? "usernameReserved" : "usernameInvalid") });
   const requestedType = profile?.type === "Писатель" ? "Писатель" : profile?.type === "Блогер" ? "Блогер" : profile?.type === "Издатель" ? "Издатель" : profile?.type === "Сообщество" ? "Сообщество" : "Читатель";
   const isOrganization = ["Издатель", "Сообщество"].includes(requestedType);
   if (!String(profile?.name ?? "").trim() || !Number(profile?.cityId)) return response.status(400).json({ error: "Заполните обязательные поля" });
@@ -2297,16 +2303,25 @@ router.put("/users/me/state", asyncRoute(async (request, response) => {
       else throw Object.assign(new Error("Некорректная фотография профиля"), { statusCode: 400 });
     }
     const initials = profile.name.trim().split(/\s+/).slice(0, 2).map((part) => part[0]).join("").toLocaleUpperCase("ru-RU").slice(0, 4) || "BM";
-    await connection.query("UPDATE users SET initials = ?, avatar_path = ? WHERE id = ?", [initials, avatarPath, userId]);
+    if (hasRequestedUsername) {
+      const [[existingUsername]] = await connection.query("SELECT id FROM users WHERE username_key = ? FOR UPDATE", [requestedUsername]);
+      if (existingUsername && Number(existingUsername.id) !== Number(userId)) {
+        throw Object.assign(new Error(authText(locale, "usernameTaken")), { statusCode: 409, code: "USERNAME_TAKEN" });
+      }
+    }
+    await connection.query(
+      "UPDATE users SET initials = ?, avatar_path = ?, username = CASE WHEN ? THEN ? ELSE username END, username_key = CASE WHEN ? THEN ? ELSE username_key END, username_is_temporary = CASE WHEN ? THEN 0 ELSE username_is_temporary END WHERE id = ?",
+      [initials, avatarPath, hasRequestedUsername ? 1 : 0, requestedUsername, hasRequestedUsername ? 1 : 0, requestedUsername, hasRequestedUsername ? 1 : 0, userId],
+    );
     await connection.query(
       `UPDATE profiles SET display_name = ?, city = ?, city_id = ?, profile_type = ?, gender = ?, birth_date = ?, show_birth_date_to_friends = ?, profile_tab_order = ?, hidden_profile_tabs = ?, home_view = ?, bio = ?, author_influences = ?, writing_themes = ?, weekend = ?, joy = ?, talk = ?, stranger_message = ?, favorite_genres = ?, disliked_genres = ?,
               publisher_status = ?, publisher_website = ?, publisher_sales_links = ?, publisher_legal_name = ?, publisher_bin = ?, publisher_account = ?, publisher_bik = ?, publisher_bank = ?, publisher_legal_address = ?, publisher_postal_address = ?,
-              community_type = ?, community_rules = ?, publisher_moderation_note = CASE WHEN ? = 'pending' THEN NULL ELSE publisher_moderation_note END
+              community_type = ?, community_rules = ?, community_is_closed = ?, publisher_moderation_note = CASE WHEN ? = 'pending' THEN NULL ELSE publisher_moderation_note END
         WHERE user_id = ?`,
       [
         profile.name.trim(), city?.name ?? "", city?.id ?? null, requestedType,
         isOrganization ? "Не указан" : ["Мужской", "Женский", "Не указан"].includes(profile.gender) ? profile.gender : "Не указан",
-        birthDate || null, isOrganization ? 0 : profile.showBirthDateToFriends ? 1 : 0, JSON.stringify(tabOrder), JSON.stringify(hiddenProfileTabs), profile.homeView === "classic" ? "classic" : "feed",
+        birthDate || null, isOrganization ? 0 : profile.showBirthDateToFriends ? 1 : 0, JSON.stringify(tabOrder), JSON.stringify(hiddenProfileTabs), "feed",
         profile.bio ?? "", requestedType === "Писатель" ? profile.authorInfluences ?? "" : "", requestedType === "Писатель" ? profile.writingThemes ?? "" : "",
         isOrganization ? "" : profile.weekend ?? "", isOrganization ? "" : profile.joy ?? "",
         isOrganization ? "" : profile.talk ?? "", isOrganization ? "" : profile.strangerMessage ?? "",
@@ -2322,6 +2337,7 @@ router.put("/users/me/state", asyncRoute(async (request, response) => {
         isPublisher ? publisherLegal.postalAddress : null,
         isCommunity ? String(profile.communityType).trim().slice(0, 255) : null,
         isCommunity ? String(profile.communityRules).trim() : null,
+        isCommunity && profile.communityIsClosed ? 1 : 0,
         publisherStatus, userId,
       ],
     );
@@ -2393,21 +2409,22 @@ router.put("/users/me/state", asyncRoute(async (request, response) => {
       await connection.query("DELETE mb FROM material_books mb LEFT JOIN reviews r ON r.id = mb.material_id WHERE mb.material_kind = 'review' AND r.id IS NULL");
     }
 
-    if (requestedType === "Писатель" || requestedType === "Блогер") {
+    if (["Читатель", "Писатель", "Блогер"].includes(requestedType)) {
       const excerptIds = [];
       for (const excerpt of excerpts) {
       const previewText = String(excerpt.previewText ?? excerpt.text ?? "").trim();
       if (!previewText) continue;
-      if (Array.from(previewText).length > 500) throw Object.assign(new Error("Текст для главной страницы не должен превышать 500 знаков"), { statusCode: 400 });
+      const desiredId = Number(excerpt.id);
+      const [[existing]] = desiredId ? await connection.query("SELECT user_id, preview_text FROM excerpts WHERE id = ?", [desiredId]) : [[]];
+      if (existing && Number(existing.user_id) !== userId) throw new Error("Нельзя изменить чужой отрывок");
+      const unchangedLegacyPublication = Boolean(existing && previewText === String(existing.preview_text ?? "").trim());
+      if (Array.from(previewText).length > 500 && !unchangedLegacyPublication) throw Object.assign(new Error("Публикация должна содержать от 1 до 500 знаков"), { statusCode: 400 });
       const excerptBookIds = Array.from(new Set((Array.isArray(excerpt.bookIds) ? excerpt.bookIds : [excerpt.bookId]).map(Number).filter((id) => Number.isInteger(id) && id > 0))).slice(0, 50);
       const linkedBooks = await linkedBookPreviews(connection, excerptBookIds);
       const linkedBook = linkedBooks[0] ?? null;
       const bodyHtml = validateRichHtml(excerpt.bodyHtml);
-      const plainBody = plainTextFromHtml(bodyHtml);
+      const plainBody = plainTextFromHtml(bodyHtml) || previewText;
       await assertAdultMaterialAllowed(connection, userId, Boolean(excerpt.isAdult));
-      const desiredId = Number(excerpt.id);
-      const [[existing]] = desiredId ? await connection.query("SELECT user_id FROM excerpts WHERE id = ?", [desiredId]) : [[]];
-      if (existing && Number(existing.user_id) !== userId) throw new Error("Нельзя изменить чужой отрывок");
       if (existing) {
         await connection.query("UPDATE excerpts SET book_id = ?, book_title = ?, preview_text = ?, body_html = ?, body = ?, is_adult = ?, read_url = NULL WHERE id = ? AND user_id = ?", [linkedBook?.id ?? null, linkedBook?.title ?? "", previewText, bodyHtml, plainBody, excerpt.isAdult ? 1 : 0, desiredId, userId]);
         await syncMaterialBooks(connection, "excerpt", desiredId, linkedBooks.map((book) => book.id));
@@ -2752,6 +2769,7 @@ router.delete("/materials/:kind/:id", asyncRoute(async (request, response) => {
   await withTransaction(async (connection) => {
     await connection.query("DELETE FROM material_books WHERE material_kind = ? AND material_id = ?", [kind, materialId]);
     await connection.query("DELETE FROM material_likes WHERE material_kind = ? AND material_id = ?", [kind, materialId]);
+    await connection.query("DELETE FROM material_saves WHERE material_kind = ? AND material_id = ?", [kind, materialId]);
     await connection.query("DELETE FROM material_comments WHERE material_kind = ? AND material_id = ?", [kind, materialId]);
     await connection.query("DELETE FROM notifications WHERE material_kind = ? AND material_id = ?", [kind, materialId]);
     const [deleted] = await connection.query(`DELETE FROM ${table} WHERE id = ? AND user_id = ?`, [materialId, userId]);
@@ -2831,6 +2849,7 @@ router.delete("/admin/materials/:kind/:id", asyncRoute(async (request, response)
       if (reviewIds.length) {
         const placeholders = reviewIds.map(() => "?").join(",");
         await connection.query(`DELETE FROM material_likes WHERE material_kind = 'review' AND material_id IN (${placeholders})`, reviewIds);
+        await connection.query(`DELETE FROM material_saves WHERE material_kind = 'review' AND material_id IN (${placeholders})`, reviewIds);
         await connection.query(`DELETE FROM material_comments WHERE material_kind = 'review' AND material_id IN (${placeholders})`, reviewIds);
         await connection.query(`DELETE FROM notifications WHERE material_kind = 'review' AND material_id IN (${placeholders})`, reviewIds);
       }
@@ -2838,7 +2857,8 @@ router.delete("/admin/materials/:kind/:id", asyncRoute(async (request, response)
     }
     if (kind !== "book") {
       await connection.query("DELETE FROM material_books WHERE material_kind = ? AND material_id = ?", [kind, materialId]);
-      await connection.query("DELETE FROM material_likes WHERE material_kind = ? AND material_id = ?", [kind, materialId]);
+    await connection.query("DELETE FROM material_likes WHERE material_kind = ? AND material_id = ?", [kind, materialId]);
+    await connection.query("DELETE FROM material_saves WHERE material_kind = ? AND material_id = ?", [kind, materialId]);
       await connection.query("DELETE FROM material_comments WHERE material_kind = ? AND material_id = ?", [kind, materialId]);
     }
     await connection.query("DELETE FROM notifications WHERE material_kind = ? AND material_id = ?", [kind, materialId]);
@@ -3106,6 +3126,7 @@ router.post("/admin/reports/:id/delete-material", asyncRoute(async (request, res
     const table = tables[report.target_kind];
     if (!table) throw Object.assign(new Error("Жалоба не относится к материалу"), { statusCode: 400 });
     await connection.query("DELETE FROM material_likes WHERE material_kind = ? AND material_id = ?", [report.target_kind, report.target_id]);
+    await connection.query("DELETE FROM material_saves WHERE material_kind = ? AND material_id = ?", [report.target_kind, report.target_id]);
     await connection.query("DELETE FROM material_comments WHERE material_kind = ? AND material_id = ?", [report.target_kind, report.target_id]);
     await connection.query("DELETE FROM notifications WHERE material_kind = ? AND material_id = ?", [report.target_kind, report.target_id]);
     await connection.query(`DELETE FROM ${table} WHERE id = ?`, [report.target_id]);
@@ -3234,6 +3255,36 @@ router.delete("/reactions", asyncRoute(async (request, response) => {
   response.json({ ok: true });
 }));
 
+router.get("/saves", asyncRoute(async (request, response) => {
+  const kind = String(request.query.kind ?? "");
+  const id = Number(request.query.id);
+  const pool = getPool();
+  await readableMaterialInfo(pool, request.bookMeetUser.id, kind, id);
+  const [[saved]] = await pool.query("SELECT 1 FROM material_saves WHERE user_id = ? AND material_kind = ? AND material_id = ?", [request.bookMeetUser.id, kind, id]);
+  response.json({ saved: Boolean(saved) });
+}));
+
+router.post("/saves", asyncRoute(async (request, response) => {
+  const userId = request.bookMeetUser.id;
+  const kind = String(request.body?.materialKind ?? "");
+  const materialId = Number(request.body?.materialId);
+  await withTransaction(async (connection) => {
+    await readableMaterialInfo(connection, userId, kind, materialId);
+    await connection.query("INSERT IGNORE INTO material_saves (user_id, material_kind, material_id) VALUES (?, ?, ?)", [userId, kind, materialId]);
+  });
+  response.status(201).json({ ok: true });
+}));
+
+router.delete("/saves", asyncRoute(async (request, response) => {
+  const userId = request.bookMeetUser.id;
+  const kind = String(request.body?.materialKind ?? "");
+  const materialId = Number(request.body?.materialId);
+  const pool = getPool();
+  await readableMaterialInfo(pool, userId, kind, materialId);
+  await pool.query("DELETE FROM material_saves WHERE user_id = ? AND material_kind = ? AND material_id = ?", [userId, kind, materialId]);
+  response.json({ ok: true });
+}));
+
 router.get("/comments", asyncRoute(async (request, response) => {
   const kind = String(request.query.kind ?? "");
   const materialId = Number(request.query.id);
@@ -3256,7 +3307,7 @@ router.get("/comments", asyncRoute(async (request, response) => {
 router.get("/material-stats", asyncRoute(async (request, response) => {
   const pool = getPool();
   const [rows] = await pool.query(
-    `SELECT material_kind, material_id, user_id
+    `SELECT material_kind, material_id, user_id, COUNT(*) AS total
        FROM material_comments mc
       WHERE NOT EXISTS (
         SELECT 1 FROM user_blocks ub
@@ -3273,13 +3324,31 @@ router.get("/material-stats", asyncRoute(async (request, response) => {
     if (material) readableKeys.add(`${row.material_kind}-${row.material_id}`);
   }
   const commenters = {};
+  const commentCounts = {};
   for (const row of rows) {
     const key = `${row.material_kind}-${row.material_id}`;
     if (!readableKeys.has(key)) continue;
     commenters[key] ??= [];
     commenters[key].push(Number(row.user_id));
+    commentCounts[key] = (commentCounts[key] ?? 0) + Number(row.total ?? 0);
   }
-  response.json({ commenters });
+  const [saveRows] = await pool.query(
+    "SELECT material_kind, material_id, created_at FROM material_saves WHERE user_id = ? ORDER BY created_at DESC, material_kind, material_id",
+    [request.bookMeetUser.id],
+  );
+  const [saveCountRows] = await pool.query("SELECT material_kind, material_id, COUNT(*) AS total FROM material_saves GROUP BY material_kind, material_id");
+  const savedMaterialRefs = [];
+  const saveCounts = {};
+  for (const row of saveRows) {
+    const material = await readableMaterialInfo(pool, request.bookMeetUser.id, row.material_kind, Number(row.material_id)).catch(() => null);
+    if (material) savedMaterialRefs.push({ kind: row.material_kind, id: Number(row.material_id), createdAt: new Date(row.created_at).toISOString() });
+  }
+  for (const row of saveCountRows) {
+    const key = `${row.material_kind}-${row.material_id}`;
+    const material = await readableMaterialInfo(pool, request.bookMeetUser.id, row.material_kind, Number(row.material_id)).catch(() => null);
+    if (material) saveCounts[key] = Number(row.total);
+  }
+  response.json({ commenters, commentCounts, savedMaterialRefs, saveCounts });
 }));
 
 router.post("/comments", asyncRoute(async (request, response) => {
@@ -3322,9 +3391,8 @@ router.post("/social/friend-requests", asyncRoute(async (request, response) => {
   if (!targetId || targetId === userId) return response.status(400).json({ error: "Некорректный пользователь" });
   await withTransaction(async (connection) => {
     await assertUsersCanInteract(connection, userId, targetId);
-    await assertAgeCompatible(connection, userId, targetId);
     const [profiles] = await connection.query(
-      "SELECT u.id, u.role, p.profile_type, p.display_name FROM users u JOIN profiles p ON p.user_id = u.id WHERE u.id IN (?, ?) ORDER BY u.id FOR UPDATE",
+      "SELECT u.id, u.role, p.profile_type, p.display_name, p.community_is_closed FROM users u JOIN profiles p ON p.user_id = u.id WHERE u.id IN (?, ?) ORDER BY u.id FOR UPDATE",
       [userId, targetId],
     );
     const source = profiles.find((item) => Number(item.id) === userId);
@@ -3333,15 +3401,27 @@ router.post("/social/friend-requests", asyncRoute(async (request, response) => {
     if (target.role === "admin") throw Object.assign(new Error("Службу поддержки нельзя добавить в друзья"), { statusCode: 403 });
     if (!canCreateFriendRequest(source?.profile_type, target.profile_type, { communityMembership: target.profile_type === "Сообщество" })) throw Object.assign(new Error("Издательствам недоступны запросы дружбы"), { statusCode: 403 });
     if (source?.profile_type === "Сообщество") throw Object.assign(new Error("Сообщество не может отправлять запросы дружбы"), { statusCode: 403 });
+    const membership = target.profile_type === "Сообщество";
+    if (!membership) await assertAgeCompatible(connection, userId, targetId);
     const low = Math.min(userId, targetId); const high = Math.max(userId, targetId);
     const [[relationship]] = target.profile_type === "Сообщество"
       ? await connection.query("SELECT 1 FROM community_memberships WHERE community_user_id = ? AND member_user_id = ?", [targetId, userId])
       : await connection.query("SELECT 1 FROM friendships WHERE user_low_id = ? AND user_high_id = ?", [low, high]);
-    if (relationship) throw Object.assign(new Error(target.profile_type === "Сообщество" ? "Вы уже состоите в сообществе" : "Вы уже друзья"), { statusCode: 409 });
+    if (relationship) throw Object.assign(new Error(membership ? "Вы уже состоите в сообществе" : "Вы уже друзья"), { statusCode: 409 });
+    if (membership && !target.community_is_closed) {
+      await connection.query("DELETE FROM friend_requests WHERE status = 'pending' AND from_user_id = ? AND to_user_id = ?", [userId, targetId]);
+      await connection.query("DELETE FROM notifications WHERE user_id = ? AND actor_user_id = ? AND notification_type = 'friend_request'", [targetId, userId]);
+      const [created] = await connection.query("INSERT IGNORE INTO community_memberships (community_user_id, member_user_id) VALUES (?, ?)", [targetId, userId]);
+      if (created.affectedRows) {
+        const systemText = "Вы стали участником открытого сообщества и можете начать переписку";
+        await connection.query("INSERT INTO messages (sender_user_id, recipient_user_id, body, is_system) VALUES (?, ?, ?, 1), (?, ?, ?, 1)", [userId, targetId, systemText, targetId, userId, systemText]);
+        await connection.query("INSERT INTO notifications (user_id, actor_user_id, notification_type, title, body) VALUES (?, ?, 'friendship_started', ?, ?), (?, ?, 'friendship_started', ?, ?)", [targetId, userId, "Новый участник", `${source.display_name} присоединился(ась) к открытому сообществу.`, userId, targetId, "Вы вступили в сообщество", systemText]);
+      }
+      return;
+    }
     const [[pending]] = await connection.query("SELECT id FROM friend_requests WHERE status = 'pending' AND ((from_user_id = ? AND to_user_id = ?) OR (from_user_id = ? AND to_user_id = ?)) LIMIT 1", [userId, targetId, targetId, userId]);
-    if (pending) throw Object.assign(new Error(target.profile_type === "Сообщество" ? "Заявка на вступление уже отправлена" : "Предложение уже отправлено"), { statusCode: 409 });
+    if (pending) throw Object.assign(new Error(membership ? "Заявка на вступление уже отправлена" : "Предложение уже отправлено"), { statusCode: 409 });
     await connection.query("INSERT INTO friend_requests (from_user_id, to_user_id, message) VALUES (?, ?, ?)", [userId, targetId, message || null]);
-    const membership = target.profile_type === "Сообщество";
     await connection.query("INSERT INTO notifications (user_id, actor_user_id, notification_type, title, body) VALUES (?, ?, 'friend_request', ?, ?)", [targetId, userId, membership ? "Новая заявка" : "Новый друг", membership ? `${source.display_name} хочет присоединиться к сообществу.` : `${source.display_name} хочет добавить вас в друзья.`]);
   });
   response.status(201).json({ ok: true });

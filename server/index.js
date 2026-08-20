@@ -5,6 +5,7 @@ import { fileURLToPath } from "node:url";
 import { mkdir } from "node:fs/promises";
 import { apiRateLimit } from "./modules/request-limits.js";
 import { createTelegramOutboxDispatcher } from "./modules/telegram-outbox.js";
+import { authText, requestLocale } from "./modules/i18n.js";
 
 const app = express();
 const projectRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
@@ -93,6 +94,9 @@ async function start() {
 
   app.use((error, _request, response, _next) => {
     console.error(error);
+    if (error?.code === "ER_DUP_ENTRY" && /username_key/i.test(String(error?.sqlMessage ?? error?.message ?? ""))) {
+      return response.status(409).json({ code: "USERNAME_TAKEN", error: authText(requestLocale(_request), "usernameTaken") });
+    }
     const status = error.statusCode || 500;
     const message = process.env.NODE_ENV === "production" && status >= 500 ? "Не удалось выполнить запрос" : error.message;
     const code = typeof error.code === "string" && /^[A-Z0-9_]{3,80}$/.test(error.code) ? error.code : undefined;

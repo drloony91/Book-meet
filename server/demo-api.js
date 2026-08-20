@@ -7,6 +7,9 @@ import { nextTopRank, top3Eligibility } from "./modules/top3.js";
 import { consumeAccountActionToken, createOpaqueActionToken, EMAIL_VERIFICATION_TTL_MINUTES, PASSWORD_RESET_TTL_MINUTES, replaceAccountActionToken } from "./modules/account-tokens.js";
 import { isPublicOccasion, isPublicUpcomingEvent } from "./modules/public-catalog.js";
 import { legalConsentRequired } from "./modules/compliance.js";
+import { authText, requestLocale } from "./modules/i18n.js";
+import { LoginAttemptTracker } from "./modules/login-attempts.js";
+import { normalizeUsername, usernameValidationError } from "./modules/username.js";
 
 const router = Router();
 const sessions = new Map();
@@ -15,6 +18,7 @@ const passwords = new Map([
   [2, process.env.PUBLISHER_TEST_PASSWORD || "publisher2026"],
 ]);
 const demoAccountActionTokens = new Map();
+const loginAttempts = new LoginAttemptTracker({ limit: 10, windowMs: 15 * 60 * 1000 });
 const demoLegalAcceptances = new Map([
   [1, new Set([1, 2, 3])],
   [2, new Set([1, 2, 3])],
@@ -192,9 +196,10 @@ const state = {
   reports: [],
   notifications: [],
   likes: {},
+  saves: {},
   comments: {},
   events: [{
-    id: 41, creatorId: 2, title: "Встреча с авторами издательства «Тест»",
+    id: 41, creatorId: 2, creatorName: "Издательство Тест", title: "Встреча с авторами издательства «Тест»",
     summary: "Разговор о новых казахстанских книгах и автограф-сессия.",
     description: "Познакомимся с авторами осенних новинок и обсудим, как рождаются современные книги.",
     date: "2026-12-12", time: "18:30", city: "Астана", cityId: 1, country: "Казахстан",
@@ -261,8 +266,22 @@ function bootstrap(userId) {
   });
   const link = state.linkedProfiles.find((item) => item.personalUserId === userId || item.communityUserId === userId);
   const linked = link ? users.find((item) => item.id === (link.personalUserId === userId ? link.communityUserId : link.personalUserId)) : undefined;
-  const { linkedProfiles: _linkedProfiles, ...publicState } = state;
-  return structuredClone({ activeUserId: userId, profileCompleted: profileGate.complete, accessGate: { profileComplete: profileGate.complete, missingProfileFields: profileGate.missing, legalConfigured: legalGate.configured, pendingLegalDocuments: legalGate.pending, legalDocuments: legalGate.documents }, adultAccess: { status: adultStatus, restricted }, users: visibleUsers, ...publicState, linkedProfile: linked ? { id: linked.id, name: linked.profile.name, type: linked.profile.type, avatarUrl: linked.avatarUrl, profileCompleted: demoProfileAccess(linked).complete } : undefined, books: state.catalogBooks.filter((item) => adultStatus === "adult" || !item.isAdult), blocks: relatedBlocks, blockedByUserIds, reports: viewer?.isAdmin ? state.reports : [], events: state.events.filter((item) => (viewer?.isAdmin || adultStatus === "adult" || !item.isAdult) && (viewer?.isAdmin || item.status === "published" || item.creatorId === userId)), occasions: state.occasions.filter((item) => (viewer?.isAdmin || adultStatus === "adult" || !item.isAdult) && (viewer?.isAdmin || item.creatorId === userId || item.status === "published" && (item.targetGender === "Все" || item.targetGender === viewer?.profile.gender) && (item.targetProfileType === "Все" || item.targetProfileType === viewer?.profile.type))) });
+  const { linkedProfiles: _linkedProfiles, saves: saveEntries, ...publicState } = state;
+  const saves = {};
+  const savedMaterialRefs = [];
+  for (const [key, entries] of Object.entries(saveEntries)) {
+    const own = entries.find((entry) => entry.userId === userId);
+    if (!own) continue;
+    saves[key] = [userId];
+    const [kind, id] = key.split(/-(?=\d+$)/);
+    savedMaterialRefs.push({ kind, id: Number(id), createdAt: own.createdAt });
+  }
+  savedMaterialRefs.sort((left, right) => Date.parse(right.createdAt) - Date.parse(left.createdAt));
+  const likedMaterialRefs = Object.entries(state.likes).filter(([, ids]) => ids.includes(userId)).map(([key]) => {
+    const [kind, id] = key.split(/-(?=\d+$)/);
+    return { kind, id: Number(id), createdAt: new Date().toISOString() };
+  });
+  return structuredClone({ activeUserId: userId, profileCompleted: profileGate.complete, accessGate: { profileComplete: profileGate.complete, missingProfileFields: profileGate.missing, legalConfigured: legalGate.configured, pendingLegalDocuments: legalGate.pending, legalDocuments: legalGate.documents }, adultAccess: { status: adultStatus, restricted }, users: visibleUsers, ...publicState, saves, savedMaterialRefs, likedMaterialRefs, linkedProfile: linked ? { id: linked.id, name: linked.profile.name, type: linked.profile.type, avatarUrl: linked.avatarUrl, profileCompleted: demoProfileAccess(linked).complete } : undefined, books: state.catalogBooks.filter((item) => adultStatus === "adult" || !item.isAdult), blocks: relatedBlocks, blockedByUserIds, reports: viewer?.isAdmin ? state.reports : [], events: state.events.filter((item) => (viewer?.isAdmin || adultStatus === "adult" || !item.isAdult) && (viewer?.isAdmin || item.status === "published" || item.creatorId === userId)), occasions: state.occasions.filter((item) => (viewer?.isAdmin || adultStatus === "adult" || !item.isAdult) && (viewer?.isAdmin || item.creatorId === userId || item.status === "published" && (item.targetGender === "Все" || item.targetGender === viewer?.profile.gender) && (item.targetProfileType === "Все" || item.targetProfileType === viewer?.profile.type))) });
 }
 
 function conversationKey(first, second) {
@@ -290,18 +309,28 @@ router.get("/auth/demo-login", (request, response) => {
 });
 
 router.post("/auth/login", (request, response) => {
+  const locale = requestLocale(request);
   const email = String(request.body?.email ?? "").trim().toLocaleLowerCase("en");
+  const attempt = loginAttempts.state([`ip:${request.ip || request.socket.remoteAddress || "unknown"}`, `identity:${email}`]);
+  if (attempt.blocked) {
+    response.setHeader("Retry-After", String(attempt.retryAfterSeconds));
+    return response.status(429).json({ code: "AUTH_TOO_MANY_ATTEMPTS", error: authText(locale, "tooManyAttempts") });
+  }
   const password = String(request.body?.password ?? "");
   const code = String(request.body?.totp ?? "");
   const account = users.find((user) => user.email?.toLocaleLowerCase("en") === email);
-  if (!account || account.passwordLoginEnabled === false || password !== passwords.get(account.id)) return response.status(401).json({ error: "Неверный e-mail или пароль" });
+  if (!account || account.passwordLoginEnabled === false || password !== passwords.get(account.id)) {
+    attempt.fail();
+    return response.status(401).json({ error: "Неверный e-mail или пароль" });
+  }
   if (account.suspension && (account.suspension.permanent || new Date(account.suspension.until).getTime() > Date.now())) return response.status(423).json({ suspended: true, ...account.suspension });
   if (account.totpEnabled && !code) return response.status(202).json({ requiresTotp: true });
   if (account.totpEnabled && !verifyTotp(account.totpSecret, code)) {
     const recoveryIndex = recoveryCodeIndex(account.totpRecoveryCodes ?? [], code);
-    if (recoveryIndex < 0) return response.status(401).json({ error: "Неверный одноразовый или резервный код" });
+    if (recoveryIndex < 0) { attempt.fail(); return response.status(401).json({ error: "Неверный одноразовый или резервный код" }); }
     account.totpRecoveryCodes.splice(recoveryIndex, 1);
   }
+  attempt.clearIdentity();
   const token = randomBytes(24).toString("hex");
   sessions.set(token, account.id);
   response.setHeader("Set-Cookie", `book_meet_demo=${token}; Path=/; HttpOnly; SameSite=Lax`);
@@ -323,15 +352,20 @@ router.get("/cities", (request, response) => {
 });
 
 router.post("/auth/register", async (request, response) => {
+  const locale = requestLocale(request);
   const email = String(request.body?.email ?? "").trim().toLocaleLowerCase("en");
   const password = String(request.body?.password ?? "");
+  const username = normalizeUsername(request.body?.username);
   const legalAcceptance = request.body?.legalAcceptance ?? request.body?.legal;
   const acceptedDocumentIds = new Set((Array.isArray(legalAcceptance?.documentIds) ? legalAcceptance.documentIds : []).map(Number));
   if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) || password.length < 8) return response.status(400).json({ error: "Укажите корректный e-mail и пароль не короче 8 знаков" });
+  const usernameError = usernameValidationError(username);
+  if (usernameError) return response.status(400).json({ code: usernameError, error: authText(locale, usernameError === "USERNAME_RESERVED" ? "usernameReserved" : "usernameInvalid") });
   if (legalConsentRequired() && (!legalAcceptance?.agreementAccepted || !legalAcceptance?.personalDataAccepted || demoRequiredLegalDocuments.some((document) => !acceptedDocumentIds.has(document.id)))) return response.status(400).json({ error: "Для регистрации необходимо принять пользовательское соглашение и согласие на обработку персональных данных", code: "LEGAL_ACCEPTANCE_REQUIRED" });
   if (users.some((user) => user.email?.toLocaleLowerCase("en") === email)) return response.status(409).json({ error: "Профиль с таким e-mail уже существует" });
   const displayName = email.split("@")[0];
-  const user = { id: nextId++, email, emailVerifiedAt: undefined, passwordLoginEnabled: true, profileCompleted: false, username: displayName, initials: displayName.slice(0, 2).toLocaleUpperCase("ru"), color: "blue", joined: "сегодня", joinedAt: new Date().toISOString(), profile: { name: displayName, city: "", type: "Читатель", gender: "Не указан", bio: "", authorInfluences: "", writingThemes: "", weekend: "", joy: "", talk: "", strangerMessage: "", favoriteGenres: [], dislikedGenres: [] }, books: [], authorBooks: [], reviews: [], excerpts: [], wishBooks: [] };
+  if (users.some((user) => user.username === username)) return response.status(409).json({ code: "USERNAME_TAKEN", error: authText(locale, "usernameTaken") });
+  const user = { id: nextId++, email, emailVerifiedAt: undefined, passwordLoginEnabled: true, profileCompleted: false, username, usernameIsTemporary: false, initials: displayName.slice(0, 2).toLocaleUpperCase("ru"), color: "blue", joined: "сегодня", joinedAt: new Date().toISOString(), profile: { name: displayName, city: "", type: "Читатель", gender: "Не указан", bio: "", authorInfluences: "", writingThemes: "", weekend: "", joy: "", talk: "", strangerMessage: "", favoriteGenres: [], dislikedGenres: [] }, books: [], authorBooks: [], reviews: [], excerpts: [], wishBooks: [] };
   const verificationToken = createOpaqueActionToken();
   users.push(user); passwords.set(user.id, password); demoLegalAcceptances.set(user.id, new Set(legalConsentRequired() ? demoRequiredLegalDocuments.map((document) => document.id) : [])); await replaceDemoActionToken(user.id, "email_verify", verificationToken, EMAIL_VERIFICATION_TTL_MINUTES); const token = randomBytes(24).toString("hex"); sessions.set(token, user.id); response.setHeader("Set-Cookie", `book_meet_demo=${token}; Path=/; HttpOnly; SameSite=Lax`); response.status(201).json(bootstrap(user.id));
 });
@@ -390,7 +424,7 @@ router.get("/bootstrap/:section", (request, response) => {
   const keys = {
     session: ["activeUserId", "profileCompleted", "accessGate"],
     catalog: ["activeUserId", "adultAccess", "users", "books", "events", "occasions"],
-    social: ["activeUserId", "blocks", "blockedByUserIds", "friendRequests", "friendships", "communityMemberships", "follows", "notifications", "messages", "likes"],
+    social: ["activeUserId", "blocks", "blockedByUserIds", "friendRequests", "friendships", "communityMemberships", "follows", "notifications", "messages", "likes", "saves", "likedMaterialRefs", "savedMaterialRefs"],
     moderation: ["activeUserId", "reports"],
   }[request.params.section];
   if (!keys) return response.status(404).json({ error: "Неизвестный набор данных" });
@@ -407,9 +441,9 @@ router.get("/public/catalog", (_request, response) => {
     ...(owner.excerpts ?? []).filter((item) => !item.isAdult).map((item) => ({ id: item.id, kind: "excerpt", title: item.bookTitle || "Публикация", preview: item.previewText, ownerName: owner.profile.name, owner: { id: owner.id, name: owner.profile.name, initials: owner.initials, color: owner.color, avatarUrl: owner.avatarUrl }, createdAt: item.createdAtValue ?? new Date().toISOString() })),
     ...(["Издатель", "Сообщество"].includes(owner.profile.type) && owner.profile.publisherStatus === "approved" ? (owner.publisherNews ?? []).filter((item) => !item.isAdult).map((item) => ({ id: item.id, kind: "publisher_news", title: item.title, preview: item.previewText, ownerName: owner.profile.name, owner: { id: owner.id, name: owner.profile.name, initials: owner.initials, color: owner.color, avatarUrl: owner.avatarUrl }, createdAt: item.createdAtValue ?? new Date().toISOString() })) : []),
   ]).sort((first, second) => Date.parse(second.createdAt) - Date.parse(first.createdAt));
-  const events = state.events.filter(isPublicUpcomingEvent).map((item) => ({ id: item.id, title: item.title, summary: item.summary, date: item.date, time: item.time, city: item.city, address: item.address, createdAt: item.createdAt }));
+  const events = state.events.filter((item) => isPublicUpcomingEvent(item)).map((item) => ({ id: item.id, title: item.title, summary: item.summary, date: item.date, time: item.time, city: item.city, address: item.address, createdAt: item.createdAt }));
   const occasions = state.occasions.filter(isPublicOccasion).map((item) => ({ id: item.id, type: item.type, primaryText: item.primaryText, audienceText: item.audienceText, targetCities: item.targetCities ?? [], meetingDate: item.meetingDate, meetingStartTime: item.meetingStartTime, meetingEndTime: item.meetingEndTime, meetingCity: item.meetingCity, meetingAddress: item.meetingAddress, createdAt: item.createdAt }));
-  const organizations = users.filter((user) => ["Издатель", "Сообщество"].includes(user.profile.type) && user.profile.publisherStatus === "approved").map((user) => ({ id: user.id, name: user.profile.name, city: user.profile.city, type: user.profile.type, bio: user.profile.bio, communityType: user.profile.communityType, initials: user.initials, color: user.color, avatarUrl: user.avatarUrl }));
+  const organizations = users.filter((user) => ["Издатель", "Сообщество"].includes(user.profile.type) && user.profile.publisherStatus === "approved").map((user) => ({ id: user.id, name: user.profile.name, city: user.profile.city, type: user.profile.type, bio: user.profile.bio, communityType: user.profile.communityType, communityIsClosed: user.profile.type === "Сообщество" ? Boolean(user.profile.communityIsClosed) : false, initials: user.initials, color: user.color, avatarUrl: user.avatarUrl }));
   response.json({ books, materials, events, occasions, organizations });
 });
 
@@ -763,6 +797,16 @@ router.put("/users/me/state", (request, response) => {
   if (!user) return response.status(404).json({ error: "Пользователь не найден" });
   const profile = request.body?.profile;
   if (!profile) return response.status(400).json({ error: "Профиль не передан" });
+  const locale = requestLocale(request);
+  const requestedUsernameValue = profile.username ?? request.body?.username;
+  if (requestedUsernameValue !== undefined) {
+    const username = normalizeUsername(requestedUsernameValue);
+    const usernameError = usernameValidationError(username);
+    if (usernameError) return response.status(400).json({ code: usernameError, error: authText(locale, usernameError === "USERNAME_RESERVED" ? "usernameReserved" : "usernameInvalid") });
+    if (users.some((item) => item.id !== user.id && item.username === username)) return response.status(409).json({ code: "USERNAME_TAKEN", error: authText(locale, "usernameTaken") });
+    user.username = username;
+    user.usernameIsTemporary = false;
+  }
   const allowedProfileTabs = new Set(["main", "author-books", "excerpts", "publisher-news", "library", "wishlist", "reviews", "events", "occasions", "friends", "admin", "settings"]);
   const switchingToPublisher = user.profile.type !== "Издатель" && profile?.type === "Издатель";
   profile.hiddenProfileTabs = Array.isArray(profile?.hiddenProfileTabs) ? [...new Set(profile.hiddenProfileTabs.filter((tab) => allowedProfileTabs.has(tab) && tab !== "main" && tab !== "settings"))] : [];
@@ -793,18 +837,29 @@ router.put("/users/me/state", (request, response) => {
     const currentApproved = user.profile.type === profile.type && user.profile.publisherStatus === "approved";
     profile.publisherStatus = currentApproved ? "approved" : "pending";
     if (profile.type === "Издатель") profile.publisherBin = String(profile.publisherBin).replace(/\D/g, "").slice(0, 12);
-    else Object.assign(profile, { communityType: String(profile.communityType).trim().slice(0, 255), communityRules: String(profile.communityRules).trim(), publisherWebsite: "", publisherSalesLinks: [], publisherLegalName: "", publisherBin: "", publisherAccount: "", publisherBik: "", publisherBank: "", publisherLegalAddress: "", publisherPostalAddress: "" });
+    else Object.assign(profile, { communityType: String(profile.communityType).trim().slice(0, 255), communityRules: String(profile.communityRules).trim(), communityIsClosed: Boolean(profile.communityIsClosed), publisherWebsite: "", publisherSalesLinks: [], publisherLegalName: "", publisherBin: "", publisherAccount: "", publisherBik: "", publisherBank: "", publisherLegalAddress: "", publisherPostalAddress: "" });
   } else {
     profile.publisherStatus = "not_required";
+    profile.communityIsClosed = false;
   }
   if (switchingToPublisher) {
     state.friendRequests = state.friendRequests.filter((item) => !((item.fromId === user.id || item.toId === user.id) && !(item.fromId === user.id && users.find((entry) => entry.id === item.toId)?.profile.type === "Сообщество")));
     state.notifications = state.notifications.filter((item) => !(item.type === "friend_request" && (item.userId === user.id || item.actorId === user.id) && users.find((entry) => entry.id === item.userId)?.profile.type !== "Сообщество"));
   }
-  if (profile) user.profile = structuredClone(profile);
+  if (profile) user.profile = structuredClone({ ...profile, homeView: "feed" });
   if (request.body?.avatarUrl !== undefined) user.avatarUrl = request.body.avatarUrl || undefined;
   if ((profile.type === "Читатель" || profile.type === "Блогер") && Array.isArray(request.body?.reviews)) user.reviews = structuredClone(request.body.reviews);
-  if ((profile.type === "Писатель" || profile.type === "Блогер") && Array.isArray(request.body?.excerpts)) user.excerpts = structuredClone(request.body.excerpts);
+  if (["Читатель", "Писатель", "Блогер"].includes(profile.type) && Array.isArray(request.body?.excerpts)) {
+    const excerpts = request.body.excerpts.map((item) => ({ ...item, previewText: String(item?.previewText ?? item?.text ?? "").trim(), text: String(item?.previewText ?? item?.text ?? "").trim() }));
+    const invalidPublication = excerpts.some((item) => {
+      if (!item.previewText) return true;
+      if (Array.from(item.previewText).length <= 500) return false;
+      const existing = (user.excerpts ?? []).find((entry) => entry.id === item.id);
+      return !existing || String(existing.previewText ?? existing.text ?? "").trim() !== item.previewText;
+    });
+    if (invalidPublication) return response.status(400).json({ error: "Публикация должна содержать от 1 до 500 знаков" });
+    user.excerpts = structuredClone(excerpts);
+  }
   if (["Издатель", "Сообщество"].includes(profile.type) && profile.publisherStatus === "approved" && Array.isArray(request.body?.publisherNews)) user.publisherNews = structuredClone(request.body.publisherNews);
   response.json({ ok: true });
 });
@@ -1099,14 +1154,41 @@ router.delete("/reactions", (request, response) => {
   response.json({ ok: true, userIds: state.likes[key] });
 });
 
+router.get("/saves", (request, response) => {
+  const key = `${request.query.kind}-${request.query.id}`;
+  response.json({ saved: Boolean((state.saves[key] ?? []).some((entry) => entry.userId === request.demoUserId)) });
+});
+
+router.post("/saves", (request, response) => {
+  const key = `${request.body.materialKind}-${request.body.materialId}`;
+  const entries = state.saves[key] ?? [];
+  if (!entries.some((entry) => entry.userId === request.demoUserId)) entries.push({ userId: request.demoUserId, createdAt: new Date().toISOString() });
+  state.saves[key] = entries;
+  response.status(201).json({ ok: true });
+});
+
+router.delete("/saves", (request, response) => {
+  const key = `${request.body.materialKind}-${request.body.materialId}`;
+  state.saves[key] = (state.saves[key] ?? []).filter((entry) => entry.userId !== request.demoUserId);
+  response.json({ ok: true });
+});
+
 router.get("/comments", (request, response) => {
   response.json({ comments: state.comments[`${request.query.kind}-${request.query.id}`] ?? [] });
 });
 
-router.get("/material-stats", (_request, response) => {
+router.get("/material-stats", (request, response) => {
   const commenters = {};
-  for (const [key, comments] of Object.entries(state.comments)) commenters[key] = [...new Set(comments.map((comment) => comment.userId))];
-  response.json({ commenters });
+  const commentCounts = {};
+  for (const [key, comments] of Object.entries(state.comments)) { commenters[key] = [...new Set(comments.map((comment) => comment.userId))]; commentCounts[key] = comments.length; }
+  const savedMaterialRefs = Object.entries(state.saves).flatMap(([key, entries]) => {
+    const entry = entries.find((item) => item.userId === request.demoUserId);
+    if (!entry) return [];
+    const [kind, id] = key.split(/-(?=\d+$)/);
+    return [{ kind, id: Number(id), createdAt: entry.createdAt }];
+  }).sort((left, right) => Date.parse(right.createdAt) - Date.parse(left.createdAt));
+  const saveCounts = Object.fromEntries(Object.entries(state.saves).map(([key, entries]) => [key, entries.length]));
+  response.json({ commenters, commentCounts, savedMaterialRefs, saveCounts });
 });
 
 router.get("/admin/statistics", (request, response) => {
@@ -1165,9 +1247,22 @@ router.post("/social/friend-requests", (request, response) => {
   if (target.isAdmin) return response.status(403).json({ error: "Службу поддержки нельзя добавить в друзья" });
   if (!canCreateFriendRequest(source?.profile.type, target.profile.type, { communityMembership: target.profile.type === "Сообщество" })) return response.status(403).json({ error: "Издательствам недоступны запросы дружбы" });
   if (source?.profile.type === "Сообщество") return response.status(403).json({ error: "Сообщество не может отправлять запросы дружбы" });
+  const membership = target.profile.type === "Сообщество";
+  if (membership && state.communityMemberships.some((item) => item.communityId === targetId && item.memberId === request.demoUserId)) return response.status(409).json({ error: "Вы уже состоите в сообществе" });
+  if (membership && !target.profile.communityIsClosed) {
+    state.friendRequests = state.friendRequests.filter((item) => !(item.status === "pending" && item.fromId === request.demoUserId && item.toId === targetId));
+    state.notifications = state.notifications.filter((item) => !(item.userId === targetId && item.actorId === request.demoUserId && item.type === "friend_request"));
+    state.communityMemberships.push({ communityId: targetId, memberId: request.demoUserId });
+    const systemText = "Вы стали участником открытого сообщества и можете начать переписку";
+    const key = conversationKey(request.demoUserId, targetId);
+    (state.messages[key] ??= []).push({ id: nextId++, system: true, text: systemText, time: "сейчас" });
+    notification(targetId, request.demoUserId, "friendship_started", "Новый участник", `${source?.profile.name} присоединился(ась) к открытому сообществу.`);
+    notification(request.demoUserId, targetId, "friendship_started", "Вы вступили в сообщество", systemText);
+    return response.status(201).json({ ok: true });
+  }
+  if (state.friendRequests.some((item) => item.status === "pending" && item.fromId === request.demoUserId && item.toId === targetId)) return response.status(409).json({ error: membership ? "Заявка на вступление уже отправлена" : "Предложение уже отправлено" });
   const entry = { id: nextId++, fromId: request.demoUserId, toId: targetId, status: "pending", message: String(request.body.message ?? "") };
   state.friendRequests.push(entry);
-  const membership = target.profile.type === "Сообщество";
   notification(targetId, request.demoUserId, "friend_request", membership ? "Новая заявка" : "Новый друг", membership ? `${source?.profile.name} хочет присоединиться к сообществу.` : `${source?.profile.name} хочет добавить вас в друзья.`);
   response.json({ ok: true, request: entry });
 });
@@ -1265,7 +1360,7 @@ router.post("/events", (request, response) => {
   const linkedBookIds = Array.from(new Set((request.body.linkedBookIds ?? []).map(Number).filter(Boolean)));
   const catalog = state.catalogBooks;
   const linkedBooks = linkedBookIds.map((id) => catalog.find((book) => book.id === id)).filter(Boolean).map((book) => ({ id: book.id, title: book.title, author: book.author, annotation: book.annotation, coverUrl: book.coverUrl, coverTone: book.coverTone }));
-  const event = { id: nextId++, creatorId: request.demoUserId, title: String(request.body.title), summary: String(request.body.summary), description: String(request.body.description), isAdult: Boolean(request.body.isAdult), date: String(request.body.date), time: String(request.body.time), city: String(request.body.city), cityId: ["Казахстан", "Онлайн"].includes(String(request.body.city)) ? undefined : Number(request.body.cityId) || undefined, address: String(request.body.address), mapUrl: String(request.body.mapUrl ?? ""), detailsUrl: String(request.body.detailsUrl ?? ""), linkedBookIds, linkedBooks, linkedBookId: linkedBookIds[0], bookTitle: linkedBooks[0]?.title, bookAuthor: linkedBooks[0]?.author, bookAnnotation: linkedBooks[0]?.annotation, bookCoverUrl: linkedBooks[0]?.coverUrl, bookCoverTone: linkedBooks[0]?.coverTone, status: "pending", moderationNote: "", organizerName: creator?.isAdmin ? "" : creator?.profile.name, createdAt: new Date().toISOString() };
+  const event = { id: nextId++, creatorId: request.demoUserId, creatorName: creator?.isAdmin ? "" : creator?.profile.name ?? "", title: String(request.body.title), summary: String(request.body.summary), description: String(request.body.description), isAdult: Boolean(request.body.isAdult), date: String(request.body.date), time: String(request.body.time), city: String(request.body.city), cityId: ["Казахстан", "Онлайн"].includes(String(request.body.city)) ? undefined : Number(request.body.cityId) || undefined, address: String(request.body.address), mapUrl: String(request.body.mapUrl ?? ""), detailsUrl: String(request.body.detailsUrl ?? ""), linkedBookIds, linkedBooks, linkedBookId: linkedBookIds[0], bookTitle: linkedBooks[0]?.title, bookAuthor: linkedBooks[0]?.author, bookAnnotation: linkedBooks[0]?.annotation, bookCoverUrl: linkedBooks[0]?.coverUrl, bookCoverTone: linkedBooks[0]?.coverTone, status: "pending", moderationNote: "", organizerName: creator?.isAdmin ? "" : creator?.profile.name, createdAt: new Date().toISOString() };
   if (!event.city || (!["Казахстан", "Онлайн"].includes(event.city) && !event.address)) return response.status(400).json({ error: "Укажите место события" });
   state.events.push(event);
   notification(request.demoUserId, request.demoUserId, "event_submitted", "Событие на модерации", `Событие «${event.title}» отправлено на модерацию.`, { materialKind: "event", materialId: event.id });

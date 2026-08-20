@@ -31,6 +31,7 @@ export function FriendsPanel({
   onToggleCollapsed,
   onExpandCollapsed,
   adminMode = false,
+  variant = "default",
 }: {
   friends: Friend[];
   selectedId: number | null;
@@ -41,6 +42,7 @@ export function FriendsPanel({
   onToggleCollapsed?: () => void;
   onExpandCollapsed?: () => void;
   adminMode?: boolean;
+  variant?: "default" | "page";
 }) {
   const { t } = useI18n();
   const [query, setQuery] = useState("");
@@ -51,15 +53,16 @@ export function FriendsPanel({
   const realFriendCount = friends.filter((friend) => !friend.support && !friend.supportCase).length;
   const hasSearchablePeople = friends.length > 0;
 
+  const pageMode = variant === "page";
   return (
-    <aside className={`friends-panel ${!hasSearchablePeople ? "is-empty" : ""} ${collapsed ? "is-collapsed" : ""}`} aria-label={t("chat.friendsList")} onClick={(event) => { if (collapsed && !(event.target as Element).closest(".friends-collapse-toggle")) onExpandCollapsed?.(); }}>
+    <aside className={`friends-panel ${!hasSearchablePeople ? "is-empty" : ""} ${collapsed ? "is-collapsed" : ""} ${pageMode ? "friends-panel-page" : ""}`} aria-label={t("chat.friendsList")} onClick={(event) => { if (!pageMode && collapsed && !(event.target as Element).closest(".friends-collapse-toggle")) onExpandCollapsed?.(); }}>
       <div className="friends-heading">
         <div>
           <h2>{adminMode ? t("chat.requests") : t("chat.friends")} <span>{adminMode ? friends.length : realFriendCount}</span></h2>
         </div>
-        {!adminMode && <button className="friends-find-button" type="button" onClick={onFindFriends}>{t("chat.findFriends")}</button>}
+        {!adminMode && !pageMode && <button className="friends-find-button" type="button" onClick={onFindFriends}>{t("chat.findFriends")}</button>}
       </div>
-      {!adminMode && <button className={`friends-collapse-toggle ${collapsed ? "is-collapsed" : ""}`} type="button" onClick={onToggleCollapsed} aria-label={collapsed ? t("chat.expandFriends") : t("chat.collapseFriends")} title={collapsed ? t("chat.expandFriends") : t("chat.collapseFriends")}><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m14.5 6-6 6 6 6" /></svg></button>}
+      {!adminMode && !pageMode && <button className={`friends-collapse-toggle ${collapsed ? "is-collapsed" : ""}`} type="button" onClick={onToggleCollapsed} aria-label={collapsed ? t("chat.expandFriends") : t("chat.collapseFriends")} title={collapsed ? t("chat.expandFriends") : t("chat.collapseFriends")}><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m14.5 6-6 6 6 6" /></svg></button>}
       {hasSearchablePeople && (
         <label className="friend-search">
           <span aria-hidden="true">⌕</span>
@@ -80,7 +83,7 @@ export function FriendsPanel({
         {hasSearchablePeople && filtered.length === 0 && <div className="friends-empty"><p>{t("common.nothingFound")}</p></div>}
         {adminMode && !friends.length && <div className="friends-empty"><p>{t("chat.noRequests")}</p></div>}
       </div>
-      {!adminMode && <button className="friends-footnote" type="button" onClick={onCreateOccasion}>
+      {!adminMode && !pageMode && <button className="friends-footnote" type="button" onClick={onCreateOccasion}>
         <span aria-hidden="true">📖</span>
         <span><strong>{t("chat.bookOccasion")}</strong><small>{t("chat.suggestOccasion")}</small></span>
       </button>}
@@ -100,6 +103,7 @@ export function ChatView({
   onOpenAttachment,
   onReport,
   profileEnabled = true,
+  fullPage = false,
 }: {
   friend: Friend;
   messages: Message[];
@@ -112,6 +116,7 @@ export function ChatView({
   onOpenAttachment: (attachment: ChatAttachment) => void;
   onReport?: () => void;
   profileEnabled?: boolean;
+  fullPage?: boolean;
 }) {
   const { t, formatTime, domainLabel } = useI18n();
   const [draft, setDraft] = useState("");
@@ -184,16 +189,16 @@ export function ChatView({
   }
 
   return (
-    <main className={`chat-view ${expanded ? "chat-expanded" : "chat-compact"}`}>
+    <main className={`chat-view ${expanded ? "chat-expanded" : "chat-compact"} ${fullPage ? "chat-full-page" : ""}`}>
       <header className="chat-header">
         <button className="chat-person" type="button" onClick={profileEnabled ? onOpenProfile : undefined} aria-label={profileEnabled ? t("chat.openProfile", { name: friend.name }) : friend.name} disabled={!profileEnabled}>
           <Avatar friend={friend} size="md" />
           <span><strong data-i18n-skip>{friend.name}</strong><small>{domainLabel(friend.type)}<span data-i18n-skip> · {friend.city}</span> · {friend.online ? t("chat.online") : t("chat.offline")}</small></span>
         </button>
         <div className="chat-actions">
-          <button type="button" onClick={onToggleExpanded} aria-label={expanded ? t("chat.collapse") : t("chat.expand")} title={expanded ? t("chat.collapse") : t("chat.expand")}>{expanded ? "↙" : "⛶"}</button>
+          {!fullPage && <button type="button" onClick={onToggleExpanded} aria-label={expanded ? t("chat.collapse") : t("chat.expand")} title={expanded ? t("chat.collapse") : t("chat.expand")}>{expanded ? "↙" : "⛶"}</button>}
           {onReport && <button className="modal-tool-button modal-report-button" type="button" onClick={onReport} data-tooltip={t("safety.report")} aria-label={t("chat.report")}><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3 2.8 20h18.4L12 3Z" /><path d="M12 9v5m0 3h.01" /></svg></button>}
-          <button type="button" onClick={onClose} aria-label={t("chat.close")} title={t("chat.close")}>×</button>
+          {!fullPage && <button type="button" onClick={onClose} aria-label={t("chat.close")} title={t("chat.close")}>×</button>}
         </div>
       </header>
       <section className="message-area" aria-live="polite">

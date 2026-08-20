@@ -47,7 +47,7 @@ export function ContentHubControls({ view, profileType, showSwitch = true, onNav
       <div className="floating-create-menu" aria-hidden={!open}>
         <button type="button" data-material-action="event" onClick={() => choose(onEvent)}>{t("content.createEvent")}</button>
         {(reader || blogger) && <button type="button" data-material-action="review" onClick={() => choose(onReview)}>{t("content.createReview")}</button>}
-        {!publisher && (normalizedProfileType === "Писатель" || blogger) && <button type="button" onClick={() => choose(onPublication)}>{t("content.createPublication")}</button>}
+        {!publisher && <button type="button" onClick={() => choose(onPublication)}>{t("content.createPublication")}</button>}
         {!publisher && <button type="button" onClick={() => choose(onOccasion)}>{t("content.createOccasion")}</button>}
         {publisher && <button type="button" onClick={() => choose(onPublisherNews)}>{t("content.publishNews")}</button>}
       </div>

@@ -19,13 +19,14 @@ declare global {
   }
 }
 
-export function LoginScreen({ onLogin, onRegister, initialError = "" }: { onLogin: (email: string, password: string, totp?: string) => Promise<AuthResult>; onRegister: (value: { email: string; password: string; legalAcceptance: { agreementAccepted: boolean; personalDataAccepted: boolean; documentIds: number[] } }) => Promise<AuthResult>; initialError?: string }) {
+export function LoginScreen({ onLogin, onRegister, initialError = "" }: { onLogin: (email: string, password: string, totp?: string) => Promise<AuthResult>; onRegister: (value: { email: string; username: string; password: string; legalAcceptance: { agreementAccepted: boolean; personalDataAccepted: boolean; documentIds: number[] } }) => Promise<AuthResult>; initialError?: string }) {
   const { locale, t } = useI18n();
   const [mode, setMode] = useState<"login" | "register">("login");
   const [turning, setTurning] = useState<"to-register" | "to-login" | null>(null);
   const turnTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
+  const [username, setUsername] = useState("");
   const [totp, setTotp] = useState("");
   const [totpRequired, setTotpRequired] = useState(false);
   const [providers, setProviders] = useState({ google: false, googleClientId: "" });
@@ -179,7 +180,9 @@ export function LoginScreen({ onLogin, onRegister, initialError = "" }: { onLogi
     if (mode === "register" && legalConfig.required && (!legalConfig.configured || !agreementAccepted || !personalDataAccepted)) {
       setError(legalConfig.configured ? t("legal.acceptRequired") : t("legal.notConfigured")); setSubmitting(false); return;
     }
-    const result = mode === "login" ? await onLogin(email, password, totp) : await onRegister({ email, password, legalAcceptance: { agreementAccepted, personalDataAccepted, documentIds: legalConfig.documents.map((item) => item.id) } });
+    const cleanUsername = username.trim().toLowerCase();
+    if (mode === "register" && !/^[a-z0-9](?:[a-z0-9._-]{1,28})[a-z0-9]$/.test(cleanUsername)) { setError(t("auth.usernameInvalid")); setSubmitting(false); return; }
+    const result = mode === "login" ? await onLogin(email, password, totp) : await onRegister({ email, username: cleanUsername, password, legalAcceptance: { agreementAccepted, personalDataAccepted, documentIds: legalConfig.documents.map((item) => item.id) } });
     if (result.requiresTotp) setTotpRequired(true);
     if (result.error) setError(localizedApiError(result.error, mode === "login" ? t("auth.loginError") : t("auth.createProfileError")));
     setSubmitting(false);
@@ -231,6 +234,7 @@ export function LoginScreen({ onLogin, onRegister, initialError = "" }: { onLogi
       <p>{formMode === "login" ? t("auth.loginHint") : t("auth.registerHint")}</p>
       <form onSubmit={submit}>
         <label>E-mail<input required type="email" autoComplete="email" value={email} onChange={(event) => setEmail(event.target.value)} placeholder="you@example.com" /></label>
+        {formMode === "register" && <label>{t("auth.username")}<input required minLength={3} maxLength={30} autoComplete="username" value={username} onChange={(event) => setUsername(event.target.value.toLowerCase().replace(/[^a-z0-9._-]/g, "").slice(0, 30))} placeholder="reader.name" /><small>{t("auth.usernameHint")}</small></label>}
         <label>{t("auth.password")}<input required minLength={8} type="password" autoComplete={formMode === "login" ? "current-password" : "new-password"} value={password} onChange={(event) => setPassword(event.target.value)} placeholder={t("auth.passwordPlaceholder")} /></label>
         {formMode === "register" && legalConfig.required && <div className="auth-legal-acceptances">
           <label><input type="checkbox" checked={agreementAccepted} onChange={(event) => setAgreementAccepted(event.target.checked)} /><span>{t("legal.agreementAccept")} <button className="inline-legal-link" type="button" onClick={(event) => { event.preventDefault(); event.stopPropagation(); setOpenedLegal(legalConfig.documents.find((item) => item.type === "user_agreement") ?? null); }}>{t("legal.userAgreement")}</button></span></label>
