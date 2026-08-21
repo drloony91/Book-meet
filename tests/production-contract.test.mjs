@@ -640,7 +640,7 @@ test("publisher profiles are moderated, private and separated from writer public
   assert.doesNotMatch(data, /viewerIsAdmin \|\| Number\(row\.id\) === Number\(viewerId\) \? row\.publisher_bin/);
   assert.match(routes, /publishing: "\/publishing"/);
   assertLocalized(profile, "profile.publisherBooks");
-  assertLocalized(profile, "admin.publisherNews");
+  assertLocalized(profile, "profile.publisherNews");
   assert.match(directory, /export function PublishingDirectoryPage/);
 });
 

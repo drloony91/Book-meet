@@ -261,7 +261,7 @@ export function AdminTab({ events, occasions, users, catalog = [], reports, onMo
     review: reviews.map((item) => ({ id: item.id, kind: "review", title: item.bookTitle, subtitle: `${item.ownerName} · ★ ${item.rating}`, text: item.preview, source: item })),
     excerpt: [
       ...publications.map((item) => ({ id: item.id, kind: "excerpt" as const, title: item.bookTitle || t("content.publications"), subtitle: item.ownerName, text: item.previewText || item.text, source: item })),
-      ...publisherNews.map((item) => ({ id: item.id, kind: "publisher_news" as const, title: item.title, subtitle: `${users.find((user) => user.id === item.ownerId)?.profile.type === "Сообщество" ? t("admin.communityNews") : t("admin.publisherNews")} · ${item.ownerName}`, text: item.previewText, source: item })),
+      ...publisherNews.map((item) => ({ id: item.id, kind: "publisher_news" as const, title: item.title, subtitle: `${users.find((user) => user.id === item.ownerId)?.profile.type === "Сообщество" ? t("profile.communityNews") : t("profile.publisherNews")} · ${item.ownerName}`, text: item.previewText, source: item })),
     ],
     event: events.map((item) => { const organizationType = users.find((user) => user.id === item.creatorId)?.profile.type; return { id: item.id, kind: "event", title: item.title, subtitle: `${organizationType === "Сообщество" ? `${t("admin.communityEvent")} · ` : organizationType === "Издатель" ? `${t("admin.publisherEvent")} · ` : ""}${item.city} · ${item.date}`, text: item.summary, source: item }; }),
     occasion: occasions.map((item) => ({ id: item.id, kind: "occasion", title: item.primaryText, subtitle: occasionLabels[item.type], text: item.audienceText, source: item })),
@@ -487,6 +487,12 @@ export function MyProfile({ onBack, user, users, catalog, friends, friendRequest
   const [deleteProfileConfirm, setDeleteProfileConfirm] = useState(false);
   const [socialMode, setSocialMode] = useState<ProfileSocialMode | null>(null);
   const [homeView, setHomeView] = useState<"classic" | "feed">(user.profile.homeView ?? "feed");
+
+  useEffect(() => {
+    if (normalizedPathname(window.location.pathname) === "/profile/settings") {
+      window.history.replaceState({ bookMeetProfileTab: "main" }, "", "/profile");
+    }
+  }, []);
   const avatarInputRef = useRef<HTMLInputElement>(null);
   const tabRowRefs = useRef(new Map<ProfileTab, HTMLDivElement>());
   const previousTabPositions = useRef(new Map<ProfileTab, number>());
@@ -541,22 +547,6 @@ export function MyProfile({ onBack, user, users, catalog, friends, friendRequest
       setHomeView(previousHomeView);
       setProfile((current) => ({ ...current, homeView: previousHomeView }));
       window.alert(error instanceof Error ? error.message : t("settings.homeViewError"));
-    }
-  }
-
-  async function savePrivacyPatch(patch: Pick<typeof profile, "showBirthDateToFriends" | "birthDateVisibility" | "communityIsClosed">) {
-    const previousProfile = profile;
-    const nextProfile = { ...profile, ...patch };
-    setProfile(nextProfile);
-    try {
-      await onUserChange({ ...user, profile: nextProfile });
-      savedProfileRef.current = nextProfile;
-      setSaved(true);
-      window.setTimeout(() => setSaved(false), 2200);
-    } catch (error) {
-      console.warn(error);
-      setProfile(previousProfile);
-      window.alert(error instanceof Error ? error.message : t("profile.saveError"));
     }
   }
 
@@ -662,8 +652,8 @@ export function MyProfile({ onBack, user, users, catalog, friends, friendRequest
     profile.type === "Сообщество" ? { key: "author-books", label: `${t("profile.communityBooks")} · ${formatNumber(authorBooks.length)}` } : null,
     profile.type === "Издатель" ? { key: "events", label: `${t("profile.publisherEvents")} · ${formatNumber(events.filter((item) => item.creatorId === user.id).length)}` } : null,
     profile.type === "Сообщество" ? { key: "events", label: `${t("profile.communityEvents")} · ${formatNumber(events.filter((item) => item.creatorId === user.id).length)}` } : null,
-    profile.type === "Издатель" ? { key: "publisher-news", label: `${t("admin.publisherNews")} · ${formatNumber(publisherNews.length)}` } : null,
-    profile.type === "Сообщество" ? { key: "publisher-news", label: `${t("admin.communityNews")} · ${formatNumber(publisherNews.length)}` } : null,
+    profile.type === "Издатель" ? { key: "publisher-news", label: `${t("profile.publisherNews")} · ${formatNumber(publisherNews.length)}` } : null,
+    profile.type === "Сообщество" ? { key: "publisher-news", label: `${t("profile.communityNews")} · ${formatNumber(publisherNews.length)}` } : null,
     !["Издатель", "Сообщество"].includes(profile.type) ? { key: "library", label: `${t("profile.library")} · ${formatNumber(books.length)}` } : null,
     profile.type === "Читатель" || profile.type === "Блогер" ? { key: "wishlist", label: `${t("wishlist.title")} · ${formatNumber(wishBooks.length)}` } : null,
     !["Издатель", "Сообщество"].includes(profile.type) ? { key: "communities", label: `${t("profile.communities")} · ${formatNumber(communityMemberships.filter((membership) => membership.memberId === user.id).length)}` } : null,
@@ -680,7 +670,7 @@ export function MyProfile({ onBack, user, users, catalog, friends, friendRequest
   const pendingCommunities = friendRequests.filter((request) => request.status === "pending" && request.fromId === user.id).map((request) => users.find((item) => item.id === request.toId)).filter((item): item is DemoUser => Boolean(item) && item!.profile.type === "Сообщество");
 
   useEffect(() => {
-    if (activeTab === "main" || activeTab === "settings" || !hiddenTabsDraft.includes(activeTab)) return;
+    if (activeTab === "main" || !hiddenTabsDraft.includes(activeTab)) return;
     setActiveTab("main");
     window.history.replaceState({ bookMeetProfileTab: "main" }, "", "/profile");
   }, [activeTab, hiddenTabsDraft]);
@@ -710,6 +700,16 @@ export function MyProfile({ onBack, user, users, catalog, friends, friendRequest
     setTabOrderDraft(next);
   }
 
+  function moveProfileTab(tab: ProfileTab, direction: -1 | 1) {
+    if (tab === "main") return;
+    const currentIndex = normalizedTabOrder.indexOf(tab);
+    const nextIndex = currentIndex + direction;
+    if (currentIndex < 1 || nextIndex < 1 || nextIndex >= normalizedTabOrder.length) return;
+    const next = [...normalizedTabOrder];
+    [next[currentIndex], next[nextIndex]] = [next[nextIndex], next[currentIndex]];
+    setTabOrderDraft(next);
+  }
+
   async function deleteProfile() {
     const response = await fetch("/api/users/me/profile", { method: "DELETE", credentials: "same-origin" });
     const data = await response.json().catch(() => ({})) as { error?: string };
@@ -732,7 +732,7 @@ export function MyProfile({ onBack, user, users, catalog, friends, friendRequest
   }
 
   async function toggleProfileTabVisibility(tab: ProfileTab, visible: boolean) {
-    if (tab === "main" || tab === "settings") return;
+    if (tab === "main") return;
     const previousHidden = hiddenTabsDraft;
     const previousProfile = profile;
     const nextHidden = visible ? hiddenTabsDraft.filter((item) => item !== tab) : [...new Set([...hiddenTabsDraft, tab])];
@@ -766,11 +766,10 @@ export function MyProfile({ onBack, user, users, catalog, friends, friendRequest
               {reorderingTabs && item.key !== "main" && <span className="profile-tab-drag-handle" draggable onDragStart={() => { for (const [tab, element] of tabRowRefs.current) previousTabPositions.current.set(tab, element.getBoundingClientRect().top); setDraggedTab(item.key); }} onDragEnd={() => setDraggedTab(null)} aria-label={t("settings.moveTab", { label: item.label })} title={t("settings.dragTab")}>☰</span>}
               <button className={activeTab === item.key ? "active" : ""} type="button" onClick={() => openTab(item.key)}>{item.label}</button>
             </div>)}
-            <button className={activeTab === "settings" ? "active" : ""} type="button" onClick={() => openTab("settings")}>{t("profile.settings")}</button>
           </nav>
         </div>
         <div className={`my-profile-main ${activeTab === "library" ? "library-main" : ""}`}>
-          <nav className="profile-main-nav" aria-label={t("profile.sections")}>{orderedProfileTabs.map((item) => <button className={activeTab === item.key ? "active" : ""} type="button" key={item.key} onClick={() => openTab(item.key)}>{item.label}</button>)}<button className={activeTab === "settings" ? "active" : ""} type="button" onClick={() => openTab("settings")}>{t("profile.settings")}</button></nav>
+          <nav className="profile-main-nav" aria-label={t("profile.sections")}>{orderedProfileTabs.map((item) => <button className={activeTab === item.key ? "active" : ""} type="button" key={item.key} onClick={() => openTab(item.key)}>{item.label}</button>)}</nav>
           {activeTab === "main" && <>
             <div className="profile-title-row">
               <div><p>{domainLabel(profile.type)}{profile.city ? <> · <span data-i18n-skip>{profile.city}</span></> : ""}</p><div className="profile-social-summary"><button type="button" onClick={() => setSocialMode("follows")}>{t("profile.followerCount", { count: formatNumber(visibleFollowers.length) })}</button><i aria-hidden="true" /><button type="button" onClick={() => setSocialMode("friends")}>{t("profile.friendCount", { count: formatNumber(friends.length) })}</button></div></div>
@@ -814,7 +813,10 @@ export function MyProfile({ onBack, user, users, catalog, friends, friendRequest
                 <GenrePicker label={t("profile.dislikedGenres")} value={profile.dislikedGenres} onChange={(dislikedGenres) => setProfile({ ...profile, dislikedGenres })} />
                 </>}
                 <div className="profile-edit-settings-divider" />
-                <section className="profile-edit-settings-section profile-privacy-settings"><h2>{t("settings.privacy")}</h2>{!["Издатель", "Сообщество"].includes(profile.type) && <label>{t("profile.birthVisibility")}<CustomSelect ariaLabel={t("profile.birthVisibility")} value={profile.birthDateVisibility ?? (profile.showBirthDateToFriends ? "friends" : "nobody")} onChange={(birthDateVisibility) => setProfile({ ...profile, birthDateVisibility, showBirthDateToFriends: birthDateVisibility === "friends" })} options={[{ value: "nobody" as const, label: t("profile.birthNobody") }, { value: "friends" as const, label: t("profile.birthFriends") }, { value: "everyone" as const, label: t("profile.birthEveryone") }]} /></label>}{profile.type === "Сообщество" && <label className="profile-checkbox"><input type="checkbox" checked={Boolean(profile.communityIsClosed)} onChange={(event) => setProfile({ ...profile, communityIsClosed: event.target.checked })} />{t("settings.closedCommunity")}<small>{t("settings.closedCommunityHint")}</small></label>}</section>
+                <section className="profile-edit-settings-section profile-home-view-settings"><h2>{t("settings.defaultHome")}</h2><div className="profile-home-view-options"><button className={homeView === "classic" ? "active" : ""} type="button" onClick={() => void chooseHomeView("classic")}>{t("settings.classicHome")}</button><button className={homeView === "feed" ? "active" : ""} type="button" onClick={() => void chooseHomeView("feed")}>{t("content.feed")}</button></div></section>
+                <section className="profile-edit-settings-section profile-menu-visibility-settings"><h2>{t("settings.showMenu")}</h2><div className="profile-menu-visibility-list">{profileTabs.filter((item) => item.key !== "main").map((item) => <label key={item.key}><input type="checkbox" checked={!hiddenTabsDraft.includes(item.key)} onChange={(event) => void toggleProfileTabVisibility(item.key, event.target.checked)} />{item.label.split(" · ")[0]}</label>)}</div></section>
+                <section className="profile-edit-settings-section profile-menu-order-settings"><h2>{t("settings.changeOrder")}</h2><div className="profile-menu-order-actions"><button className="outline-button" type="button" onClick={() => { setTabOrderDraft(profile.tabOrder ?? defaultTabOrder); setReorderingTabs(true); }}>{t("common.edit")}</button>{reorderingTabs && <button className="primary-button" type="button" onClick={() => void applyTabOrder()}>{t("settings.apply")}</button>}</div>{reorderingTabs && <div className="profile-menu-order-list">{normalizedTabOrder.filter((tab) => tab !== "main").map((tab, index, tabs) => { const item = profileTabs.find((candidate) => candidate.key === tab); return item ? <div key={tab}><span>{item.label.split(" · ")[0]}</span><span><button type="button" disabled={index === 0} onClick={() => moveProfileTab(tab, -1)} aria-label={`${item.label}: ↑`}>↑</button><button type="button" disabled={index === tabs.length - 1} onClick={() => moveProfileTab(tab, 1)} aria-label={`${item.label}: ↓`}>↓</button></span></div> : null; })}</div>}</section>
+                {profile.type !== "Издатель" && <section className="profile-edit-settings-section profile-privacy-settings"><h2>{t("settings.privacy")}</h2>{profile.type !== "Сообщество" && <label>{t("profile.birthVisibility")}<CustomSelect ariaLabel={t("profile.birthVisibility")} value={profile.birthDateVisibility ?? (profile.showBirthDateToFriends ? "friends" : "nobody")} onChange={(birthDateVisibility) => setProfile({ ...profile, birthDateVisibility, showBirthDateToFriends: birthDateVisibility === "friends" })} options={[{ value: "nobody" as const, label: t("profile.birthNobody") }, { value: "friends" as const, label: t("profile.birthFriends") }, { value: "everyone" as const, label: t("profile.birthEveryone") }]} /></label>}{profile.type === "Сообщество" && <label className="profile-checkbox"><input type="checkbox" checked={Boolean(profile.communityIsClosed)} onChange={(event) => setProfile({ ...profile, communityIsClosed: event.target.checked })} />{t("settings.closedCommunity")}<small>{t("settings.closedCommunityHint")}</small></label>}</section>}
                 <section className="profile-edit-settings-section"><LinkedProfileControls profileType={profile.type} settings /></section>
                 <section className="profile-edit-settings-section blocked-users-settings"><h2>{t("profile.blocked")}</h2>{users.some((item) => item.blockedByMe) ? <div className="blocked-user-grid">{users.filter((item) => item.blockedByMe).map((item) => <button type="button" key={item.id} className="blocked-user-card" onClick={() => onOpenUser(item.id)}><span className={`avatar avatar-sm avatar-${item.color} ${item.avatarUrl ? "has-photo" : ""}`} style={item.avatarUrl ? { backgroundImage: `url(${item.avatarUrl})` } : undefined}>{!item.avatarUrl && item.initials}</span><span><strong data-i18n-skip>{item.profile.name}</strong><small>{domainLabel(item.profile.type)} · <span data-i18n-skip>{item.profile.city}</span></small></span></button>)}</div> : <p>{t("settings.noBlocked")}</p>}</section>
                 <UserComplaints />
@@ -854,10 +856,8 @@ export function MyProfile({ onBack, user, users, catalog, friends, friendRequest
           {activeTab === "events" && <MyEventsTab createdEvents={events.filter((item) => item.creatorId === user.id && eventTimestamp(item) >= Date.now())} participatingEvents={events.filter((item) => item.creatorId !== user.id && item.reminderSet && eventTimestamp(item) >= Date.now())} users={users} catalog={catalog} currentUserId={user.id} onOpenUser={onOpenUser} onEdit={onEditEvent} onDeleted={onDeleteEvent} />}
           {activeTab === "occasions" && <div className="simple-profile-tab"><div className="profile-title-row"><div><h1>{t("profile.occasions")}</h1><p>{t("occasion.createdCount", { count: formatNumber(occasions.filter((item) => item.creatorId === user.id).length) })}</p></div></div><div className="occasion-grid">{occasions.filter((item) => item.creatorId === user.id).map((item) => <OccasionCard key={item.id} item={item} own onOpen={() => setOpenedOwnOccasion(item)} onEdit={() => onEditOccasion(item)} />)}</div>{!occasions.some((item) => item.creatorId === user.id) && <div className="profile-tab-placeholder">{t("occasion.noneCreated")}</div>}{openedOwnOccasion && <OccasionModal item={openedOwnOccasion} currentUser={user} users={users} onOpenUser={onOpenUser} onOpenBook={setOpenedOwnOccasionBookId} onClose={() => setOpenedOwnOccasion(null)} onEdit={() => { onEditOccasion(openedOwnOccasion); setOpenedOwnOccasion(null); }} onDelete={async () => { if (!window.confirm(t("occasion.deleteConfirm"))) return; const response = await fetch(`/api/occasions/${openedOwnOccasion.id}`, { method: "DELETE", credentials: "same-origin" }); if (!response.ok) { window.alert(t("occasion.deleteError")); return; } onDeleteOccasion(openedOwnOccasion.id); setOpenedOwnOccasion(null); }} />}{openedOwnOccasionBookId && catalog.find((book) => book.id === openedOwnOccasionBookId) && <UnifiedBookModal book={catalog.find((book) => book.id === openedOwnOccasionBookId)!} users={users} catalog={catalog} nested onOpenUser={onOpenUser} onClose={() => setOpenedOwnOccasionBookId(null)} />}</div>}
           {activeTab === "friends" && <ProfileFriendsTab friends={friends} outgoing={friendRequests.filter((request) => request.status === "pending" && request.fromId === user.id).map((request) => users.find((item) => item.id === request.toId)).filter(Boolean) as DemoUser[]} incoming={friendRequests.filter((request) => request.status === "pending" && request.toId === user.id).map((request) => users.find((item) => item.id === request.fromId)).filter(Boolean) as DemoUser[]} subscriptions={follows.filter((follow) => follow.followerId === user.id).map((follow) => users.find((item) => item.id === follow.targetId)).filter((item): item is DemoUser => Boolean(item) && !item!.isAdmin)} followers={follows.filter((follow) => follow.targetId === user.id).map((follow) => users.find((item) => item.id === follow.followerId)).filter((item): item is DemoUser => Boolean(item) && !item!.isAdmin)} communityMode={profile.type === "Сообщество"} publisherMode={profile.type === "Издатель"} onOpenUser={onOpenUser} />}
-          {activeTab === "settings" && <div className="simple-profile-tab profile-settings-stack"><div className="profile-title-row"><div><h1>{t("profile.settings")}</h1><p>{t("settings.manageProfile")}</p></div></div><section className="profile-home-view-settings"><h2>{t("settings.defaultHome")}</h2><div className="profile-home-view-options"><button className={homeView === "classic" ? "active" : ""} type="button" onClick={() => void chooseHomeView("classic")}>{t("settings.classicHome")}</button><button className={homeView === "feed" ? "active" : ""} type="button" onClick={() => void chooseHomeView("feed")}>{t("content.feed")}</button></div></section><section className="profile-menu-visibility-settings"><h2>{t("settings.showMenu")}</h2><div className="profile-menu-visibility-list">{profileTabs.filter((item) => item.key !== "main").map((item) => <label key={item.key}><input type="checkbox" checked={!hiddenTabsDraft.includes(item.key)} onChange={(event) => void toggleProfileTabVisibility(item.key, event.target.checked)} />{item.label.split(" · ")[0]}</label>)}</div></section><section className="profile-menu-order-settings"><h2>{t("settings.changeOrder")}</h2><div className="profile-menu-order-actions"><button className="outline-button" type="button" onClick={() => { setTabOrderDraft(profile.tabOrder ?? defaultTabOrder); setReorderingTabs(true); }}>{t("common.edit")}</button>{reorderingTabs && <button className="primary-button" type="button" onClick={() => void applyTabOrder()}>{t("settings.apply")}</button>}</div></section><LinkedProfileControls profileType={profile.type} settings /><section className="blocked-users-settings"><h2>{t("profile.blocked")}</h2>{users.some((item) => item.blockedByMe) ? <div className="blocked-user-grid">{users.filter((item) => item.blockedByMe).map((item) => <button type="button" key={item.id} className="blocked-user-card" onClick={() => onOpenUser(item.id)}><span className={`avatar avatar-sm avatar-${item.color} ${item.avatarUrl ? "has-photo" : ""}`} style={item.avatarUrl ? { backgroundImage: `url(${item.avatarUrl})` } : undefined}>{!item.avatarUrl && item.initials}</span><span><strong data-i18n-skip>{item.profile.name}</strong><small>{domainLabel(item.profile.type)} · <span data-i18n-skip>{item.profile.city}</span></small></span></button>)}</div> : <p>{t("settings.noBlocked")}</p>}</section><section className="profile-delete-settings"><h2>{t("profile.delete")}</h2><p>{t("settings.deleteHint")}</p><button className="quiet-danger-button" type="button" onClick={() => setDeleteProfileConfirm(true)}>{t("profile.delete")}</button></section></div>}
         </div>
       </section>
-      {activeTab === "settings" && <><section className="simple-profile-tab profile-privacy-settings"><h2>{t("settings.privacy")}</h2>{!["Издатель", "Сообщество"].includes(profile.type) && <label>{t("profile.birthVisibility")}<CustomSelect ariaLabel={t("profile.birthVisibility")} value={profile.birthDateVisibility ?? (profile.showBirthDateToFriends ? "friends" : "nobody")} onChange={(birthDateVisibility) => void savePrivacyPatch({ birthDateVisibility, showBirthDateToFriends: birthDateVisibility === "friends", communityIsClosed: profile.communityIsClosed })} options={[{ value: "nobody" as const, label: t("profile.birthNobody") }, { value: "friends" as const, label: t("profile.birthFriends") }, { value: "everyone" as const, label: t("profile.birthEveryone") }]} /></label>}{profile.type === "Сообщество" && <label className="profile-checkbox"><input type="checkbox" checked={Boolean(profile.communityIsClosed)} onChange={(event) => void savePrivacyPatch({ birthDateVisibility: profile.birthDateVisibility, showBirthDateToFriends: profile.showBirthDateToFriends, communityIsClosed: event.target.checked })} />{t("settings.closedCommunity")}<small>{t("settings.closedCommunityHint")}</small></label>}</section><UserComplaints /></>}
       {socialMode && <ProfileSocialDialog initialMode={socialMode} friends={friends} incoming={incomingFriendUsers} outgoing={outgoingFriendUsers} followers={visibleFollowers} subscriptions={visibleSubscriptions} communities={joinedCommunities} pendingCommunities={pendingCommunities} onClose={() => setSocialMode(null)} onOpenUser={(id) => { setSocialMode(null); onOpenUser(id); }} onOpenChat={(id) => { setSocialMode(null); onOpenChat(id); }} onAccept={onAcceptFriend} onReject={onRejectFriend} onCancel={onCancelFriendRequest} onRemove={onRemoveFriend} onFollow={onFollow} />}
       {deleteProfileConfirm && <div className="notice-backdrop" role="presentation" onMouseDown={() => setDeleteProfileConfirm(false)}><section className="confirm-social-modal" role="alertdialog" aria-modal="true" onMouseDown={(event) => event.stopPropagation()}><h2>{t("settings.deleteConfirm")}</h2><p>{t("settings.deleteRestore")}</p><div className="form-actions"><button type="button" onClick={() => setDeleteProfileConfirm(false)}>{t("common.cancel")}</button><button className="quiet-danger-button" type="button" onClick={() => void deleteProfile()}>{t("common.delete")}</button></div></section></div>}
       {requiredNotice && <div className="notice-backdrop" role="presentation" onMouseDown={() => setRequiredNotice(false)}><section className="required-fields-notice" role="alertdialog" aria-modal="true" aria-labelledby="required-fields-title" onMouseDown={(event) => event.stopPropagation()}><h2 id="required-fields-title">{t("form.requiredFields")}</h2><button className="primary-button" type="button" autoFocus onClick={() => setRequiredNotice(false)}>{t("common.ok")}</button></section></div>}

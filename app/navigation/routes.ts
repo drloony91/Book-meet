@@ -82,7 +82,6 @@ export const profileTabPaths = {
   events: "/profile/events",
   occasions: "/profile/occasions",
   friends: "/profile/friends",
-  settings: "/profile/settings",
   admin: "/profile/admin",
 } as const;
 
@@ -114,7 +113,7 @@ export function mainViewFromPathname(pathname: string): RoutableMainView {
 
 export function appRouteFromPathname(pathname: string): ParsedAppRoute {
   const normalized = normalizedPathname(pathname);
-  if (normalized === "/profile" || Object.values(profileTabPaths).includes(normalized as typeof profileTabPaths[RoutableProfileTab])) return { view: "profile" };
+  if (normalized === "/profile" || normalized === "/profile/settings" || Object.values(profileTabPaths).includes(normalized as typeof profileTabPaths[RoutableProfileTab])) return { view: "profile" };
   const dynamicRoutes: Array<{ pattern: RegExp; kind: OverlayRouteKind; view: RoutableMainView }> = [
     { pattern: /^\/users\/(\d+)$/, kind: "user", view: "users" },
     { pattern: /^\/books\/(\d+)$/, kind: "book", view: "home" },

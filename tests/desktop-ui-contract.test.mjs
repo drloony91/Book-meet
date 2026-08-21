@@ -20,6 +20,7 @@ test("desktop routes, username and privacy controls have stable contracts", asyn
   ]);
   assert.match(routes, /liked: "\/liked"/);
   assert.match(routes, /saved: "\/saved"/);
+  assert.match(routes, /normalized === "\/profile\/settings"/);
   assert.match(layout, /desktop-navigation-quick/);
   assert.doesNotMatch(layout, /matchMedia\(\"\(min-width: 801px\)\"\)\.matches/);
   assert.match(auth, /autoComplete="username"/);
@@ -35,6 +36,9 @@ test("desktop routes, username and privacy controls have stable contracts", asyn
   assert.match(profile, /communityMemberships/);
   assert.match(profile, /profile-material-stream/);
   assert.match(profile, /profile-main-nav/);
+  assert.doesNotMatch(profile, /openTab\("settings"\)|activeTab === "settings"/);
+  assert.match(profile, /profile\.type !== "Издатель" && <section className="profile-edit-settings-section profile-privacy-settings"/);
+  assert.match(profile, /profile-menu-order-list/);
   assert.match(profile, /eventTimestamp\(item\) >= Date\.now\(\)/);
   assert.match(profile, /t\("common\.back"\)/);
   assert.doesNotMatch(profile, /profile\.changePhoto[^\n]*setEditing\(true\)/);
@@ -52,6 +56,8 @@ test("desktop routes, username and privacy controls have stable contracts", asyn
   assert.match(content, /displayMaterialDate/);
   assert.match(content, /profileCommunities\.length > 0/);
   assert.match(content, /eventTimestamp\(item\) >= Date\.now\(\)/);
+  assert.match(content, /profile\.communityNews/);
+  assert.match(content, /profile\.publisherNews/);
   assert.match(layout, /bell-active\.png/);
   assert.match(layout, /desktop-quick-create-menu/);
   assert.match(layout, /desktop-brand\/book-meet-mark\.png/);
@@ -75,6 +81,9 @@ test("desktop routes, username and privacy controls have stable contracts", asyn
   assert.match(css, /\.organization-directory-filters \.directory-control-field > \.custom-select \{ min-width: 0; \}/);
   assert.match(css, /publication-preview-card/);
   assert.match(css, /profile-main-nav/);
+  assert.match(css, /\.my-profile-main\.library-main \.library-import-actions > \.creation-action-button \{ display: inline-flex !important; \}/);
   assert.match(messages, /"content\.createOccasion": "Познакомиться"/);
   assert.match(messages, /"directory\.everyone": "Все"/);
+  assert.match(messages, /"profile\.publisherNews": \["Новости издательства"/);
+  assert.doesNotMatch(messages, /Новинки издательств/);
 });
