@@ -3558,7 +3558,9 @@ select {
   .workspace-main { height: calc(100vh - 76px); min-height: 0; overflow-y: auto; scrollbar-gutter: stable; }
   .workspace-chat-page > .workspace-main { overflow: hidden; }
   .directory-page-shell { height: auto; overflow: visible; }
-  .desktop-navigation { top: 0; height: 100%; overflow-y: auto; }
+  .directory-page-shell > .directory-page { padding-top: 26px; }
+  .desktop-navigation { top: 0; height: 100%; overflow: visible; }
+  .app-shell > .my-profile-page { height: calc(100vh - 76px); overflow-y: auto; scrollbar-gutter: stable; box-sizing: border-box; }
 
   .brand-header-logo { position: absolute; left: 110px; justify-self: auto; transform: translateX(-50%); }
   .desktop-brand-mark { width: 58px; height: 58px; }
@@ -3581,11 +3583,11 @@ select {
 
   .directory-page-shell > .directory-home-button,
   .directory-page > .directory-home-button { display: none !important; }
-  .directory-heading { width: min(760px, 100%); margin-inline: auto; }
+  .directory-heading { width: min(760px, 100%); min-height: 50px; margin: 42px auto 20px; padding: 0; border: 0; align-items: stretch; justify-content: center; }
   .directory-heading > .directory-controls,
-  .directory-heading > .organization-directory-filters { width: 100%; }
+  .directory-heading > .organization-directory-filters { width: 100%; min-height: 50px; }
   .directory-controls,
-  .organization-directory-filters { grid-auto-flow: column; grid-auto-columns: minmax(0, 1fr); gap: 12px; align-items: center; }
+  .organization-directory-filters { height: 50px; grid-auto-flow: column; grid-auto-columns: minmax(0, 1fr); gap: 12px; align-items: stretch; }
   .directory-controls .desktop-directory-search,
   .directory-controls .books-search-field,
   .organization-directory-filters .books-search-field,
@@ -3603,9 +3605,41 @@ select {
   .directory-controls .custom-select,
   .organization-directory-filters .custom-select,
   .directory-controls .custom-select-trigger,
-  .organization-directory-filters .custom-select-trigger { width: 100%; height: 50px; }
+  .organization-directory-filters .custom-select-trigger { min-width: 0; width: 100%; height: 50px; }
   .directory-controls .custom-select-trigger,
   .organization-directory-filters .custom-select-trigger { border: 1px solid var(--line); border-radius: 14px; background: #fff; box-shadow: none; }
+  .directory-controls .directory-control-field > .custom-select,
+  .organization-directory-filters .directory-control-field > .custom-select { min-width: 0; }
+  .desktop-feed-search,
+  .directory-controls .desktop-directory-search,
+  .directory-controls .books-search-field,
+  .organization-directory-filters .books-search-field,
+  .directory-controls .directory-city-filter,
+  .directory-controls .custom-select-trigger,
+  .organization-directory-filters .custom-select-trigger {
+    box-sizing: border-box;
+    color: var(--ink);
+    transition: border-color .18s ease, background-color .18s ease, box-shadow .18s ease;
+  }
+  .desktop-feed-search:hover,
+  .directory-controls .desktop-directory-search:hover,
+  .directory-controls .books-search-field:hover,
+  .organization-directory-filters .books-search-field:hover,
+  .directory-controls .directory-city-filter:hover,
+  .directory-controls .custom-select-trigger:hover,
+  .organization-directory-filters .custom-select-trigger:hover { border-color: #9cbfe1; background: #f8fbff; }
+  .desktop-feed-search:focus-within,
+  .directory-controls .desktop-directory-search:focus-within,
+  .directory-controls .books-search-field:focus-within,
+  .organization-directory-filters .books-search-field:focus-within,
+  .directory-controls .directory-city-filter:focus-within,
+  .directory-controls .custom-select.is-open .custom-select-trigger,
+  .organization-directory-filters .custom-select.is-open .custom-select-trigger,
+  .directory-controls .custom-select-trigger:focus-visible,
+  .organization-directory-filters .custom-select-trigger:focus-visible { border-color: var(--blue); background: #fff; outline: 0; box-shadow: 0 0 0 3px rgb(23 105 210 / 10%); }
+  .desktop-directory-search::before,
+  .directory-controls .books-search-field::before,
+  .organization-directory-filters .books-search-field::before { content: "⌕"; flex: 0 0 auto; color: var(--muted); font-size: 22px; line-height: 1; }
   .directory-filter-controls { grid-template-columns: repeat(4, minmax(0, 1fr)); grid-auto-flow: row; }
   .books-directory-controls,
   .materials-directory-controls,

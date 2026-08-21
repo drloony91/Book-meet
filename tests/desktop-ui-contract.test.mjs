@@ -66,7 +66,12 @@ test("desktop routes, username and privacy controls have stable contracts", asyn
   assert.match(css, /desktop-bell-nudge/);
   assert.match(css, /prefers-reduced-motion/);
   assert.match(css, /mobile-chat-button\.mobile-chat-button-hidden/);
+  assert.match(css, /\.desktop-navigation \{ top: 0; height: 100%; overflow: visible; \}/);
+  assert.match(css, /\.app-shell > \.my-profile-page \{ height: calc\(100vh - 76px\); overflow-y: auto; scrollbar-gutter: stable;/);
+  assert.match(css, /\.directory-heading \{ width: min\(760px, 100%\); min-height: 50px; margin: 42px auto 20px; padding: 0; border: 0;/);
+  assert.match(css, /\.organization-directory-filters \.directory-control-field > \.custom-select \{ min-width: 0; \}/);
   assert.match(css, /publication-preview-card/);
   assert.match(css, /profile-main-nav/);
   assert.match(messages, /"content\.createOccasion": "Познакомиться"/);
+  assert.match(messages, /"directory\.everyone": "Все"/);
 });

@@ -565,7 +565,7 @@ export const ru = {
   "directory.totalUsers": "Всего пользователей — {count}",
   "directory.cityUsers": "Пользователей в вашем городе — {count}",
   "directory.who": "Кого вы ищете?",
-  "directory.everyone": "Всех",
+  "directory.everyone": "Все",
   "directory.bookMatches": "По книжным совпадениям",
   "directory.registration": "По дате регистрации",
   "directory.userBioEmpty": "Пользователь пока ничего о себе не рассказал.",
