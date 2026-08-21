@@ -3564,7 +3564,7 @@ select {
 
   .brand-header-logo { position: absolute; left: 110px; justify-self: auto; transform: translateX(-50%); }
   .desktop-brand-mark { width: 58px; height: 58px; }
-  .desktop-brand-title { position: absolute; grid-column: auto; left: 50%; width: min(330px, 28vw); height: 54px; transform: translateX(-50%); }
+  .desktop-brand-title { position: absolute; grid-column: auto; left: calc(50% + 110px); width: min(330px, 28vw); height: 54px; transform: translateX(-50%); }
   .desktop-brand-title img { display: block; width: 100%; height: 100%; object-fit: contain; }
   .topbar-account-actions { gap: 8px; }
   .topbar-account-actions .user-copy { display: none; }
@@ -3654,8 +3654,8 @@ select {
   .directory-user-card > div:nth-child(2) p { display: -webkit-box; overflow: hidden; margin: 7px 0 0; color: var(--muted); line-height: 1.45; -webkit-box-orient: vertical; -webkit-line-clamp: 3; }
   .profile-material-search { margin-top: 18px; }
 
-  .my-profile-page { width: min(1260px, calc(100% - 56px)); }
-  .my-profile-card { max-width: none; grid-template-columns: minmax(250px, 310px) minmax(0, 1fr); align-items: start; gap: 28px; border: 0; border-radius: 0; overflow: visible; background: transparent; box-shadow: none; }
+  .my-profile-page { width: 100%; }
+  .my-profile-card { width: min(1260px, 100%); max-width: none; grid-template-columns: minmax(250px, 310px) minmax(0, 1fr); align-items: start; gap: 28px; border: 0; border-radius: 0; overflow: visible; background: transparent; box-shadow: none; }
   .my-profile-aside, .my-profile-main { border: 1px solid var(--line); border-radius: 18px; background: #fff; color: var(--ink); }
   .my-profile-aside { top: 20px; max-height: none; overflow: visible; padding: 28px; }
   .my-profile-main { min-width: 0; padding: 28px; }
