@@ -87,3 +87,26 @@ test("desktop routes, username and privacy controls have stable contracts", asyn
   assert.match(messages, /"profile\.publisherNews": \["Новости издательства"/);
   assert.doesNotMatch(messages, /Новинки издательств/);
 });
+
+test("desktop profile dialogs and directory controls keep the correction contracts", async () => {
+  const [profile, contentScreens, css, messages] = await Promise.all([
+    readFile(path.join(root, "app", "screens", "ProfileScreens.tsx"), "utf8"),
+    readFile(path.join(root, "app", "screens", "ContentScreens.tsx"), "utf8"),
+    readFile(path.join(root, "app", "globals.css"), "utf8"),
+    readFile(path.join(root, "app", "i18n", "messages.ts"), "utf8"),
+  ]);
+  assert.match(profile, /profile-main-summary-duplicate/);
+  assert.match(profile, /friends\.incomingShort/);
+  assert.match(profile, /friends\.outgoingShort/);
+  assert.match(profile, /profile-social-group-title/);
+  assert.match(profile, /linked-profile-section/);
+  assert.match(css, /\.profile-main-summary-duplicate,[\s\S]*\.profile-menu-order-settings \{ display: none !important; \}/);
+  assert.match(css, /\.profile-social-dialog > h2,[\s\S]*\.profile-social-group \.profile-social-group-title,[\s\S]*\.mobile-profile-social-label \{ display: none; \}/);
+  assert.match(css, /\.profile-social-subtabs \{ width: 100%; margin: 0 0 18px; \}/);
+  assert.match(css, /\.content-scroll\.directory-page \{ overflow: visible; \}/);
+  assert.match(css, /\.directory-controls \.directory-city-filter input \{[^}]*box-shadow: none;/);
+  assert.match(contentScreens, /personal-material-empty-copy/);
+  assert.match(messages, /"directory\.bookMatches": "По совпадениям"/);
+  assert.match(messages, /"friends\.incomingShort": "Входящие запросы"/);
+  assert.match(messages, /"friends\.outgoingShort": "Исходящие запросы"/);
+});
