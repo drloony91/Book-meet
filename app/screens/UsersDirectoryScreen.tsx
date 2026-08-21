@@ -8,19 +8,21 @@ import { useI18n } from "../i18n";
 export function UsersDirectoryPage({ currentUser, users, onOpenUser }: { currentUser: DemoUser; users: DemoUser[]; onOpenUser: (userId: number) => void }) {
   const { t, domainLabel } = useI18n();
   const [sort, setSort] = useState<"registration" | "matches">("matches");
+  const [query, setQuery] = useState("");
   const [city, setCity] = useState("");
   const [profileType, setProfileType] = useState<"all" | "Читатель" | "Писатель" | "Блогер">("all");
   const publicUsers = useMemo(() => users.filter((user) => !user.isAdmin && !user.deletedAt && !user.purged), [users]);
   const sortedUsers = useMemo(
     () => publicUsers
       .filter((user) => user.id !== currentUser.id)
+      .filter((user) => !query.trim() || `${user.profile.name} ${user.username} ${user.profile.bio}`.toLocaleLowerCase("ru").includes(query.trim().toLocaleLowerCase("ru")))
       .filter((user) => profileType === "all" || user.profile.type === profileType)
       .filter((user) => !city || user.profile.city.trim().toLocaleLowerCase("ru") === city.trim().toLocaleLowerCase("ru"))
       .map((user) => ({ user, matches: userBookMatches(currentUser, user) }))
       .sort((first, second) => sort === "matches"
         ? second.matches.total - first.matches.total || second.user.id - first.user.id
         : (Date.parse(second.user.joinedAt ?? "") || second.user.id) - (Date.parse(first.user.joinedAt ?? "") || first.user.id)),
-    [city, currentUser, profileType, publicUsers, sort],
+    [city, currentUser, profileType, publicUsers, query, sort],
   );
   const cityUsers = publicUsers.filter((user) => user.id !== currentUser.id && user.profile.city.trim().toLocaleLowerCase("ru") === currentUser.profile.city.trim().toLocaleLowerCase("ru")).length;
 
@@ -28,6 +30,7 @@ export function UsersDirectoryPage({ currentUser, users, onOpenUser }: { current
     <div className="directory-heading">
       <div><span className="section-subtitle">{t("directory.community")}</span><h1>{t("directory.users")}</h1><div className="users-directory-metrics"><p>{t("directory.totalUsers", { count: publicUsers.length })}</p><p>{t("directory.cityUsers", { count: cityUsers })}</p></div></div>
       <div className="directory-controls directory-filter-controls">
+        <label className="desktop-directory-search"><input type="search" value={query} onChange={(event) => setQuery(event.target.value)} placeholder={t("directory.searchPeople")} /></label>
         <label className="directory-control-field"><span>{t("directory.who")}</span><CustomSelect ariaLabel={t("directory.who")} value={profileType} onChange={setProfileType} options={[{ value: "all", label: t("directory.everyone") }, { value: "Читатель", label: domainLabel("Читатель") }, { value: "Писатель", label: domainLabel("Писатель") }, { value: "Блогер", label: domainLabel("Блогер") }]} /></label>
         <div className="directory-control-field"><span>{t("content.city")}</span><CityFilter value={city} cities={publicUsers.filter((user) => user.id !== currentUser.id).map((user) => user.profile.city)} onChange={setCity} /></div>
         <label className="directory-control-field"><span>{t("common.sort")}</span><CustomSelect ariaLabel={t("common.sort")} value={sort} onChange={setSort} options={[{ value: "matches", label: t("directory.bookMatches") }, { value: "registration", label: t("directory.registration") }]} /></label>
@@ -35,9 +38,8 @@ export function UsersDirectoryPage({ currentUser, users, onOpenUser }: { current
     </div>
     <div className="users-directory-grid">{sortedUsers.map(({ user, matches }) => <article className="directory-user-card material-clickable-card" role="button" tabIndex={0} key={user.id} onClick={() => onOpenUser(user.id)} onKeyDown={(event) => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); onOpenUser(user.id); } }}>
       <span className={`avatar avatar-lg avatar-${user.color} ${user.avatarUrl ? "has-photo" : ""}`} style={user.avatarUrl ? { backgroundImage: `url(${user.avatarUrl})` } : undefined}>{!user.avatarUrl && user.initials}{user.online && <span className="online-dot" />}</span>
-      <div><span>{domainLabel(user.profile.type)}{user.profile.city ? <span data-i18n-skip> · {user.profile.city}</span> : ""} · <b className={user.online ? "online-copy" : "offline-copy"}>{user.online ? t("chat.online") : t("chat.offline")}</b></span><h2 data-i18n-skip>{user.profile.name}</h2><p data-i18n-skip={Boolean(user.profile.bio)}>{user.profile.bio || t("directory.userBioEmpty")}</p></div>
-      <div className="user-match-summary"><strong>{matches.total}</strong><span>{t("directory.matches")}</span><small>{matches.books} · {matches.favoriteGenres} · {matches.dislikedGenres}</small></div>
-      <small>{t("directory.registered", { date: user.joined })}</small>
+      <div><span>{domainLabel(user.profile.type)}{user.profile.city ? <span data-i18n-skip> · {user.profile.city}</span> : ""}</span><h2 data-i18n-skip>{user.profile.name}</h2><p data-i18n-skip={Boolean(user.profile.bio)}>{user.profile.bio || t("directory.userBioEmpty")}</p></div>
+      <div className="user-match-summary"><strong>{matches.total}</strong><span>{t("directory.matches")}</span></div>
     </article>)}</div>
   </main>;
 }

@@ -42,7 +42,7 @@ let googleJwksCache = { expiresAt: 0, savedAt: 0, keys: [] };
 let googleJwksRefreshPromise;
 const realtimeClients = new Set();
 const presenceTouches = new Map();
-const PROFILE_TABS = new Set(["main", "author-books", "excerpts", "publisher-news", "library", "wishlist", "reviews", "events", "occasions", "friends"]);
+const PROFILE_TABS = new Set(["main", "author-books", "excerpts", "publisher-news", "library", "wishlist", "reviews", "events", "occasions", "friends", "communities"]);
 
 function deletionDaysRemaining(value) {
   if (!value) return 0;
@@ -80,7 +80,7 @@ async function purgeDeletedProfile(connection, userId) {
   await connection.query("UPDATE report_appeals SET appellant_user_id = NULL WHERE appellant_user_id = ?", [userId]);
   await connection.query(
     `UPDATE profiles SET display_name = 'Удалённый пользователь', city = '', city_id = NULL, gender = 'Не указан', birth_date = NULL,
-            show_birth_date_to_friends = 0, profile_tab_order = NULL, hidden_profile_tabs = NULL, bio = '', author_influences = '', writing_themes = '', weekend = '', joy = '', talk = '',
+            show_birth_date_to_friends = 0, birth_date_visibility = 'nobody', profile_tab_order = NULL, hidden_profile_tabs = NULL, bio = '', author_influences = '', writing_themes = '', weekend = '', joy = '', talk = '',
             stranger_message = '', favorite_genres = '[]', disliked_genres = '[]', publisher_website = NULL, publisher_sales_links = NULL,
             publisher_legal_name = NULL, publisher_bin = NULL, publisher_account = NULL, publisher_bik = NULL, publisher_bank = NULL,
             publisher_legal_address = NULL, publisher_postal_address = NULL, publisher_moderation_note = NULL, community_type = NULL, community_rules = NULL WHERE user_id = ?`,
@@ -2314,14 +2314,17 @@ router.put("/users/me/state", asyncRoute(async (request, response) => {
       [initials, avatarPath, hasRequestedUsername ? 1 : 0, requestedUsername, hasRequestedUsername ? 1 : 0, requestedUsername, hasRequestedUsername ? 1 : 0, userId],
     );
     await connection.query(
-      `UPDATE profiles SET display_name = ?, city = ?, city_id = ?, profile_type = ?, gender = ?, birth_date = ?, show_birth_date_to_friends = ?, profile_tab_order = ?, hidden_profile_tabs = ?, home_view = ?, bio = ?, author_influences = ?, writing_themes = ?, weekend = ?, joy = ?, talk = ?, stranger_message = ?, favorite_genres = ?, disliked_genres = ?,
+      `UPDATE profiles SET display_name = ?, city = ?, city_id = ?, profile_type = ?, gender = ?, birth_date = ?, show_birth_date_to_friends = ?, birth_date_visibility = ?, profile_tab_order = ?, hidden_profile_tabs = ?, home_view = ?, bio = ?, author_influences = ?, writing_themes = ?, weekend = ?, joy = ?, talk = ?, stranger_message = ?, favorite_genres = ?, disliked_genres = ?,
               publisher_status = ?, publisher_website = ?, publisher_sales_links = ?, publisher_legal_name = ?, publisher_bin = ?, publisher_account = ?, publisher_bik = ?, publisher_bank = ?, publisher_legal_address = ?, publisher_postal_address = ?,
               community_type = ?, community_rules = ?, community_is_closed = ?, publisher_moderation_note = CASE WHEN ? = 'pending' THEN NULL ELSE publisher_moderation_note END
         WHERE user_id = ?`,
       [
         profile.name.trim(), city?.name ?? "", city?.id ?? null, requestedType,
         isOrganization ? "Не указан" : ["Мужской", "Женский", "Не указан"].includes(profile.gender) ? profile.gender : "Не указан",
-        birthDate || null, isOrganization ? 0 : profile.showBirthDateToFriends ? 1 : 0, JSON.stringify(tabOrder), JSON.stringify(hiddenProfileTabs), "feed",
+        birthDate || null,
+        isOrganization ? 0 : (profile.birthDateVisibility ?? (profile.showBirthDateToFriends ? "friends" : "nobody")) === "friends" ? 1 : 0,
+        isOrganization ? "nobody" : ["nobody", "friends", "everyone"].includes(profile.birthDateVisibility) ? profile.birthDateVisibility : profile.showBirthDateToFriends ? "friends" : "nobody",
+        JSON.stringify(tabOrder), JSON.stringify(hiddenProfileTabs), "feed",
         profile.bio ?? "", requestedType === "Писатель" ? profile.authorInfluences ?? "" : "", requestedType === "Писатель" ? profile.writingThemes ?? "" : "",
         isOrganization ? "" : profile.weekend ?? "", isOrganization ? "" : profile.joy ?? "",
         isOrganization ? "" : profile.talk ?? "", isOrganization ? "" : profile.strangerMessage ?? "",

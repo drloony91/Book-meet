@@ -109,6 +109,7 @@ const users = [
       gender: "Мужской",
       birthDate: "1991-07-15",
       age: 35,
+      birthDateVisibility: "nobody",
       showBirthDateToFriends: false,
       tabOrder: [],
       bio: "",
@@ -256,7 +257,8 @@ function bootstrap(userId) {
     const privateVisible = user.id === userId || friend;
     const profile = user.id === userId || viewer?.isAdmin ? user.profile : {
       ...user.profile,
-      birthDate: user.profile.showBirthDateToFriends && friend ? user.profile.birthDate : undefined,
+      birthDate: (user.profile.birthDateVisibility ?? (user.profile.showBirthDateToFriends ? "friends" : "nobody")) === "everyone" || (user.profile.birthDateVisibility ?? (user.profile.showBirthDateToFriends ? "friends" : "nobody")) === "friends" && friend ? user.profile.birthDate : undefined,
+      birthDateVisibility: undefined,
       showBirthDateToFriends: undefined,
       publisherLegalName: undefined, publisherBin: undefined, publisherAccount: undefined,
       publisherBik: undefined, publisherBank: undefined, publisherLegalAddress: undefined,

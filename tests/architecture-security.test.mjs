@@ -209,6 +209,7 @@ test("дата рождения, спойлеры и материалы 18+ за
   assert.equal(ageFromBirthDate("2025-02-31"), null);
   assert.equal(validateRichHtml('<span class="spoiler" onclick="steal()">секрет</span>'), '<span class="spoiler">секрет</span>');
   const migration = await readFile(path.join(root, "mysql", "migrations", "019_profile_age_material_controls.sql"), "utf8");
+  const visibilityMigration = await readFile(path.join(root, "mysql", "migrations", "033_profile_birth_date_visibility.sql"), "utf8");
   const api = await readFile(path.join(root, "server", "api.js"), "utf8");
   const data = await readFile(path.join(root, "server", "data.js"), "utf8");
   const profile = await readFile(path.join(root, "app", "screens", "ProfileScreens.tsx"), "utf8");
@@ -219,8 +220,9 @@ test("дата рождения, спойлеры и материалы 18+ за
   assert.match(migration, /ADD COLUMN is_adult/);
   assert.match(api, /assertAdultMaterialAllowed/);
   assert.match(data, /hideAdultMaterials/);
-  assert.match(data, /show_birth_date_to_friends && isViewerFriend/);
-  assertLocalized(profile, "profile.showBirthDate");
+  assert.match(visibilityMigration, /birth_date_visibility ENUM\('nobody', 'friends', 'everyone'\)/);
+  assert.match(data, /birth_date_visibility === "friends" && isViewerFriend/);
+  assertLocalized(profile, "profile.birthVisibility");
   assertLocalized(profile, "settings.changeOrder");
   assertLocalized(content, "editor.spoiler");
   assertLocalized(content, "library.chaptersRead");
@@ -295,7 +297,8 @@ test("локальные правки этапа 1 закреплены конт
   const data = await readFile(path.join(root, "server", "data.js"), "utf8");
   const cityFixes = await readFile(path.join(root, "mysql", "migrations", "018_city_catalog_corrections.sql"), "utf8");
   assertLocalized(content, "content.reviews");
-  assert.match(content, /item\.rating \? ` · ★ \$\{item\.rating\}`/);
+  assert.match(content, /material-review-meta/);
+  assert.match(content, /\{item\.rating \?\? 0\} ★/);
   assertLocalized(content, "event.setReminder");
   assert.match(content, /event-attendees/);
   assertLocalized(users, "directory.who");

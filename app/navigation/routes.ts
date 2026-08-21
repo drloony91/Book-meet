@@ -77,6 +77,7 @@ export const profileTabPaths = {
   "publisher-news": "/profile/news",
   library: "/profile/library",
   wishlist: "/profile/wishlist",
+  communities: "/profile/communities",
   reviews: "/profile/reviews",
   events: "/profile/events",
   occasions: "/profile/occasions",
