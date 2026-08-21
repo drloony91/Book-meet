@@ -607,7 +607,7 @@ export const ru = {
   "content.createEvent": "Добавить событие",
   "content.createReview": "Написать рецензию",
   "content.createPublication": "Создать публикацию",
-  "content.createOccasion": "Предложить повод",
+  "content.createOccasion": "Познакомиться",
   "content.blog": "Блог",
   "content.occasionsShort": "Поводы",
   "content.homeSections": "Разделы главной страницы",

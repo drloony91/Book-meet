@@ -3329,6 +3329,7 @@ select {
 .desktop-material-action-icon,
 .desktop-feed-search,
 .desktop-directory-search { display: none; }
+.profile-main-nav { display: none; }
 
 @keyframes desktop-bell-nudge {
   0%, 88%, 100% { transform: rotate(0); }
@@ -3548,4 +3549,93 @@ select {
   .wishlist-tab .library-title-row h1,
   .my-profile-main.library-main .view-switcher { display: none !important; }
   .wishlist-tab .library-title-row { align-items: flex-start; }
+}
+
+/* Desktop verification pass: unified feeds, profiles and fixed application shell. */
+@media (min-width: 801px) {
+  html, body, #root, .app-shell { height: 100%; overflow: hidden; }
+  .workspace, .workspace.workspace-without-friends { height: calc(100vh - 76px); min-height: 0; }
+  .workspace-main { height: calc(100vh - 76px); min-height: 0; overflow-y: auto; scrollbar-gutter: stable; }
+  .workspace-chat-page > .workspace-main { overflow: hidden; }
+  .directory-page-shell { height: auto; overflow: visible; }
+  .desktop-navigation { top: 0; height: 100%; overflow-y: auto; }
+
+  .brand-header-logo { position: absolute; left: 110px; justify-self: auto; transform: translateX(-50%); }
+  .desktop-brand-mark { width: 58px; height: 58px; }
+  .desktop-brand-title { position: absolute; left: calc(50% + 110px); width: min(330px, 28vw); height: 54px; transform: translateX(-50%); }
+  .desktop-brand-title img { display: block; width: 100%; height: 100%; object-fit: contain; }
+  .topbar-account-actions { gap: 8px; }
+  .topbar-account-actions .user-copy { display: none; }
+  .topbar-account-actions .user-button { gap: 0; padding: 1px; }
+  .topbar-account-actions .user-button:hover { background: transparent; }
+  .topbar-account-actions .locale-switcher-toggle,
+  .topbar-account-actions .mobile-chat-button,
+  .topbar-account-actions .notification-button { width: 44px; height: 44px; border: 1px solid var(--line); border-radius: 50%; background: #fff; }
+  .topbar-account-actions .locale-switcher-toggle:hover,
+  .topbar-account-actions .locale-switcher-toggle[aria-expanded="true"],
+  .topbar-account-actions .mobile-chat-button:hover,
+  .topbar-account-actions .mobile-chat-button:focus-visible,
+  .topbar-account-actions .notification-button:hover,
+  .topbar-account-actions .notification-button:focus-visible { color: var(--blue); border-color: var(--blue); background: var(--blue-soft); outline: none; }
+  .mobile-chat-button.mobile-chat-button-hidden { display: grid !important; }
+
+  .directory-page-shell > .directory-home-button,
+  .directory-page > .directory-home-button { display: none !important; }
+  .directory-heading { width: min(760px, 100%); margin-inline: auto; }
+  .directory-heading > .directory-controls,
+  .directory-heading > .organization-directory-filters { width: 100%; }
+  .directory-controls,
+  .organization-directory-filters { grid-auto-flow: column; grid-auto-columns: minmax(0, 1fr); gap: 12px; align-items: center; }
+  .directory-controls .desktop-directory-search,
+  .directory-controls .books-search-field,
+  .organization-directory-filters .books-search-field,
+  .directory-controls .directory-city-filter,
+  .directory-controls .directory-control-field,
+  .organization-directory-filters .directory-control-field { min-width: 0; width: 100%; height: 50px; margin: 0; }
+  .directory-controls .desktop-directory-search,
+  .directory-controls .books-search-field,
+  .organization-directory-filters .books-search-field,
+  .directory-controls .directory-city-filter { display: flex; align-items: center; padding: 0 15px; border: 1px solid var(--line); border-radius: 14px; background: #fff; box-shadow: none; }
+  .directory-controls .desktop-directory-search input,
+  .directory-controls .books-search-field input,
+  .organization-directory-filters .books-search-field input,
+  .directory-controls .directory-city-filter input { width: 100%; min-width: 0; height: 48px; padding: 0; border: 0; outline: 0; background: transparent; }
+  .directory-controls .custom-select,
+  .organization-directory-filters .custom-select,
+  .directory-controls .custom-select-trigger,
+  .organization-directory-filters .custom-select-trigger { width: 100%; height: 50px; }
+  .directory-controls .custom-select-trigger,
+  .organization-directory-filters .custom-select-trigger { border: 1px solid var(--line); border-radius: 14px; background: #fff; box-shadow: none; }
+  .directory-filter-controls { grid-template-columns: repeat(4, minmax(0, 1fr)); grid-auto-flow: row; }
+  .books-directory-controls,
+  .materials-directory-controls,
+  .organization-directory-filters.has-community-type { grid-template-columns: repeat(2, minmax(0, 1fr)); grid-auto-flow: row; }
+
+  .events-grid, .occasion-grid, .review-material-grid, .directory-material-grid { grid-template-columns: minmax(0, 1fr) !important; }
+  .event-card, .event-card-modern, .occasion-card, .material-preview-card { width: 100%; max-width: none; }
+  .publication-preview-card { border: 1px solid var(--line); border-radius: 16px; background: #fff; box-shadow: 0 8px 26px rgb(27 61 102 / 8%); font-style: normal; }
+  .publication-preview-card > p,
+  .plain-publication-text { color: var(--ink); font-style: normal; font-family: inherit; }
+
+  .directory-user-card > div:nth-child(2) p { display: -webkit-box; overflow: hidden; margin: 7px 0 0; color: var(--muted); line-height: 1.45; -webkit-box-orient: vertical; -webkit-line-clamp: 3; }
+  .profile-material-search { margin-top: 18px; }
+
+  .my-profile-page { width: min(1260px, calc(100% - 56px)); }
+  .my-profile-card { max-width: none; grid-template-columns: minmax(250px, 310px) minmax(0, 1fr); align-items: start; gap: 28px; border: 0; border-radius: 0; overflow: visible; background: transparent; box-shadow: none; }
+  .my-profile-aside, .my-profile-main { border: 1px solid var(--line); border-radius: 18px; background: #fff; color: var(--ink); }
+  .my-profile-aside { top: 20px; max-height: none; overflow: visible; padding: 28px; }
+  .my-profile-main { min-width: 0; padding: 28px; }
+  .my-profile-aside > .profile-nav { display: none !important; }
+  .profile-main-nav { display: flex; overflow-x: auto; gap: 5px; margin: 0 0 26px; border-bottom: 1px solid var(--line); scrollbar-width: thin; }
+  .profile-main-nav button { flex: 0 0 auto; border: 0; border-bottom: 2px solid transparent; padding: 12px 16px; color: #716960; background: transparent; cursor: pointer; white-space: nowrap; font-size: 11px; }
+  .profile-main-nav button.active { border-color: var(--blue); color: var(--blue); font-weight: 800; }
+  .profile-aside-birthday { margin-top: 6px !important; color: var(--muted) !important; font-size: 12px !important; }
+  .public-profile-modal, .public-profile-aside { overflow: visible; }
+  .public-profile-aside { max-height: none; overflow-y: visible; }
+  .public-profile-actions .tooltip-button::after { z-index: 250; }
+
+  .occasion-form-heading,
+  .occasion-type-label,
+  .occasion-adult-checkbox,
+  .occasion-adult-mark { display: none !important; }
 }

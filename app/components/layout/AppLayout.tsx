@@ -55,10 +55,10 @@ export function BookMeetHeader({
   return (
     <header className="topbar">
       <button className="brand brand-header-logo" type="button" onClick={onHome} aria-label={`Book Meet — ${t("common.home")}`}>
-        <img className="desktop-brand-mark" src="/book-meet-favicon-v2.png" alt="" aria-hidden="true" />
+        <img className="desktop-brand-mark" src="/desktop-brand/book-meet-mark.png" alt="" aria-hidden="true" />
         <img className="mobile-brand-logo" src="/book-meet-header-logo-v3.png" alt="" aria-hidden="true" />
       </button>
-      <div className="desktop-brand-title" aria-hidden="true">Book Meet</div>
+      <div className="desktop-brand-title" aria-hidden="true"><img src="/desktop-brand/book-meet-lettering.png" alt="" /></div>
       <nav className="topbar-menu topbar-menu-left" aria-label={t("nav.sectionsLeft")}>
         <button type="button" onClick={onBooks}>{t("nav.books")}</button>
         <button type="button" onClick={onPublishing}>{t("nav.publishing")}</button>

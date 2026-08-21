@@ -630,7 +630,14 @@ export function useBookMeetController() {
     if (openProfile) openOwnProfile();
   }
 
-  function closeOwnProfile() { goHome(); }
+  function closeOwnProfile() {
+    const state = window.history.state as { backgroundPath?: string } | null;
+    if (state?.backgroundPath && state.backgroundPath !== "/profile") {
+      window.history.back();
+      return;
+    }
+    goHome();
+  }
 
   function goHome() { navigateMainView("home"); setSelectedFriend(null); setChatExpanded(false); setProfileAction(null); setProfileEditId(null); }
   function startCreating(action: "review" | "excerpt" | "book") {
