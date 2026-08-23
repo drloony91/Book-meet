@@ -3,10 +3,10 @@ import * as XLSX from "xlsx";
 import { Avatar } from "../chat/ChatComponents";
 import type { Friend } from "../chat/types";
 import { CustomSelect } from "../common/CustomSelect";
-import { ModalIconActions } from "../modals/ModalIconActions";
+import { ModalIconActions, ResponsiveModalCloseButton } from "../modals/ModalIconActions";
 import { openReportDialog } from "../safety/SafetyCenter";
 import { SpoilerText, SpoilerTextarea } from "./text/SpoilerText";
-import { useRoutedPopup } from "../../navigation/routes";
+import { closeActiveMobileWorkflow, openMobileWorkflowRoute, useRoutedPopup } from "../../navigation/routes";
 import {
   catalogFromUsers,
   excerptReadingItemById,
@@ -90,7 +90,7 @@ export function EventForm({ initial, catalog = [], onCreateBook = () => undefine
   const [saving, setSaving] = useState(false);
   const field = (name: "title" | "summary" | "description" | "date" | "time" | "address" | "mapUrl" | "detailsUrl") => ({ value: value[name], onChange: (event: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement>) => setValue((current) => ({ ...current, [name]: event.target.value })) });
   return <form className="event-form" onSubmit={async (event) => { event.preventDefault(); setSaving(true); try { await onSave(value); } finally { setSaving(false); } }}>
-    <button className="modal-close" type="button" aria-label={t("common.close")} onClick={onCancel}>×</button>
+    <button className="modal-close" type="button" aria-label={t(typeof window !== "undefined" && window.matchMedia("(max-width: 800px)").matches ? "common.back" : "common.close")} onClick={onCancel}><span className="desktop-modal-close-glyph">×</span><span className="mobile-modal-back-glyph">{"<"}</span></button>
     <div className="profile-title-row"><div><span className="section-subtitle">{t("event.kazakhstan")}</span><h2>{initial ? t("event.edit") : t("event.suggest")}</h2></div></div>
     <fieldset className="material-books-field"><legend>{t("event.books")}</legend>{bookSlots.map((selectedId, index) => <EventBookSelector key={`${index}-${selectedId ?? "empty"}`} catalog={catalog} selectedId={selectedId} onSelect={(book) => { const next = bookSlots.map((id, slot) => slot === index ? book.id : id); setBookSlots(next); const ids = next.filter((id): id is number => Boolean(id)); setValue((current) => ({ ...current, relatedToBook: ids.length > 0, linkedBookId: ids[0], linkedBookIds: ids })); }} onClear={() => { const next = bookSlots.map((id, slot) => slot === index ? undefined : id); setBookSlots(next); const ids = next.filter((id): id is number => Boolean(id)); setValue((current) => ({ ...current, relatedToBook: ids.length > 0, linkedBookId: ids[0], linkedBookIds: ids })); }} onCreateBook={onCreateBook} />)}<button className="add-another-book" type="button" onClick={() => setBookSlots((current) => [...current, undefined])}>＋ {t("event.addBook")}</button></fieldset>
     <label>{t("event.title")}<input required maxLength={200} {...field("title")} /></label>
@@ -139,6 +139,18 @@ function useRequestedCommentsScroll(active: boolean, containerSelector: string, 
     const timer = window.setTimeout(() => scrollToComments(containerSelector), 0);
     return () => window.clearTimeout(timer);
   }, [active, containerSelector, identity]);
+}
+
+function useMobileContentRoute() {
+  const [mobile, setMobile] = useState(() => typeof window !== "undefined" && window.matchMedia("(max-width: 800px)").matches);
+  useEffect(() => {
+    const query = window.matchMedia("(max-width: 800px)");
+    const update = () => setMobile(query.matches);
+    update();
+    query.addEventListener("change", update);
+    return () => query.removeEventListener("change", update);
+  }, []);
+  return mobile;
 }
 
 export function MaterialActionBar({ likesCount = 0, commentsCount = 0, savesCount = 0, liked = false, saved = false, onToggleLike, onOpenComments, onToggleSave }: MaterialActionProps) {
@@ -340,7 +352,7 @@ export function EventModal({ item, users = [], catalog: canonicalCatalog = [], c
     else onOpenBook?.(bookId);
   };
   if (!routedPopup.active && !bookPopup) return null;
-  return <div className="modal-backdrop" onMouseDown={routedClose}><section className="event-modal" onMouseDown={(event) => event.stopPropagation()}>
+  return <div className="modal-backdrop entity-page-backdrop" onMouseDown={routedClose}><section className="event-modal" onMouseDown={(event) => event.stopPropagation()}>
     <ModalIconActions onEdit={onEdit} onDelete={onDelete} onReport={onReport} onClose={routedClose} />
     <header className="material-author-row"><div data-i18n-skip className={`author-dot ${eventOwner?.avatarUrl ? "has-photo" : ""}`} style={eventOwner?.avatarUrl ? { backgroundImage: `url(${eventOwner.avatarUrl})` } : undefined}>{!eventOwner?.avatarUrl && (eventOwner?.initials ?? item.creatorName.slice(0, 2))}</div><div><button className="inline-user-link" data-i18n-skip type="button" onClick={() => onOpenUser?.(item.creatorId)}>{eventOwner?.profile.name ?? item.creatorName}{eventOwner?.username ? ` (@${eventOwner.username})` : ""}</button><small>{t("material.typeEvent")} · <span data-i18n-skip>{displayMaterialDate(item.createdAt, locale)}</span></small></div></header>
     <EventStatusLabel status={item.status} />
@@ -418,7 +430,7 @@ export function OccasionForm({ initial, catalog = [], onCancel, onSave, submitLa
   const locationMissing = value.type === "invite" && (!value.meetingCity || !isSpecialLocation(value.meetingCity) && !value.meetingAddress);
   const bookMissing = value.type === "discuss" && !value.linkedBookId;
   return <form className="occasion-form" onSubmit={async (event) => { event.preventDefault(); if (!value.type || incompleteTime || targetMissing || locationMissing || bookMissing) return; setSaving(true); try { await onSave({ ...value, targetCities: value.type === "invite" ? [value.meetingCity] : value.targetCities }); } finally { setSaving(false); } }}>
-    <button className="modal-close" type="button" aria-label={t("common.close")} onClick={onCancel}>×</button>
+    <button className="modal-close" type="button" aria-label={t(typeof window !== "undefined" && window.matchMedia("(max-width: 800px)").matches ? "common.back" : "common.close")} onClick={onCancel}><span className="desktop-modal-close-glyph">×</span><span className="mobile-modal-back-glyph">{"<"}</span></button>
     <div className="profile-title-row occasion-form-heading"><div><span className="section-subtitle">{t("content.occasions")}</span><h2>{initial ? t("occasion.edit") : t("occasion.suggest")}</h2></div></div>
     <div><span className="occasion-type-label">{t("occasion.chooseType")}</span><div className="occasion-type-switch" role="group" aria-label={t("occasion.chooseType")}>{(["meet", "discuss", "invite"] as OccasionType[]).map((type) => <button className={value.type === type ? "active" : ""} type="button" key={type} aria-pressed={value.type === type} onClick={() => changeType(type)}>{t(`occasion.${type}`)}</button>)}</div></div>
     {value.type && <>
@@ -447,7 +459,7 @@ export function OccasionModal({ item, currentUser, users = [], onClose, onOpenUs
   if (!routedPopup.active) return null;
   const schedule = occasionDateLabel(item, locale);
   const labels = occasionFieldKeys[item.type];
-  return <div className="modal-backdrop" onMouseDown={routedClose}><section className="event-modal occasion-modal" onMouseDown={(event) => event.stopPropagation()}>
+  return <div className="modal-backdrop entity-page-backdrop" onMouseDown={routedClose}><section className="event-modal occasion-modal" onMouseDown={(event) => event.stopPropagation()}>
     <ModalIconActions onEdit={onEdit} onDelete={onDelete} onReport={onReport} onClose={routedClose} />
     {(() => { const owner = users.find((user) => user.id === item.creatorId); return <header className="material-author-row"><div data-i18n-skip className={`author-dot ${owner?.avatarUrl ? "has-photo" : ""}`} style={owner?.avatarUrl ? { backgroundImage: `url(${owner.avatarUrl})` } : undefined}>{!owner?.avatarUrl && (owner?.initials ?? item.creatorName.slice(0, 2))}</div><div><button className="inline-user-link" data-i18n-skip type="button" onClick={() => onOpenUser?.(item.creatorId)}>{owner?.profile.name ?? item.creatorName}{owner?.username ? ` (@${owner.username})` : ""}</button><small>{t("material.typeOccasion")} · <span data-i18n-skip>{displayMaterialDate(item.createdAt, locale)}</span></small></div></header>; })()}
     <EventStatusLabel status={item.status} />
@@ -477,8 +489,11 @@ export function PublisherNewsCard({ item, owner, onOpen, onOpenUser, ...actions 
 export function PublisherNewsModal({ item, owner, currentUser, users = [], catalog = [], onClose, onOpenUser, onEdit, onDelete, onReport }: { item: PublisherNews; owner?: DemoUser; currentUser?: DemoUser; users?: DemoUser[]; catalog?: (LibraryBook | AuthorBook)[]; onClose: () => void; onOpenUser: (id: number) => void; onEdit?: () => void; onDelete?: () => void; onReport?: () => void }) {
   const { t, domainLabel } = useI18n();
   const community = owner?.profile.type === "Сообщество";
-  useRequestedCommentsScroll(true, ".publisher-news-modal", item.id);
-  return <div className="modal-backdrop" onMouseDown={onClose}><section className="reading-modal publisher-news-modal" onMouseDown={(event) => event.stopPropagation()}><ModalIconActions onEdit={onEdit} onDelete={onDelete} onReport={onReport} onClose={onClose} /><header className="material-author-row"><div data-i18n-skip className={`author-dot ${owner?.avatarUrl ? "has-photo" : ""}`} style={owner?.avatarUrl ? { backgroundImage: `url(${owner.avatarUrl})` } : undefined}>{!owner?.avatarUrl && (owner?.initials ?? "BM")}</div><div><button className="inline-user-link" data-i18n-skip type="button" onClick={() => onOpenUser(item.ownerId)}>{owner?.profile.name ?? domainLabel(community ? "Сообщество" : "Издатель")}{owner?.username ? ` (@${owner.username})` : ""}</button><small>{t(community ? "material.typeCommunityNews" : "material.typePublisherNews")} · <span data-i18n-skip>{item.createdAt}</span></small></div></header><h2 data-i18n-skip>{item.title}</h2><p className="reading-preview" data-i18n-skip>{item.previewText}</p><div className="reading-text rich-reading-text" data-i18n-skip dangerouslySetInnerHTML={{ __html: renderRichHtml(item.bodyHtml, catalog.length ? catalog : catalogFromUsers(users), { inlineImageAlt: t("editor.inlineImage"), noAnnotation: t("book.noAnnotation") }) }} /><MaterialEngagement kind="publisher_news" materialId={item.id} ownerId={item.ownerId} currentUser={currentUser} users={users.length ? users : owner ? [owner] : []} onOpenUser={onOpenUser} /></section></div>;
+  const mobileRoute = useMobileContentRoute();
+  const routedPopup = useRoutedPopup(`/publishing/${item.id}`, "/publishing", onClose, `${item.title} — Book Meet`, mobileRoute);
+  useRequestedCommentsScroll(routedPopup.active, ".publisher-news-modal", item.id);
+  if (!routedPopup.active) return null;
+  return <div className="modal-backdrop entity-page-backdrop" onMouseDown={routedPopup.close}><section className="reading-modal publisher-news-modal" onMouseDown={(event) => event.stopPropagation()}><ModalIconActions onEdit={onEdit} onDelete={onDelete} onReport={onReport} onClose={routedPopup.close} /><header className="material-author-row"><div data-i18n-skip className={`author-dot ${owner?.avatarUrl ? "has-photo" : ""}`} style={owner?.avatarUrl ? { backgroundImage: `url(${owner.avatarUrl})` } : undefined}>{!owner?.avatarUrl && (owner?.initials ?? "BM")}</div><div><button className="inline-user-link" data-i18n-skip type="button" onClick={() => onOpenUser(item.ownerId)}>{owner?.profile.name ?? domainLabel(community ? "Сообщество" : "Издатель")}{owner?.username ? ` (@${owner.username})` : ""}</button><small>{t(community ? "material.typeCommunityNews" : "material.typePublisherNews")} · <span data-i18n-skip>{item.createdAt}</span></small></div></header><h2 data-i18n-skip>{item.title}</h2><p className="reading-preview" data-i18n-skip>{item.previewText}</p><div className="reading-text rich-reading-text" data-i18n-skip dangerouslySetInnerHTML={{ __html: renderRichHtml(item.bodyHtml, catalog.length ? catalog : catalogFromUsers(users), { inlineImageAlt: t("editor.inlineImage"), noAnnotation: t("book.noAnnotation") }) }} /><MaterialEngagement kind="publisher_news" materialId={item.id} ownerId={item.ownerId} currentUser={currentUser} users={users.length ? users : owner ? [owner] : []} onOpenUser={onOpenUser} /></section></div>;
 }
 
 export function HomeScopeSwitch({ city, country, value, onChange }: { city: string; country?: string; value: "country" | "city"; onChange: (value: "country" | "city") => void }) {
@@ -539,7 +554,7 @@ export function ReadingModal({ item, currentUser, users = [], catalog: canonical
   // closing the book restores both the previous popup and its URL.
   if (!routedPopup.active && !bookPopup) return null;
   return (
-    <div className="modal-backdrop" role="presentation" onMouseDown={routedClose}>
+    <div className="modal-backdrop entity-page-backdrop" role="presentation" onMouseDown={routedClose}>
       <article className="reading-modal" role="dialog" aria-modal="true" aria-labelledby={item.kind === "review" ? "reading-title" : undefined} aria-label={item.kind === "excerpt" ? t("material.typePublication") : undefined} onMouseDown={(event) => event.stopPropagation()}>
         <ModalIconActions onEdit={onEdit} onDelete={onDelete} onReport={onReport} onClose={routedClose} />
         <header className="material-author-row"><div data-i18n-skip className={`author-dot ${materialOwner?.avatarUrl ? "has-photo" : ""}`} style={materialOwner?.avatarUrl ? { backgroundImage: `url(${materialOwner.avatarUrl})` } : undefined}>{!materialOwner?.avatarUrl && (materialOwner?.initials ?? item.author.slice(0, 2))}</div><div>{item.ownerId ? <button className="inline-user-link" data-i18n-skip type="button" onClick={() => onOpenUser?.(item.ownerId!)}>{materialOwner?.profile.name ?? item.author}{materialOwner?.username ? ` (@${materialOwner.username})` : ""}</button> : <strong data-i18n-skip>{item.author}</strong>}<small>{item.kind === "review" ? t("material.typeReview") : t("material.typePublication")}{item.createdAt ? ` · ${item.createdAt}` : ""}{item.isAdult ? " · 18+" : ""}</small></div></header>
@@ -608,7 +623,7 @@ function PublicProfileDetails({ user }: { user: DemoUser }) {
   </div>;
 }
 
-export function UserProfileModal({ user, viewer, users, catalog, profileFriends = [], profileCommunities = [], events = [], occasions = [], likes, friendCount, followerCount = 0, relationship, incomingMessage, isFollowing, canMessage, blockedByMe = false, onClose, onAddFriend, onCancelFriendRequest, onAccept, onReject, onRemoveFriend, onOpenChat, onFollow, onUnfollow, onBlock, onUnblock, onReport, onToggleLike, onComment, onOpenUser }: { user: DemoUser; viewer: DemoUser; users: DemoUser[]; catalog: (LibraryBook | AuthorBook)[]; profileFriends?: DemoUser[]; profileCommunities?: DemoUser[]; events?: BookEvent[]; occasions?: Occasion[]; likes: Record<string, number[]>; friendCount: number; followerCount?: number; relationship: SocialRelationship; incomingMessage?: string; isFollowing: boolean; canMessage: boolean; blockedByMe?: boolean; onClose: () => void; onAddFriend: (message: string) => void; onCancelFriendRequest: () => Promise<void>; onAccept: () => void; onReject: (comment: string) => void; onRemoveFriend: () => void; onOpenChat: () => void; onFollow: () => void; onUnfollow: () => Promise<void>; onBlock?: () => Promise<void>; onUnblock?: () => Promise<void>; onReport?: () => void; onToggleLike: (item: ReadingItem) => void; onComment: (item: ReadingItem, text: string) => Promise<MaterialComment | null>; onOpenUser: (userId: number) => void }) {
+export function UserProfileModal({ user, viewer, users, catalog, profileFriends = [], profileFollowers = [], profileFollowing = [], profileCommunities = [], events = [], occasions = [], likes, friendCount, followerCount = 0, relationship, incomingMessage, isFollowing, canMessage, blockedByMe = false, onClose, onAddFriend, onCancelFriendRequest, onAccept, onReject, onRemoveFriend, onOpenChat, onFollow, onUnfollow, onBlock, onUnblock, onReport, onToggleLike, onComment, onOpenUser }: { user: DemoUser; viewer: DemoUser; users: DemoUser[]; catalog: (LibraryBook | AuthorBook)[]; profileFriends?: DemoUser[]; profileFollowers?: DemoUser[]; profileFollowing?: DemoUser[]; profileCommunities?: DemoUser[]; events?: BookEvent[]; occasions?: Occasion[]; likes: Record<string, number[]>; friendCount: number; followerCount?: number; relationship: SocialRelationship; incomingMessage?: string; isFollowing: boolean; canMessage: boolean; blockedByMe?: boolean; onClose: () => void; onAddFriend: (message: string) => void; onCancelFriendRequest: () => Promise<void>; onAccept: () => void; onReject: (comment: string) => void; onRemoveFriend: () => void; onOpenChat: () => void; onFollow: () => void; onUnfollow: () => Promise<void>; onBlock?: () => Promise<void>; onUnblock?: () => Promise<void>; onReport?: () => void; onToggleLike: (item: ReadingItem) => void; onComment: (item: ReadingItem, text: string) => Promise<MaterialComment | null>; onOpenUser: (userId: number) => void }) {
   const { t, domainLabel } = useI18n();
   const routedPopup = useRoutedPopup(`/users/${user.id}`, "/users", onClose, `${user.profile.name} — Book Meet`);
   const routedClose = routedPopup.close;
@@ -637,6 +652,7 @@ export function UserProfileModal({ user, viewer, users, catalog, profileFriends 
       ? "read"
       : user.books.some((book) => book.readingStatus === "reading") ? "reading" : "want",
   );
+  const [mobileSocialView, setMobileSocialView] = useState<"friends" | "followers" | "following" | "communities" | null>(null);
   const commonBooks = viewer.books.filter((book) => user.books.some((other) => other.title.toLowerCase() === book.title.toLowerCase() && other.author.toLowerCase() === book.author.toLowerCase()));
   const commonFavoriteGenres = viewer.profile.favoriteGenres.filter((genre) => user.profile.favoriteGenres.includes(genre));
   const commonDislikedGenres = viewer.profile.dislikedGenres.filter((genre) => user.profile.dislikedGenres.includes(genre));
@@ -665,12 +681,18 @@ export function UserProfileModal({ user, viewer, users, catalog, profileFriends 
     ...publicEvents.map((item) => ({ type: "event" as const, id: item.id, createdAt: item.createdAt, searchable: `${item.title} ${item.summary} ${item.description}`, item })),
     ...publicOccasions.map((item) => ({ type: "occasion" as const, id: item.id, createdAt: item.createdAt, searchable: `${item.primaryText} ${item.audienceText}`, item })),
   ].filter((entry) => !materialQuery || entry.searchable.toLocaleLowerCase().includes(materialQuery.toLocaleLowerCase())).sort((left, right) => Date.parse(right.createdAt ?? "") - Date.parse(left.createdAt ?? ""));
+  const mobileSocialUsers = mobileSocialView === "friends" ? profileFriends : mobileSocialView === "followers" ? profileFollowers : mobileSocialView === "following" ? profileFollowing : profileCommunities;
+  const mobileSocialTitle = mobileSocialView === "friends" ? t("profile.friends") : mobileSocialView === "followers" ? t("profile.followers") : mobileSocialView === "following" ? t("profile.subscriptions") : t("profile.communities");
 
   useEffect(() => {
-    const close = (event: KeyboardEvent) => event.key === "Escape" && routedClose();
+    const close = (event: KeyboardEvent) => {
+      if (event.key !== "Escape") return;
+      if (mobileSocialView) setMobileSocialView(null);
+      else routedClose();
+    };
     window.addEventListener("keydown", close);
     return () => window.removeEventListener("keydown", close);
-  }, [routedClose]);
+  }, [mobileSocialView, routedClose]);
 
   useEffect(() => {
     const timeout = window.setTimeout(() => { setMaterialQuery(materialQueryDraft.trim()); setShownMaterials(12); }, 260);
@@ -690,18 +712,20 @@ export function UserProfileModal({ user, viewer, users, catalog, profileFriends 
   return (
     <div className="modal-backdrop profile-overlay-top" role="presentation" onMouseDown={routedClose}>
       <section className="public-profile-modal" role="dialog" aria-modal="true" aria-labelledby="public-profile-title" onMouseDown={(event) => event.stopPropagation()}>
+        {mobileSocialView && <section className="mobile-public-profile-social" aria-labelledby="mobile-public-profile-social-title"><header><button type="button" aria-label={t("common.back")} onClick={() => setMobileSocialView(null)}>{"<"}</button><h2 id="mobile-public-profile-social-title">{mobileSocialTitle}</h2></header><div>{mobileSocialUsers.map((profileUser) => <button type="button" className="mobile-public-profile-person" key={profileUser.id} onClick={() => { setMobileSocialView(null); onOpenUser(profileUser.id); }}><span className={`avatar avatar-sm avatar-${profileUser.color} ${profileUser.avatarUrl ? "has-photo" : ""}`} style={profileUser.avatarUrl ? { backgroundImage: `url(${profileUser.avatarUrl})` } : undefined}>{!profileUser.avatarUrl && profileUser.initials}</span><span><strong data-i18n-skip>{profileUser.profile.name}</strong><small data-i18n-skip>@{profileUser.username}</small></span></button>)}</div>{!mobileSocialUsers.length && <p>{t("common.empty")}</p>}</section>}
         <div className="modal-icon-actions public-profile-icon-actions">
           {onReport && <button className="modal-tool-button modal-report-button" type="button" onClick={onReport} data-tooltip={t("safety.report")} aria-label={t("safety.report")}><svg viewBox="0 0 24 24"><path d="M12 3 2.8 20h18.4L12 3Z" /><path d="M12 9v5m0 3h.01" /></svg></button>}
           {!blockedByMe && onBlock && <button className="modal-tool-button modal-report-button public-profile-block-button" type="button" onClick={() => void onBlock()} data-tooltip={viewer.isAdmin ? t("profile.blockSite") : t("profile.block")} aria-label={t("profile.block")}><svg viewBox="0 0 24 24"><rect x="5" y="10" width="14" height="11" rx="2" /><path d="M8 10V7a4 4 0 0 1 8 0v3" /></svg></button>}
           {blockedByMe && onUnblock && <button className="modal-tool-button modal-report-button public-profile-block-button" type="button" onClick={() => setUnblockConfirm(true)} data-tooltip={t("profile.unblock")} aria-label={t("profile.unblock")}><svg viewBox="0 0 24 24"><rect x="5" y="10" width="14" height="11" rx="2" /><path d="M9 10V7a4 4 0 0 1 7-2" /></svg></button>}
         </div>
-        <button className="back-button public-profile-back" type="button" onClick={routedClose}>← {t("common.back")}</button>
+        <button className="back-button public-profile-back" type="button" aria-label={t("common.back")} onClick={routedClose}><span className="public-profile-back-desktop">← {t("common.back")}</span><span className="public-profile-back-mobile">{"<"}</span></button>
         <div className="public-profile-cover" />
         <div className="public-profile-body">
           <aside className="public-profile-aside">
           <div className={`avatar avatar-lg avatar-${user.color} ${user.avatarUrl ? "has-photo" : ""}`} style={user.avatarUrl ? { backgroundImage: `url(${user.avatarUrl})` } : undefined}>{!user.avatarUrl && user.initials}{user.online && <span className="online-dot" />}</div>
           <h2 id="public-profile-title" data-i18n-skip style={{ fontSize: `${Math.max(16, 30 - Math.max(0, user.profile.name.length - 18) * .5)}px` }}>{user.profile.name}</h2><p className="public-profile-username" data-i18n-skip style={{ fontSize: `${Math.max(10, 14 - Math.max(0, user.username.length - 20) * .25)}px` }}>@{user.username}</p><p className="profile-location">{domainLabel(user.profile.type)}{user.profile.city && <> · ⌖ <span data-i18n-skip>{user.profile.city}</span></>}</p>{user.profile.birthDate && <p className="profile-birthday">{t("profile.birthDate")}: <span data-i18n-skip>{user.profile.birthDate.slice(5).split("-").reverse().join(".")}</span></p>}
-          <div className="profile-social-summary"><span>{t("profile.followerCount", { count: followerCount })}</span><i aria-hidden="true" /><span>{t("profile.friendCount", { count: friendCount })}</span></div>
+          <div className="profile-social-summary public-profile-social-desktop"><span>{t("profile.followerCount", { count: followerCount })}</span><i aria-hidden="true" /><span>{t("profile.friendCount", { count: friendCount })}</span></div>
+          <div className="mobile-public-profile-social-links"><button type="button" onClick={() => setMobileSocialView("friends")}><strong>{friendCount}</strong><span>{t("profile.friends")}</span></button><button type="button" onClick={() => setMobileSocialView("followers")}><strong>{followerCount}</strong><span>{t("profile.followers")}</span></button><button type="button" onClick={() => setMobileSocialView("following")}><strong>{profileFollowing.length}</strong><span>{t("profile.subscriptions")}</span></button><button type="button" onClick={() => setMobileSocialView("communities")}><strong>{profileCommunities.length}</strong><span>{t("profile.communities")}</span></button></div>
           <div className="public-profile-actions">
             {blockedByMe && <><span className="blocked-profile-label">{t("profile.blockedByYou")}</span><button className="outline-button" type="button" onClick={() => setUnblockConfirm(true)}>{t("profile.unblock")}</button></>}
             {!blockedByMe && <>
@@ -775,7 +799,7 @@ export function UnifiedBookModal({ book: sourceBook, users, catalog = [], viewer
   const canAddToLibrary = Boolean(effectiveViewer && !["Издатель", "Сообщество"].includes(effectiveViewer.profile.type) && !effectiveViewer.books.some((item) => (item.catalogBookId ?? item.id) === catalogBookId));
   if (!routedPopup.active && !openedReview && !retainWhenInactive) return null;
   return (
-    <div className={nested ? "nested-modal-backdrop" : "modal-backdrop"} onMouseDown={routedClose}>
+    <div className={`${nested ? "nested-modal-backdrop" : "modal-backdrop"} entity-page-backdrop`} onMouseDown={routedClose}>
       <section className="unified-book-modal" onMouseDown={(event) => event.stopPropagation()}>
         <ModalIconActions onEdit={onEdit} onDelete={onDelete} onReport={onReport} onClose={routedClose} />
         <div className="unified-book-layout">
@@ -1110,9 +1134,9 @@ export function BookEditor({ book, catalog, top3Count = 0, onClose, onSave }: { 
   }
 
   return (
-    <div className="modal-backdrop" role="presentation" onMouseDown={onClose}>
+    <div className="modal-backdrop workflow-page-backdrop" role="presentation" onMouseDown={onClose}>
       <section className="book-editor" role="dialog" aria-modal="true" aria-labelledby="book-editor-title" onMouseDown={(event) => event.stopPropagation()}>
-        <button className="modal-close" type="button" onClick={onClose} aria-label={t("common.close")}>×</button>
+        <ResponsiveModalCloseButton onClose={onClose} />
         <div className="book-editor-heading"><span className="section-subtitle">{t("profile.library")}</span><h2 id="book-editor-title">{book ? t("book.edit") : t("content.addBook")}</h2><p>{t("form.requiredHint")}</p></div>
         <form className="book-form" onSubmit={submit}>
           <div className="cover-upload-column">
@@ -1205,12 +1229,12 @@ export function ReadingStatsModal({ books, users, onClose }: { books: LibraryBoo
   </section></div>;
 }
 
-export function LibraryTab({ books, setBooks, userId, users, catalog = [], initialAdd = false }: { books: LibraryBook[]; setBooks: React.Dispatch<React.SetStateAction<LibraryBook[]>>; userId: number; users: DemoUser[]; catalog?: (LibraryBook | AuthorBook)[]; initialAdd?: boolean }) {
+export function LibraryTab({ books, setBooks, userId, users, catalog = [], initialAdd = false, initialEditId }: { books: LibraryBook[]; setBooks: React.Dispatch<React.SetStateAction<LibraryBook[]>>; userId: number; users: DemoUser[]; catalog?: (LibraryBook | AuthorBook)[]; initialAdd?: boolean; initialEditId?: number | null }) {
   const { t } = useI18n();
   const canonicalCatalog = catalog.length ? catalog : catalogFromUsers(users);
   const [view, setView] = useState<LibraryView>("grid");
   const [statusFilter, setStatusFilter] = useState<"want" | "reading" | "read">("read");
-  const [editingBook, setEditingBook] = useState<LibraryBook | null | undefined>(() => initialAdd ? null : undefined);
+  const [editingBook, setEditingBook] = useState<LibraryBook | null | undefined>(() => initialEditId ? books.find((item) => item.id === initialEditId) : initialAdd ? null : undefined);
   const [viewingBook, setViewingBook] = useState<LibraryBook | null>(null);
   const [statsOpen, setStatsOpen] = useState(false);
   const [importing, setImporting] = useState(false);
@@ -1276,6 +1300,7 @@ export function LibraryTab({ books, setBooks, userId, users, catalog = [], initi
       const savedBook = { ...book, id: data.bookId, catalogBookId: book.catalogBookId ?? data.bookId, topRank: data.topRank };
       setBooks((current) => current.some((item) => item.id === book.id) ? current.map((item) => item.id === book.id ? savedBook : item) : [savedBook, ...current]);
       setEditingBook(undefined);
+      closeActiveMobileWorkflow("/profile/library");
     } catch (error) { console.warn(error); window.alert(t("book.saveConnectionError")); }
   }
 
@@ -1283,7 +1308,7 @@ export function LibraryTab({ books, setBooks, userId, users, catalog = [], initi
     <div className="library-tab">
       <div className="profile-title-row library-title-row">
         <div><h1>{t("profile.library")}</h1><button className="library-reading-summary" type="button" onClick={() => setStatsOpen(true)}><span>{t("library.monthRead", { month: t(readingMonthsPrepositional[currentMonth - 1]), count: monthReadCount, books: booksWord(monthReadCount) })}</span><i aria-hidden="true" /><span>{t("library.yearRead", { year: currentYear, count: yearReadCount, books: booksWord(yearReadCount) })}</span></button><div className="library-status-summary"><span>{t("library.wantSummary", { count: wantCount, books: booksWord(wantCount) })}</span><i aria-hidden="true" /><span>{t("library.readingSummary", { count: readingCount, books: booksWord(readingCount) })}</span></div></div>
-        <div className="library-import-actions"><button className="outline-button" type="button" disabled={importing} onClick={() => importInputRef.current?.click()}>{importing ? t("library.importing") : t("library.import")}</button><input ref={importInputRef} type="file" hidden accept=".csv,.xls,.xlsx" onChange={(event) => { void importBooks(event.target.files?.[0]); event.currentTarget.value = ""; }} /><button className="primary-button creation-action-button" type="button" onClick={() => setEditingBook(null)}>＋ {t("content.addBook")}</button></div>
+        <div className="library-import-actions"><button className="outline-button" type="button" disabled={importing} onClick={() => importInputRef.current?.click()}>{importing ? t("library.importing") : t("library.import")}</button><input ref={importInputRef} type="file" hidden accept=".csv,.xls,.xlsx" onChange={(event) => { void importBooks(event.target.files?.[0]); event.currentTarget.value = ""; }} /><button className="primary-button creation-action-button" type="button" onClick={() => { openMobileWorkflowRoute({ mode: "create", kind: "book" }); setEditingBook(null); }}>＋ {t("content.addBook")}</button></div>
       </div>
       <div className="library-toolbar">
         <div className="library-status-filter" role="group" aria-label={t("library.statusFilter")}><button className={statusFilter === "want" ? "active" : ""} type="button" onClick={() => setStatusFilter("want")}>{t("content.want")}</button><button className={statusFilter === "reading" ? "active" : ""} type="button" onClick={() => setStatusFilter("reading")}>{t("content.reading")}</button><button className={statusFilter === "read" ? "active" : ""} type="button" onClick={() => setStatusFilter("read")}>{t("content.readDone")}</button></div>
@@ -1307,8 +1332,8 @@ export function LibraryTab({ books, setBooks, userId, users, catalog = [], initi
           </article>
         ))}
       </div>
-      {editingBook !== undefined && <BookEditor book={editingBook} catalog={canonicalCatalog} top3Count={books.filter((item) => item.topRank).length} onClose={() => setEditingBook(undefined)} onSave={saveBook} />}
-      {viewingBook && <UnifiedBookModal book={viewingBook} users={users} catalog={canonicalCatalog} onClose={() => setViewingBook(null)} onEdit={() => { setEditingBook(viewingBook); setViewingBook(null); }} onDelete={async () => { if (!window.confirm(t("library.deleteConfirm", { title: viewingBook.title }))) return; const response = await fetch(`/api/books/${viewingBook.id}`, { method: "DELETE", credentials: "same-origin" }); if (!response.ok) { window.alert(t("book.deleteError")); return; } setBooks((current) => current.filter((book) => book.id !== viewingBook.id)); setViewingBook(null); }} />}
+      {editingBook !== undefined && <BookEditor book={editingBook} catalog={canonicalCatalog} top3Count={books.filter((item) => item.topRank).length} onClose={() => { setEditingBook(undefined); closeActiveMobileWorkflow("/profile/library"); }} onSave={saveBook} />}
+      {viewingBook && <UnifiedBookModal book={viewingBook} users={users} catalog={canonicalCatalog} onClose={() => setViewingBook(null)} onEdit={() => { openMobileWorkflowRoute({ mode: "edit", kind: "book", id: viewingBook.id }); setEditingBook(viewingBook); setViewingBook(null); }} onDelete={async () => { if (!window.confirm(t("library.deleteConfirm", { title: viewingBook.title }))) return; const response = await fetch(`/api/books/${viewingBook.id}`, { method: "DELETE", credentials: "same-origin" }); if (!response.ok) { window.alert(t("book.deleteError")); return; } setBooks((current) => current.filter((book) => book.id !== viewingBook.id)); setViewingBook(null); }} />}
       {statsOpen && <ReadingStatsModal books={books} users={users} onClose={() => setStatsOpen(false)} />}
     </div>
   );
@@ -1330,9 +1355,9 @@ export function ReviewEditor({ review, catalog, onClose, onSave }: { review?: Us
   }
 
   return (
-    <div className="modal-backdrop" role="presentation" onMouseDown={onClose}>
+    <div className="modal-backdrop workflow-page-backdrop" role="presentation" onMouseDown={onClose}>
       <section className="review-editor blog-editor-modal" role="dialog" aria-modal="true" aria-labelledby="review-editor-title" onMouseDown={(event) => event.stopPropagation()}>
-        <button className="modal-close" type="button" onClick={onClose} aria-label={t("common.close")}>×</button>
+        <ResponsiveModalCloseButton onClose={onClose} />
         <span className="section-subtitle">{t("profile.reviews")}</span><h2 id="review-editor-title">{review ? t("review.edit") : t("review.add")}</h2>
         <form className="book-fields" onSubmit={submit}>
           <fieldset className="material-books-field required-book-field"><legend>{t("review.book")} *</legend><EventBookSelector catalog={catalog} selectedId={form.bookId} onSelect={(book) => setForm({ ...form, bookId: book.id, bookTitle: book.title, bookAuthor: book.author })} onClear={() => setForm({ ...form, bookId: undefined, bookTitle: "", bookAuthor: "" })} onCreateBook={() => undefined} /></fieldset>
@@ -1355,7 +1380,7 @@ export function ReviewsTab({ reviews, setReviews, owner, users, catalog = [], li
 
   return (
     <div className="reviews-tab">
-      <div className="profile-title-row library-title-row"><div><h1>{t("profile.reviews")}</h1><p>{t("review.publishedCount", { count: reviews.length })}</p></div><button className="primary-button creation-action-button" type="button" onClick={() => setEditing(null)}>＋ {t("review.add")}</button></div>
+      <div className="profile-title-row library-title-row"><div><h1>{t("profile.reviews")}</h1><p>{t("review.publishedCount", { count: reviews.length })}</p></div><button className="primary-button creation-action-button" type="button" onClick={() => { openMobileWorkflowRoute({ mode: "create", kind: "review" }); setEditing(null); }}>＋ {t("review.add")}</button></div>
       <div className="my-reviews-list">
         {reviews.map((review) => { const matchingBook = canonicalCatalog.find((book) => book.title.toLowerCase() === review.bookTitle.toLowerCase() && book.author.toLowerCase() === review.bookAuthor.toLowerCase()); return (
           <article data-i18n-skip className="my-review-row material-clickable-card" role="button" tabIndex={0} key={review.id} onClick={() => setSelected(review)} onKeyDown={(event) => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); setSelected(review); } }}>
@@ -1364,8 +1389,8 @@ export function ReviewsTab({ reviews, setReviews, owner, users, catalog = [], li
           </article>
         ); })}
       </div>
-      {selected && (() => { const item: ReadingItem = { id: selected.id, kind: "review", title: selected.bookTitle, author: `${owner.profile.name} · ★ ${selected.rating}`, text: selected.fullText, bodyHtml: selected.bodyHtml, linkedBookId: selected.bookId, ownerId: owner.id, createdAt: selected.createdAt, preview: selected.preview, bookAuthor: selected.bookAuthor }; return <ReadingModal item={item} currentUser={owner} users={users} catalog={canonicalCatalog} likedUserIds={likes[`review-${selected.id}`] ?? []} onToggleLike={() => onToggleLike(item)} onComment={(text) => onComment(item, text)} onOpenUser={onOpenUser} onClose={() => setSelected(null)} onEdit={() => { setEditing(selected); setSelected(null); }} onDelete={() => { if (window.confirm(t("review.deleteConfirm", { title: selected.bookTitle }))) { setReviews((current) => current.filter((review) => review.id !== selected.id)); setSelected(null); } }} />; })()}
-      {editing !== undefined && <ReviewEditor review={editing} catalog={canonicalCatalog} onClose={() => setEditing(undefined)} onSave={(review) => { setReviews((current) => current.some((item) => item.id === review.id) ? current.map((item) => item.id === review.id ? review : item) : [review, ...current]); setEditing(undefined); }} />}
+      {selected && (() => { const item: ReadingItem = { id: selected.id, kind: "review", title: selected.bookTitle, author: `${owner.profile.name} · ★ ${selected.rating}`, text: selected.fullText, bodyHtml: selected.bodyHtml, linkedBookId: selected.bookId, ownerId: owner.id, createdAt: selected.createdAt, preview: selected.preview, bookAuthor: selected.bookAuthor }; return <ReadingModal item={item} currentUser={owner} users={users} catalog={canonicalCatalog} likedUserIds={likes[`review-${selected.id}`] ?? []} onToggleLike={() => onToggleLike(item)} onComment={(text) => onComment(item, text)} onOpenUser={onOpenUser} onClose={() => setSelected(null)} onEdit={() => { openMobileWorkflowRoute({ mode: "edit", kind: "review", id: selected.id }); setEditing(selected); setSelected(null); }} onDelete={() => { if (window.confirm(t("review.deleteConfirm", { title: selected.bookTitle }))) { setReviews((current) => current.filter((review) => review.id !== selected.id)); setSelected(null); } }} />; })()}
+      {editing !== undefined && <ReviewEditor review={editing} catalog={canonicalCatalog} onClose={() => { setEditing(undefined); closeActiveMobileWorkflow("/profile/reviews"); }} onSave={(review) => { setReviews((current) => current.some((item) => item.id === review.id) ? current.map((item) => item.id === review.id ? review : item) : [review, ...current]); setEditing(undefined); closeActiveMobileWorkflow("/profile/reviews"); }} />}
     </div>
   );
 }
@@ -1451,9 +1476,9 @@ export function WriterBookEditor({ book, author, allowFreeAuthor = false, onClos
       links: upsertSourceLink(current.links, product),
     }));
   }
-  return <div className="modal-backdrop" onMouseDown={onClose}>
+  return <div className="modal-backdrop workflow-page-backdrop" onMouseDown={onClose}>
     <section className="book-editor" onMouseDown={(event) => event.stopPropagation()}>
-      <button className="modal-close" aria-label={t("common.close")} type="button" onClick={onClose}>×</button>
+      <ResponsiveModalCloseButton onClose={onClose} />
       <div className="book-editor-heading"><span className="section-subtitle">{t("authorBooks.mine")}</span><h2>{book ? t("book.edit") : t("content.addBook")}</h2></div>
       <form className="book-form" onSubmit={(event) => { event.preventDefault(); onSave({ ...form, links: form.links.filter((link) => link.label.trim() && link.url.trim()) }); }}>
         <div className="cover-upload-column">
@@ -1637,7 +1662,7 @@ export function RichTextEditor({ value, onChange, catalog = [] }: { value: strin
 export function PublisherNewsEditor({ item, catalog = [], communityMode = false, onClose, onSave }: { item: PublisherNews; catalog?: (LibraryBook | AuthorBook)[]; communityMode?: boolean; onClose: () => void; onSave: (item: PublisherNews) => void }) {
   const { t } = useI18n();
   const [form, setForm] = useState(item);
-  return <div className="modal-backdrop" onMouseDown={onClose}><section className="review-editor blog-editor-modal publisher-news-editor" onMouseDown={(event) => event.stopPropagation()}><button className="modal-close" aria-label={t("common.close")} type="button" onClick={onClose}>×</button><h2>{item.id ? t("news.edit") : t("news.add")}</h2><form className="book-fields" onSubmit={(event) => { event.preventDefault(); const bodyHtml = sanitizeRichHtml(form.bodyHtml ?? "", t("editor.inlineImage")); onSave({ ...form, title: form.title.trim(), previewText: form.previewText.trim().slice(0, 500), bodyHtml, body: bodyHtml.replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim() }); }}>
+  return <div className="modal-backdrop workflow-page-backdrop" onMouseDown={onClose}><section className="review-editor blog-editor-modal publisher-news-editor" onMouseDown={(event) => event.stopPropagation()}><ResponsiveModalCloseButton onClose={onClose} /><h2>{item.id ? t("news.edit") : t("news.add")}</h2><form className="book-fields" onSubmit={(event) => { event.preventDefault(); const bodyHtml = sanitizeRichHtml(form.bodyHtml ?? "", t("editor.inlineImage")); onSave({ ...form, title: form.title.trim(), previewText: form.previewText.trim().slice(0, 500), bodyHtml, body: bodyHtml.replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim() }); }}>
     <label>{t("content.title")}<input required value={form.title} onChange={(event) => setForm({ ...form, title: event.target.value })} /></label>
     <div className="blog-composer"><span className="field-label blog-composer-title">{t("news.whatsNew")}</span><label className="blog-text-block blog-preview-field"><span className="blog-block-title">{t("news.previewHint")}</span><textarea required rows={7} maxLength={500} placeholder={t("news.previewPlaceholder")} value={form.previewText} onChange={(event) => setForm({ ...form, previewText: event.target.value })} /><small className={form.previewText.length >= 500 ? "limit-reached" : ""}>{form.previewText.length}/500</small></label><div className="blog-text-block blog-rich-block"><span className="blog-block-title">{t("news.bodyHint")}</span><RichTextEditor value={form.bodyHtml ?? ""} onChange={(bodyHtml) => setForm({ ...form, bodyHtml })} catalog={catalog} /></div></div>
     <label className="adult-material-checkbox"><input type="checkbox" checked={Boolean(form.isAdult)} onChange={(event) => setForm({ ...form, isAdult: event.target.checked })} />{t("news.adult")}</label>
@@ -1645,7 +1670,7 @@ export function PublisherNewsEditor({ item, catalog = [], communityMode = false,
   </form></section></div>;
 }
 
-export function PublisherNewsTab({ news, setNews, owner, users = [owner], catalog = [], canCreate = true, communityMode = false }: {
+export function PublisherNewsTab({ news, setNews, owner, users = [owner], catalog = [], canCreate = true, communityMode = false, initialAdd = false, initialEditId }: {
   news: PublisherNews[];
   setNews: React.Dispatch<React.SetStateAction<PublisherNews[]>>;
   owner: DemoUser;
@@ -1653,23 +1678,27 @@ export function PublisherNewsTab({ news, setNews, owner, users = [owner], catalo
   catalog?: (LibraryBook | AuthorBook)[];
   canCreate?: boolean;
   communityMode?: boolean;
+  initialAdd?: boolean;
+  initialEditId?: number | null;
 }) {
   const { locale, t } = useI18n();
-  const [editing, setEditing] = useState<PublisherNews | null | undefined>(undefined);
-  const [opened, setOpened] = useState<PublisherNews | null>(null);
   const empty = { id: 0, ownerId: owner.id, title: "", previewText: "", bodyHtml: "", body: "", isAdult: false, createdAt: new Date().toLocaleDateString(locale === "kk" ? "kk-KZ" : locale === "en" ? "en-US" : "ru-RU") };
-  const [form, setForm] = useState<PublisherNews>(empty);
-  const begin = (item: PublisherNews | null) => { setForm(item ? { ...item } : { ...empty }); setEditing(item); };
+  const initialItem = initialEditId ? news.find((item) => item.id === initialEditId) : undefined;
+  const [editing, setEditing] = useState<PublisherNews | null | undefined>(() => initialItem ?? (initialAdd ? null : undefined));
+  const [opened, setOpened] = useState<PublisherNews | null>(null);
+  const [form, setForm] = useState<PublisherNews>(() => initialItem ? { ...initialItem } : empty);
+  const begin = (item: PublisherNews | null) => { openMobileWorkflowRoute(item ? { mode: "edit", kind: "publisher-news", id: item.id } : { mode: "create", kind: "publisher-news" }); setForm(item ? { ...item } : { ...empty }); setEditing(item); };
   const save = (value: PublisherNews) => {
     if (!value.id) value = { ...value, id: Date.now() };
     setNews((current) => current.some((item) => item.id === value.id) ? current.map((item) => item.id === value.id ? value : item) : [value, ...current]);
     setEditing(undefined);
+    closeActiveMobileWorkflow("/profile/news");
   };
   return <div className="publisher-news-tab">
     <div className="profile-title-row"><div><h1>{t(communityMode ? "profile.communityNews" : "profile.publisherNews")}</h1><p>{t("news.count", { count: news.length })}</p></div>{canCreate && <button className="primary-button" type="button" onClick={() => begin(null)}>＋ {t("news.add")}</button>}</div>
     {news.length ? <div className="publisher-news-grid">{news.map((item) => <article data-i18n-skip className="material-clickable-card" role="button" tabIndex={0} key={item.id} onClick={() => setOpened(item)} onKeyDown={(event) => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); setOpened(item); } }}><span className="section-subtitle">{item.createdAt}{item.isAdult ? " · 18+" : ""}</span><h3>{item.title}</h3><p>{item.previewText}</p></article>)}</div> : <div className="profile-tab-placeholder">{t("news.empty")}</div>}
     {opened && <PublisherNewsModal item={opened} owner={owner} currentUser={owner} users={users} catalog={catalog} onOpenUser={() => undefined} onEdit={canCreate ? () => { begin(opened); setOpened(null); } : undefined} onDelete={canCreate ? () => { if (window.confirm(t("news.deleteConfirm", { title: opened.title }))) { setNews((current) => current.filter((item) => item.id !== opened.id)); setOpened(null); } } : undefined} onClose={() => setOpened(null)} />}
-    {editing !== undefined && <PublisherNewsEditor item={form} catalog={catalog.length ? catalog : catalogFromUsers(users)} communityMode={communityMode} onClose={() => setEditing(undefined)} onSave={save} />}
+    {editing !== undefined && <PublisherNewsEditor item={form} catalog={catalog.length ? catalog : catalogFromUsers(users)} communityMode={communityMode} onClose={() => { setEditing(undefined); closeActiveMobileWorkflow("/profile/news"); }} onSave={save} />}
   </div>;
 }
 
@@ -1677,7 +1706,7 @@ export function PublicationEditor({ excerpt, catalog: _catalog, onClose, onSave 
   const { t } = useI18n();
   const [form, setForm] = useState<UserExcerpt>(() => excerpt ?? { id: Date.now(), bookTitle: "", previewText: "", bodyHtml: "", text: "", link: "", createdAt: "", createdAtValue: new Date().toISOString() });
   const publicationText = form.previewText ?? form.text ?? "";
-  return <div className="modal-backdrop" onMouseDown={onClose}><section className="review-editor publication-editor-simple" role="dialog" aria-modal="true" aria-labelledby="publication-editor-title" onMouseDown={(event) => event.stopPropagation()}><button className="modal-close" aria-label={t("common.close")} type="button" onClick={onClose}>×</button><h2 id="publication-editor-title">{excerpt ? t("publication.edit") : t("publication.add")}</h2><form className="book-fields" onSubmit={(event) => { event.preventDefault(); const text = publicationText.trim(); if (!text || Array.from(text).length > 500) return; onSave({ ...form, bookId: undefined, bookIds: [], bookTitle: "", previewText: text, bodyHtml: "", text }); }}>
+  return <div className="modal-backdrop workflow-page-backdrop" onMouseDown={onClose}><section className="review-editor publication-editor-simple" role="dialog" aria-modal="true" aria-labelledby="publication-editor-title" onMouseDown={(event) => event.stopPropagation()}><ResponsiveModalCloseButton onClose={onClose} /><h2 id="publication-editor-title">{excerpt ? t("publication.edit") : t("publication.add")}</h2><form className="book-fields" onSubmit={(event) => { event.preventDefault(); const text = publicationText.trim(); if (!text || Array.from(text).length > 500) return; onSave({ ...form, bookId: undefined, bookIds: [], bookTitle: "", previewText: text, bodyHtml: "", text }); }}>
     <label className="publication-text-field"><span>{t("content.publications")}</span><textarea required autoFocus rows={9} maxLength={500} value={publicationText} onChange={(event) => setForm({ ...form, previewText: event.target.value, text: event.target.value })} placeholder={t("publication.placeholder")} /><small className={publicationText.length >= 500 ? "limit-reached" : ""}>{publicationText.length}/500</small></label>
     <div className="form-actions"><button type="button" onClick={onClose}>{t("common.cancel")}</button><button className="primary-button" type="submit">{t("common.save")}</button></div>
   </form></section></div>;
@@ -1691,10 +1720,10 @@ export function ExcerptsTab({ excerpts, setExcerpts, owner, users, catalog = [],
   const [viewing, setViewing] = useState<UserExcerpt | null>(null);
 
   return <div className="reviews-tab">
-    <div className="profile-title-row library-title-row"><div><h1>{t("profile.blog")}</h1><p>{t("publication.count", { count: excerpts.length })}</p></div><button className="primary-button" type="button" onClick={() => setEditing(null)}>＋ {t("publication.add")}</button></div>
+    <div className="profile-title-row library-title-row"><div><h1>{t("profile.blog")}</h1><p>{t("publication.count", { count: excerpts.length })}</p></div><button className="primary-button" type="button" onClick={() => { openMobileWorkflowRoute({ mode: "create", kind: "excerpt" }); setEditing(null); }}>＋ {t("publication.add")}</button></div>
     <div className="my-reviews-list">{excerpts.map((excerpt) => <article data-i18n-skip className="my-review-row material-clickable-card" role="button" tabIndex={0} key={excerpt.id} onClick={() => setViewing(excerpt)} onKeyDown={(event) => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); setViewing(excerpt); } }}><div className="my-review-mark">✦</div><div><span>{excerpt.createdAt} · {author}</span><h3 data-i18n-skip={Boolean(excerpt.bookTitle)}>{excerpt.bookTitle || t("content.publications")}</h3><p>{excerpt.previewText || excerpt.text.slice(0, 500)}</p></div></article>)}</div>
-    {viewing && (() => { const item: ReadingItem = { id: viewing.id, kind: "excerpt", title: viewing.bookTitle || t("content.publications"), author, text: viewing.text, preview: viewing.previewText, bodyHtml: viewing.bodyHtml, linkedBookId: viewing.bookId, linkedBookIds: viewing.bookIds, ownerId: owner.id, createdAt: viewing.createdAt }; return <ReadingModal item={item} currentUser={owner} users={users} catalog={canonicalCatalog} likedUserIds={likes[`excerpt-${viewing.id}`] ?? []} onToggleLike={() => onToggleLike(item)} onComment={(text) => onComment(item, text)} onOpenUser={onOpenUser} onClose={() => setViewing(null)} onEdit={() => { setEditing(viewing); setViewing(null); }} onDelete={() => { if (window.confirm(t("publication.deleteConfirm"))) { setExcerpts((current) => current.filter((excerpt) => excerpt.id !== viewing.id)); setViewing(null); } }} />; })()}
-    {editing !== undefined && <PublicationEditor excerpt={editing} catalog={canonicalCatalog} onClose={() => setEditing(undefined)} onSave={(saved) => { setExcerpts((current) => current.some((item) => item.id === saved.id) ? current.map((item) => item.id === saved.id ? saved : item) : [saved, ...current]); setEditing(undefined); }} />}
+    {viewing && (() => { const item: ReadingItem = { id: viewing.id, kind: "excerpt", title: viewing.bookTitle || t("content.publications"), author, text: viewing.text, preview: viewing.previewText, bodyHtml: viewing.bodyHtml, linkedBookId: viewing.bookId, linkedBookIds: viewing.bookIds, ownerId: owner.id, createdAt: viewing.createdAt }; return <ReadingModal item={item} currentUser={owner} users={users} catalog={canonicalCatalog} likedUserIds={likes[`excerpt-${viewing.id}`] ?? []} onToggleLike={() => onToggleLike(item)} onComment={(text) => onComment(item, text)} onOpenUser={onOpenUser} onClose={() => setViewing(null)} onEdit={() => { openMobileWorkflowRoute({ mode: "edit", kind: "excerpt", id: viewing.id }); setEditing(viewing); setViewing(null); }} onDelete={() => { if (window.confirm(t("publication.deleteConfirm"))) { setExcerpts((current) => current.filter((excerpt) => excerpt.id !== viewing.id)); setViewing(null); } }} />; })()}
+    {editing !== undefined && <PublicationEditor excerpt={editing} catalog={canonicalCatalog} onClose={() => { setEditing(undefined); closeActiveMobileWorkflow("/profile/blog"); }} onSave={(saved) => { setExcerpts((current) => current.some((item) => item.id === saved.id) ? current.map((item) => item.id === saved.id ? saved : item) : [saved, ...current]); setEditing(undefined); closeActiveMobileWorkflow("/profile/blog"); }} />}
   </div>;
 }
 

@@ -10,6 +10,7 @@ import { legalConsentRequired } from "./modules/compliance.js";
 import { authText, requestLocale } from "./modules/i18n.js";
 import { LoginAttemptTracker } from "./modules/login-attempts.js";
 import { normalizeUsername, usernameValidationError } from "./modules/username.js";
+import { searchBootstrapMaterials } from "./modules/material-search.js";
 
 const router = Router();
 const sessions = new Map();
@@ -479,6 +480,12 @@ router.post("/auth/deleted-profile/new", (request, response) => {
 });
 
 router.use(requireUser);
+
+router.get("/search/materials", (request, response) => {
+  const result = searchBootstrapMaterials(bootstrap(request.demoUserId), request.query.q, { page: request.query.page, limit: request.query.limit });
+  if (result.error) return response.status(400).json({ code: result.error, error: result.error === "SEARCH_QUERY_TOO_LONG" ? "Запрос слишком длинный" : "Введите не менее двух символов" });
+  response.json(result);
+});
 
 const personalLinkTypes = new Set(["Читатель", "Писатель", "Блогер"]);
 function demoLinkPair(personalId, communityId) {

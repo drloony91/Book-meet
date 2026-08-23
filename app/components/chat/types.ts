@@ -1,6 +1,7 @@
 export type Friend = {
   id: number;
   name: string;
+  username?: string;
   type: "Читатель" | "Писатель" | "Блогер" | "Издатель" | "Сообщество";
   city: string;
   initials: string;

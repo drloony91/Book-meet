@@ -104,6 +104,7 @@ export function ChatView({
   onReport,
   profileEnabled = true,
   fullPage = false,
+  mobileDialog = false,
 }: {
   friend: Friend;
   messages: Message[];
@@ -117,6 +118,7 @@ export function ChatView({
   onReport?: () => void;
   profileEnabled?: boolean;
   fullPage?: boolean;
+  mobileDialog?: boolean;
 }) {
   const { t, formatTime, domainLabel } = useI18n();
   const [draft, setDraft] = useState("");
@@ -191,9 +193,10 @@ export function ChatView({
   return (
     <main className={`chat-view ${expanded ? "chat-expanded" : "chat-compact"} ${fullPage ? "chat-full-page" : ""}`}>
       <header className="chat-header">
+        {mobileDialog && <button className="chat-mobile-back" type="button" onClick={onClose} aria-label={t("common.back")} title={t("common.back")}>{"<"}</button>}
         <button className="chat-person" type="button" onClick={profileEnabled ? onOpenProfile : undefined} aria-label={profileEnabled ? t("chat.openProfile", { name: friend.name }) : friend.name} disabled={!profileEnabled}>
           <Avatar friend={friend} size="md" />
-          <span><strong data-i18n-skip>{friend.name}</strong><small>{domainLabel(friend.type)}<span data-i18n-skip> · {friend.city}</span> · {friend.online ? t("chat.online") : t("chat.offline")}</small></span>
+          <span><strong data-i18n-skip>{friend.name}</strong><small>{mobileDialog && friend.username ? <span data-i18n-skip>@{friend.username}</span> : <>{domainLabel(friend.type)}<span data-i18n-skip> · {friend.city}</span> · {friend.online ? t("chat.online") : t("chat.offline")}</>}</small></span>
         </button>
         <div className="chat-actions">
           {!fullPage && <button type="button" onClick={onToggleExpanded} aria-label={expanded ? t("chat.collapse") : t("chat.expand")} title={expanded ? t("chat.collapse") : t("chat.expand")}>{expanded ? "↙" : "⛶"}</button>}

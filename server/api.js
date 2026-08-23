@@ -8,6 +8,7 @@ import { fileURLToPath } from "node:url";
 import { getPool, withTransaction } from "./db.js";
 import { ageFromBirthDate, loadBootstrap, resolveBook } from "./data.js";
 import { createBootstrapRouter } from "./modules/bootstrap-router.js";
+import { searchBootstrapMaterials } from "./modules/material-search.js";
 import { plainTextFromHtml, validateRichHtml } from "./modules/content-security.js";
 import { previewRemoteCover, saveAvatar, saveCover, saveRemoteCover } from "./modules/image-storage.js";
 import { cleanUrl, eventPayload, knownCities, knownCity, occasionPayload } from "./modules/material-input.js";
@@ -1316,6 +1317,16 @@ router.post("/auth/deleted-profile/new", asyncRoute(async (request, response) =>
 }));
 
 router.use(createBootstrapRouter({ authenticatedUser }));
+
+router.get("/search/materials", asyncRoute(async (request, response) => {
+  const user = await authenticatedUser(request);
+  if (!user) return response.status(401).json({ error: "Требуется вход" });
+  if (user.deletedProfile || user.purged) return response.status(410).json({ deletedProfile: true, purged: user.purged, daysRemaining: deletionDaysRemaining(user.deletionExpiresAt) });
+  if (user.suspension) return response.status(423).json({ suspended: true, ...user.suspension });
+  const result = searchBootstrapMaterials(await loadBootstrap(user.id, { sections: ["catalog"] }), request.query.q, { page: request.query.page, limit: request.query.limit });
+  if (result.error) return response.status(400).json({ code: result.error, error: result.error === "SEARCH_QUERY_TOO_LONG" ? "Запрос слишком длинный" : "Введите не менее двух символов" });
+  response.json(result);
+}));
 
 router.get("/public/catalog", asyncRoute(async (_request, response) => {
   response.setHeader("Cache-Control", "public, max-age=60, stale-while-revalidate=300");
