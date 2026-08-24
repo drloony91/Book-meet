@@ -26,7 +26,6 @@ import { MobileGlobalSearchPage, type SearchEntry } from "../screens/MobileGloba
 import { MobileMessagesPage, type MobileMessageRequest } from "../screens/MobileMessagesPage";
 import { ChatScreen } from "../screens/ChatScreen";
 import { AuthBookTransition, LoginScreen } from "../screens/AuthScreens";
-import { GuestExperience } from "../screens/GuestExperience";
 import { safeReturnTo } from "../lib/navigation-security";
 import { CommunitiesDirectoryPage, PublishingDirectoryPage, UsersDirectoryPage } from "../screens/UsersDirectoryScreen";
 import { AllBooksDirectoryPage, EventsDirectoryPage, HomeContent, MaterialsDirectoryPage, OccasionsDirectoryPage, PersonalMaterialFeed, SimpleDirectoryPage } from "../screens/ContentScreens";
@@ -66,7 +65,7 @@ import {
   userBookMatches,
 } from "../lib/domain";
 import { apiFetch } from "../services/api";
-import { BootstrapRequestError, loadApplicationData, loadPublicCatalog } from "../services/bootstrap";
+import { BootstrapRequestError, loadApplicationData } from "../services/bootstrap";
 import { conversationKey, finishMinimumLoading } from "./controller-utils";
 import type {
   AdminCatalogItem,
@@ -96,7 +95,6 @@ import type {
   OccasionType,
   ProfileTab,
   PublisherNews,
-  PublicCatalogData,
   ReadingItem,
   Review,
   SocialNotification,
@@ -119,8 +117,6 @@ export function useBookMeetController() {
   const [activeUserId, setActiveUserId] = useState<number | null>(null);
   const [authLoading, setAuthLoading] = useState(true);
   const [authTransition, setAuthTransition] = useState(false);
-  const [guestAuthOpen, setGuestAuthOpen] = useState(false);
-  const [publicCatalog, setPublicCatalog] = useState<PublicCatalogData | null>(null);
   const [newlyRegistered, setNewlyRegistered] = useState(false);
   const [accessGate, setAccessGate] = useState<BootstrapData["accessGate"]>();
   const [startupError, setStartupError] = useState("");
@@ -595,12 +591,6 @@ export function useBookMeetController() {
     }).catch(async (error) => {
       if (!active) return;
       if (error instanceof BootstrapRequestError && error.status === 401) {
-        try {
-          setPublicCatalog(await loadPublicCatalog());
-        } catch (publicError) {
-          setStartupError(publicError instanceof Error ? publicError.message : t("catalog.publicLoadError"));
-          setGuestAuthOpen(true);
-        }
         return;
       }
       if (error instanceof BootstrapRequestError && error.status === 423) {
@@ -1157,7 +1147,6 @@ export function useBookMeetController() {
       sessionStorage.removeItem("bookmeet:returnTo");
       window.history.replaceState({}, "", returnTo);
       setView(appRouteFromPathname(returnTo).view);
-      setGuestAuthOpen(false);
       await finishMinimumLoading(loadingStartedAt); setAuthTransition(false);
       return {};
     } catch {
@@ -1188,8 +1177,7 @@ export function useBookMeetController() {
   async function logout() {
     await apiFetch("/api/auth/logout", { method: "POST", credentials: "same-origin" }).catch(() => undefined);
     setUsers([]); setCatalogBooks([]); setActiveUserId(null); setMessages({}); setFriendRequests([]); setFriendships([]); setCommunityMemberships([]); setFollows([]); setNotifications([]); setLikes({}); setSaves({}); setLikedMaterialRefs([]); setSavedMaterialRefs([]); setEvents([]); setOccasions([]); setBlocks([]); setBlockedByUserIds([]); setReports([]); setSuspension(null); setCommenters({}); setCommentCounts({}); setSaveCounts({}); setSelectedFriend(null); setChatExpanded(false);
-    navigateMainView("home", { replace: true }); setNotificationsOpen(false); setProfileAction(null); setNewlyRegistered(false); setGuestAuthOpen(false); setAuthTransition(false);
-    loadPublicCatalog().then(setPublicCatalog).catch((error) => setStartupError(error instanceof Error ? error.message : t("catalog.publicLoadError")));
+    navigateMainView("home", { replace: true }); setNotificationsOpen(false); setProfileAction(null); setNewlyRegistered(false); setAuthTransition(false);
   }
 
   async function resolveDeletedProfile(action: "restore" | "new") {
@@ -1214,10 +1202,7 @@ export function useBookMeetController() {
   if (authLoading) return <AuthBookTransition />;
   if (deletedRecovery) return <main className="deleted-profile-recovery"><section role="dialog" aria-modal="true"><h1>{t("profile.deletedTitle")}</h1><p>{t("profile.deletedRetention", { days: formatNumber(deletedRecovery.daysRemaining) })}</p><p>{t("profile.deletedNewWarning")}</p>{startupError && <span className="login-error">{startupError}</span>}<div className="form-actions"><button className="primary-button" type="button" onClick={() => void resolveDeletedProfile("restore")}>{t("admin.restoreProfile")}</button><button className="danger-button" type="button" onClick={() => void resolveDeletedProfile("new")}>{t("profile.createNew")}</button></div></section></main>;
   if (suspension) return <main className="suspension-screen"><section><h1>{t("profile.accessRestricted")}</h1><p>{suspension.permanent ? t("profile.blockedIndefinitely") : t("profile.blockedUntil", { date: formatDate(suspension.until ?? "", { dateStyle: "medium", timeStyle: "short" }) })}</p><p><strong>{t("safety.reason")}:</strong> <span data-i18n-skip>{suspension.reason || t("profile.rulesViolation")}</span></p></section></main>;
-  if (!currentUser) {
-    if (guestAuthOpen || !publicCatalog) return <LoginScreen onLogin={login} onRegister={register} initialError={startupError} />;
-    return <GuestExperience data={publicCatalog} onAuthenticate={(returnTo) => { sessionStorage.setItem("bookmeet:returnTo", safeReturnTo(returnTo || window.location.href)); setGuestAuthOpen(true); }} />;
-  }
+  if (!currentUser) return <LoginScreen onLogin={login} onRegister={register} initialError={startupError} />;
   const relationshipToProfile: SocialRelationship = profileUser ? isFriendPair(currentUser.id, profileUser.id) ? "friends" : isCommunityMemberPair(currentUser.id, profileUser.id) ? "community-member" : friendRequests.some((request) => request.status === "pending" && request.fromId === profileUser.id && request.toId === currentUser.id) ? "incoming" : friendRequests.some((request) => request.status === "pending" && request.fromId === currentUser.id && request.toId === profileUser.id) ? "outgoing" : "none" : "none";
   const profileFriendUsers = profileUser?.friendIds ? profileUser.friendIds.map((id) => users.find((candidate) => candidate.id === id)).filter((candidate): candidate is DemoUser => Boolean(candidate) && !candidate!.isAdmin) : [];
   const profileFriendIds = new Set(profileFriendUsers.map((user) => user.id));
