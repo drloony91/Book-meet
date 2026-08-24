@@ -1,6 +1,8 @@
-# Аудит безопасности Book Meet
+# Аудит безопасности Book Meet — historical snapshot
 
 Дата проверки: 2 августа 2026 года.
+
+Этот документ — датированный исторический snapshot, а не утверждение о текущем полном состоянии production. Полезные security facts и оставшиеся эксплуатационные задачи сохранены. Текущая карта границ, authorization/data ownership и проверок: [docs/codex/INDEX.md](./codex/INDEX.md), [CONVENTIONS.md](./codex/CONVENTIONS.md), [DATA_MODEL.md](./codex/DATA_MODEL.md), [TESTING.md](./codex/TESTING.md).
 
 ## Исправлено в этой ветке
 

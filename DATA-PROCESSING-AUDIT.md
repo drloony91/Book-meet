@@ -2,6 +2,8 @@
 
 Дата проверки: 16 августа 2026 года. Объект: production-домен `bookmeet.club`, приложение Node.js/Express, MySQL/MariaDB и панель Hoster/Plesk. Этот документ фиксирует проверяемые технические факты, а не является юридическим заключением.
 
+Каноническая текущая карта хранения и ownership — [docs/codex/DATA_MODEL.md](./docs/codex/DATA_MODEL.md); интеграционные границы — [docs/codex/INTEGRATIONS.md](./docs/codex/INTEGRATIONS.md). Этот audit не переписывается в рамках Codex-навигации.
+
 ## 1. Категории данных и места хранения
 
 | Категория | Где хранится | Назначение | Технический доступ |
