@@ -1,5 +1,6 @@
 import { FormEvent, useEffect, useState } from "react";
 import { localizedApiError, useI18n } from "../../i18n";
+import { apiFetch } from "../../services/api";
 
 type AuditRow = { id: number; action_type: string; object_type: string; object_id?: number; old_status?: string; new_status?: string; reason?: string; created_at: string };
 type IncidentRow = { id: number; incident_code: string; detected_at: string; description: string; affected_data: string; affected_user_count: number; cause: string; measures: string; resolved_at?: string; authority_notified_at?: string };
@@ -23,7 +24,7 @@ const emptyDocumentForm = { type: "user_agreement", language: "ru", version: "",
 const emptyIncidentForm = { description: "", affectedData: "", affectedUserCount: 0, cause: "", measures: "", detectedAt: "", resolvedAt: "", authorityNotifiedAt: "" };
 
 async function jsonRequest(url: string, options?: RequestInit) {
-  const response = await fetch(url, { credentials: "same-origin", ...options, headers: { "content-type": "application/json", ...(options?.headers ?? {}) } });
+  const response = await apiFetch(url, { credentials: "same-origin", ...options, headers: { "content-type": "application/json", ...(options?.headers ?? {}) } });
   const data = await response.json().catch(() => ({}));
   if (!response.ok) throw new Error((data as { error?: string }).error || "Request failed");
   return data;

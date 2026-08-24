@@ -105,9 +105,7 @@ import type {
   UserSuspension,
   TotpSetup,
   TotpStatus,
-  UserExcerpt,
   UserProfileData,
-  UserReview,
   WishBook,
 } from "../types/domain";
 import { localizedApiError, useI18n } from "../i18n";
@@ -421,10 +419,14 @@ export function useBookMeetController() {
       if (!detail?.id || !["review", "excerpt"].includes(detail.kind)) return;
       if (detail.admin && currentUser?.isAdmin) {
         const owner = users.find((user) => detail.kind === "review" ? user.reviews.some((item) => item.id === detail.id) : (user.excerpts ?? []).some((item) => item.id === detail.id));
-        const source = detail.kind === "review" ? owner?.reviews.find((item) => item.id === detail.id) : owner?.excerpts?.find((item) => item.id === detail.id);
-        if (owner && source) {
-          setSelectedMaterial(null);
-          setAdminEditingMaterial({ id: detail.id, kind: detail.kind, title: detail.kind === "review" ? (source as UserReview).bookTitle : (source as UserExcerpt).bookTitle || t("content.publications"), subtitle: owner.profile.name, text: detail.kind === "review" ? (source as UserReview).preview : (source as UserExcerpt).previewText, source: { ...source, ownerId: owner.id, ownerName: owner.profile.name } });
+        if (!owner) return;
+        setSelectedMaterial(null);
+        if (detail.kind === "review") {
+          const source = owner.reviews.find((item) => item.id === detail.id);
+          if (source) setAdminEditingMaterial({ id: detail.id, kind: "review", title: source.bookTitle, subtitle: owner.profile.name, text: source.preview, source: { ...source, ownerId: owner.id, ownerName: owner.profile.name } });
+        } else {
+          const source = owner.excerpts?.find((item) => item.id === detail.id);
+          if (source) setAdminEditingMaterial({ id: detail.id, kind: "excerpt", title: source.bookTitle || t("content.publications"), subtitle: owner.profile.name, text: source.previewText, source: { ...source, ownerId: owner.id, ownerName: owner.profile.name } });
         }
         return;
       }
@@ -1390,7 +1392,7 @@ export function useBookMeetController() {
 
       {selectedBook && <UnifiedBookModal book={selectedBook} users={visibleUsers} catalog={catalog} events={events} retainWhenInactive onClose={() => setSelectedBook(null)} onReport={currentUser.isAdmin || selectedBook.creatorUserId === currentUser.id || users.some((user) => user.id === currentUser.id && (user.authorBooks ?? []).some((book) => book.id === selectedBook.id)) ? undefined : () => openReportDialog({ kind: "book", id: selectedBook.id })} onOpenUser={openUserProfile} onOpenEvent={(event) => setSelectedEvent(event)} onOpenReview={(review, user) => { setSelectedMaterial({ id: review.id, kind: "review", title: review.bookTitle, author: user.profile.name, text: review.fullText, bodyHtml: review.bodyHtml, linkedBookId: review.bookId, ownerId: user.id, createdAt: review.createdAt, preview: review.preview, bookAuthor: review.bookAuthor, rating: review.rating }); }} />}
       {selectedMaterial && <ReadingModal item={selectedMaterial} currentUser={currentUser} users={visibleUsers} catalog={catalog} likedUserIds={likes[`${selectedMaterial.kind}-${selectedMaterial.id}`] ?? []} saved={Boolean(saves[`${selectedMaterial.kind}-${selectedMaterial.id}`]?.includes(currentUser.id))} savesCount={saveCounts[`${selectedMaterial.kind}-${selectedMaterial.id}`] ?? 0} onToggleLike={() => toggleLike(selectedMaterial)} onToggleSave={() => toggleSave(selectedMaterial)} onComment={(text) => addComment(selectedMaterial, text)} onOpenUser={openUserProfile} onClose={() => setSelectedMaterial(null)} onReport={selectedMaterial.ownerId !== currentUser.id && !currentUser.isAdmin ? () => openReportDialog({ kind: selectedMaterial.kind, id: selectedMaterial.id }) : undefined} onEdit={currentUser.isAdmin || selectedMaterial.ownerId === currentUser.id ? () => void editReadingMaterial(selectedMaterial, currentUser) : undefined} onDelete={currentUser.isAdmin || selectedMaterial.ownerId === currentUser.id ? () => void deleteReadingMaterial(selectedMaterial, currentUser) : undefined} />}
-      {adminEditingMaterial && <AdminCatalogEditor item={adminEditingMaterial} users={users} catalog={catalog} onClose={() => setAdminEditingMaterial(null)} onSave={async (payload) => { const response = await fetch(`/api/admin/materials/${adminEditingMaterial.kind}/${adminEditingMaterial.id}`, { method: "PATCH", credentials: "same-origin", headers: { "content-type": "application/json" }, body: JSON.stringify(payload) }); const data = await response.json().catch(() => ({})) as { error?: string }; if (!response.ok) { window.alert(localizedApiError(data.error, t("common.saveChangesError"))); return; } setAdminEditingMaterial(null); await refreshBootstrap(); }} />}
+      {adminEditingMaterial && <AdminCatalogEditor item={adminEditingMaterial} users={users} catalog={catalog} onClose={() => setAdminEditingMaterial(null)} onSave={async (payload) => { const response = await apiFetch(`/api/admin/materials/${adminEditingMaterial.kind}/${adminEditingMaterial.id}`, { method: "PATCH", credentials: "same-origin", headers: { "content-type": "application/json" }, body: JSON.stringify(payload) }); const data = await response.json().catch(() => ({})) as { error?: string }; if (!response.ok) { window.alert(localizedApiError(data.error, t("common.saveChangesError"))); return; } setAdminEditingMaterial(null); await refreshBootstrap(); }} />}
       {detailNotification && <NotificationDetail notification={detailNotification} actor={users.find((user) => user.id === detailNotification.actorId)} isFollowing={follows.some((follow) => follow.followerId === currentUser.id && follow.targetId === detailNotification.actorId)} onClose={() => setDetailNotification(null)} onFollow={() => followUser(detailNotification.actorId)} />}
       {quickMaterialAction === "review" && <ReviewEditor review={quickMaterialEditId ? currentUser.reviews.find((item) => item.id === quickMaterialEditId) : null} catalog={catalog} onClose={() => { setQuickMaterialAction(null); setQuickMaterialEditId(null); closeMobileWorkflow("/reviews"); }} onSave={(review) => { const nextUser = { ...currentUser, reviews: currentUser.reviews.some((item) => item.id === review.id) ? currentUser.reviews.map((item) => item.id === review.id ? review : item) : [review, ...currentUser.reviews] }; setQuickMaterialAction(null); setQuickMaterialEditId(null); closeMobileWorkflow("/reviews"); void handleUserChange(nextUser); }} />}
       {quickMaterialAction === "excerpt" && <PublicationEditor excerpt={quickMaterialEditId ? (currentUser.excerpts ?? []).find((item) => item.id === quickMaterialEditId) : null} catalog={catalog} onClose={() => { setQuickMaterialAction(null); setQuickMaterialEditId(null); closeMobileWorkflow("/blog"); }} onSave={(excerpt) => { const currentExcerpts = currentUser.excerpts ?? []; const nextUser = { ...currentUser, excerpts: currentExcerpts.some((item) => item.id === excerpt.id) ? currentExcerpts.map((item) => item.id === excerpt.id ? excerpt : item) : [excerpt, ...currentExcerpts] }; setQuickMaterialAction(null); setQuickMaterialEditId(null); closeMobileWorkflow("/blog"); void handleUserChange(nextUser); }} />}

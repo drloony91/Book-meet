@@ -3331,10 +3331,19 @@ router.get("/material-stats", asyncRoute(async (request, response) => {
       GROUP BY material_kind, material_id, user_id`,
     [request.bookMeetUser.id, request.bookMeetUser.id],
   );
+  const readableMaterialCache = new Map();
+  const getReadableMaterial = async (kind, id) => {
+    const materialId = Number(id);
+    const key = `${kind}-${materialId}`;
+    if (!readableMaterialCache.has(key)) {
+      readableMaterialCache.set(key, readableMaterialInfo(pool, request.bookMeetUser.id, kind, materialId).catch(() => null));
+    }
+    return readableMaterialCache.get(key);
+  };
   const readableKeys = new Set();
   const materials = [...new Map(rows.map((row) => [`${row.material_kind}-${row.material_id}`, row])).values()];
   for (const row of materials) {
-    const material = await readableMaterialInfo(pool, request.bookMeetUser.id, row.material_kind, Number(row.material_id)).catch(() => null);
+    const material = await getReadableMaterial(row.material_kind, row.material_id);
     if (material) readableKeys.add(`${row.material_kind}-${row.material_id}`);
   }
   const commenters = {};
@@ -3354,12 +3363,12 @@ router.get("/material-stats", asyncRoute(async (request, response) => {
   const savedMaterialRefs = [];
   const saveCounts = {};
   for (const row of saveRows) {
-    const material = await readableMaterialInfo(pool, request.bookMeetUser.id, row.material_kind, Number(row.material_id)).catch(() => null);
+    const material = await getReadableMaterial(row.material_kind, row.material_id);
     if (material) savedMaterialRefs.push({ kind: row.material_kind, id: Number(row.material_id), createdAt: new Date(row.created_at).toISOString() });
   }
   for (const row of saveCountRows) {
     const key = `${row.material_kind}-${row.material_id}`;
-    const material = await readableMaterialInfo(pool, request.bookMeetUser.id, row.material_kind, Number(row.material_id)).catch(() => null);
+    const material = await getReadableMaterial(row.material_kind, row.material_id);
     if (material) saveCounts[key] = Number(row.total);
   }
   response.json({ commenters, commentCounts, savedMaterialRefs, saveCounts });

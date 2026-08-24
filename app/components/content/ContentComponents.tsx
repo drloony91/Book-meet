@@ -1,7 +1,4 @@
 import React, { FormEvent, useEffect, useMemo, useRef, useState } from "react";
-import * as XLSX from "xlsx";
-import { Avatar } from "../chat/ChatComponents";
-import type { Friend } from "../chat/types";
 import { CustomSelect } from "../common/CustomSelect";
 import { ModalIconActions, ResponsiveModalCloseButton } from "../modals/ModalIconActions";
 import { openReportDialog } from "../safety/SafetyCenter";
@@ -23,11 +20,12 @@ import {
   userBookMatches,
 } from "../../lib/domain";
 import { isSpecialLocation, SPECIAL_LOCATIONS } from "../../lib/locations";
+import { readFirstWorksheetRows } from "../../services/spreadsheet";
+import { apiFetch } from "../../services/api";
 import type {
   AdminCatalogItem,
   AuthorBook,
   BookEvent,
-  BookFormat,
   BookLink,
   CityOption,
   DemoUser,
@@ -75,7 +73,7 @@ function EventBookSelector({ catalog, selectedId, onSelect, onClear, onCreateBoo
   useEffect(() => {
     if (normalized.length < 2 || selected && normalized === normalizeBookSearchText(`${selected.title} — ${selected.author}`)) { setRemoteMatches([]); return; }
     const controller = new AbortController();
-    const timer = window.setTimeout(() => fetch(`/api/books?q=${encodeURIComponent(query.trim())}`, { credentials: "same-origin", signal: controller.signal }).then((response) => response.json()).then((data: { books?: Array<Partial<LibraryBook> & { id: number; title: string; author: string }> }) => setRemoteMatches((data.books ?? []).map((book) => ({ genres: [], annotation: "", pages: "", format: "Бумажная", durationHours: "", durationMinutes: "", rating: 0, review: "", coverTone: "blue", ...book } as LibraryBook)))).catch((error) => { if (error instanceof Error && error.name !== "AbortError") console.warn(error); }), 220);
+    const timer = window.setTimeout(() => apiFetch(`/api/books?q=${encodeURIComponent(query.trim())}`, { credentials: "same-origin", signal: controller.signal }).then((response) => response.json()).then((data: { books?: Array<Partial<LibraryBook> & { id: number; title: string; author: string }> }) => setRemoteMatches((data.books ?? []).map((book) => ({ genres: [], annotation: "", pages: "", format: "Бумажная", durationHours: "", durationMinutes: "", rating: 0, review: "", coverTone: "blue", ...book } as LibraryBook)))).catch((error) => { if (error instanceof Error && error.name !== "AbortError") console.warn(error); }), 220);
     return () => { window.clearTimeout(timer); controller.abort(); };
   }, [normalized, query, selected]);
   return <div className="event-book-selector"><label>{t("content.bookTitleAuthor")}<input value={query} onChange={(event) => setQuery(event.target.value)} placeholder={t("content.startBookSearch")} autoComplete="off" /></label>{selected && <button className="selected-material-book" type="button" onClick={() => { setQuery(""); onClear?.(); }}>{t("content.book")}: <span data-i18n-skip>{selected.title}</span> <span>×</span></button>}{matches.length > 0 ? <div className="book-match-suggestions"><strong>{t("content.chooseBook")}</strong>{matches.map((book) => <button type="button" key={book.id} onClick={() => onSelect(book)}><div className={`match-book-cover library-cover-${book.coverTone}`} data-i18n-skip style={book.coverUrl ? { backgroundImage: `url(${book.coverUrl})` } : undefined}>{!book.coverUrl && <span>{book.title.slice(0, 1)}</span>}</div><span data-i18n-skip><b>{book.title}</b><small>{book.author}</small></span></button>)}</div> : normalized.length >= 2 && !selected ? <div className="event-book-not-found"><span>{t("content.noMatches")}</span><button className="outline-button" type="button" onClick={onCreateBook}>{t("content.createBookFirst")}</button></div> : null}</div>;
@@ -179,7 +177,7 @@ export async function deleteReadingMaterial(item: ReadingItem, currentUser: Demo
   const locale = currentLocale();
   if (!window.confirm(translate(locale, "material.deleteConfirm", { kind: translate(locale, item.kind === "review" ? "material.reviewAccusative" : "material.publicationAccusative") }))) return;
   const endpoint = currentUser.isAdmin ? `/api/admin/materials/${item.kind}/${item.id}` : `/api/materials/${item.kind}/${item.id}`;
-  const response = await fetch(endpoint, { method: "DELETE", credentials: "same-origin" });
+  const response = await apiFetch(endpoint, { method: "DELETE", credentials: "same-origin" });
   if (!response.ok) { window.alert(translate(locale, "material.deleteError")); return; }
   window.location.reload();
 }
@@ -214,10 +212,10 @@ function MaterialEngagement({ kind, materialId, ownerId, currentUser, users, onO
   useEffect(() => {
     let active = true;
     Promise.all([
-      fetch(`/api/reactions?kind=${kind}&id=${materialId}`, { credentials: "same-origin", cache: "no-store" }).then((response) => response.json() as Promise<{ userIds?: number[] }>),
-      fetch(`/api/comments?kind=${kind}&id=${materialId}`, { credentials: "same-origin", cache: "no-store" }).then((response) => response.json() as Promise<{ comments?: MaterialComment[] }>),
-      fetch(`/api/saves?kind=${kind}&id=${materialId}`, { credentials: "same-origin", cache: "no-store" }).then((response) => response.json() as Promise<{ saved?: boolean }>),
-      fetch("/api/material-stats", { credentials: "same-origin", cache: "no-store" }).then((response) => response.json() as Promise<{ saveCounts?: Record<string, number> }>),
+      apiFetch(`/api/reactions?kind=${kind}&id=${materialId}`, { credentials: "same-origin", cache: "no-store" }).then((response) => response.json() as Promise<{ userIds?: number[] }>),
+      apiFetch(`/api/comments?kind=${kind}&id=${materialId}`, { credentials: "same-origin", cache: "no-store" }).then((response) => response.json() as Promise<{ comments?: MaterialComment[] }>),
+      apiFetch(`/api/saves?kind=${kind}&id=${materialId}`, { credentials: "same-origin", cache: "no-store" }).then((response) => response.json() as Promise<{ saved?: boolean }>),
+      apiFetch("/api/material-stats", { credentials: "same-origin", cache: "no-store" }).then((response) => response.json() as Promise<{ saveCounts?: Record<string, number> }>),
     ]).then(([reactions, materialComments, saveState, materialStats]) => {
       if (!active) return;
       setLikedUserIds(reactions.userIds ?? []);
@@ -232,7 +230,7 @@ function MaterialEngagement({ kind, materialId, ownerId, currentUser, users, onO
     if (!currentUser || busy || currentUser.id === ownerId) return;
     setBusy(true);
     try {
-      const response = await fetch("/api/reactions", { method: liked ? "DELETE" : "POST", credentials: "same-origin", headers: { "content-type": "application/json" }, body: JSON.stringify({ materialKind: kind, materialId }) });
+      const response = await apiFetch("/api/reactions", { method: liked ? "DELETE" : "POST", credentials: "same-origin", headers: { "content-type": "application/json" }, body: JSON.stringify({ materialKind: kind, materialId }) });
       if (!response.ok) throw new Error(localizedApiError((await response.json() as { error?: string }).error, t("material.likeError")));
       setLikedUserIds((current) => liked ? current.filter((id) => id !== currentUser.id) : [...new Set([...current, currentUser.id])]);
     } catch (error) {
@@ -244,7 +242,7 @@ function MaterialEngagement({ kind, materialId, ownerId, currentUser, users, onO
     if (!currentUser || busy || !comment.trim()) return;
     setBusy(true);
     try {
-      const response = await fetch("/api/comments", { method: "POST", credentials: "same-origin", headers: { "content-type": "application/json" }, body: JSON.stringify({ materialKind: kind, materialId, body: comment.trim() }) });
+      const response = await apiFetch("/api/comments", { method: "POST", credentials: "same-origin", headers: { "content-type": "application/json" }, body: JSON.stringify({ materialKind: kind, materialId, body: comment.trim() }) });
       const data = await response.json() as { comment?: MaterialComment; error?: string };
       if (!response.ok || !data.comment) throw new Error(localizedApiError(data.error, t("material.commentError")));
       setComments((current) => [...current, data.comment!]);
@@ -257,7 +255,7 @@ function MaterialEngagement({ kind, materialId, ownerId, currentUser, users, onO
     if (!currentUser || busy) return;
     setBusy(true);
     try {
-      const response = await fetch("/api/saves", { method: saved ? "DELETE" : "POST", credentials: "same-origin", headers: { "content-type": "application/json" }, body: JSON.stringify({ materialKind: kind, materialId }) });
+      const response = await apiFetch("/api/saves", { method: saved ? "DELETE" : "POST", credentials: "same-origin", headers: { "content-type": "application/json" }, body: JSON.stringify({ materialKind: kind, materialId }) });
       if (!response.ok) throw new Error(t("material.saveError"));
       setSaved((current) => !current);
       setSavesCount((current) => Math.max(0, current + (saved ? -1 : 1)));
@@ -267,7 +265,7 @@ function MaterialEngagement({ kind, materialId, ownerId, currentUser, users, onO
   }
   async function deleteComment(entry: MaterialComment) {
     if (!currentUser || !(currentUser.isAdmin || currentUser.id === entry.userId)) return;
-    const response = await fetch(`/api/comments/${entry.id}`, { method: "DELETE", credentials: "same-origin" });
+    const response = await apiFetch(`/api/comments/${entry.id}`, { method: "DELETE", credentials: "same-origin" });
     if (response.ok) setComments((current) => current.filter((item) => item.id !== entry.id));
   }
   return <section className="material-engagement"><MaterialActionBar likesCount={likedUserIds.length} commentsCount={comments.length} savesCount={savesCount} liked={liked} saved={saved} onToggleLike={() => void toggleLike()} onOpenComments={() => document.querySelector<HTMLTextAreaElement>(`.material-engagement textarea`)?.focus()} onToggleSave={() => void toggleSave()} /><section className="comments-block"><h3>{t("content.comments")} · {comments.length}</h3>{currentUser && <form onSubmit={submitComment}><textarea rows={3} value={comment} onChange={(event) => setComment(event.target.value)} placeholder={t("material.writeComment")} /><button className="primary-button" type="submit" disabled={busy || !comment.trim()}>{t("common.send")}</button></form>}{comments.map((entry) => { const author = users.find((user) => user.id === entry.userId); const canDelete = Boolean(currentUser && (currentUser.isAdmin || currentUser.id === entry.userId)); const canReport = Boolean(currentUser && !currentUser.isAdmin && currentUser.id !== entry.userId); return <article key={entry.id}><div className="comment-actions">{canReport && <button className="comment-report-button" type="button" onClick={() => openReportDialog({ kind: "comment", id: entry.id })} aria-label={t("safety.comment")} title={t("safety.report")}><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3 2.8 20h18.4L12 3Z" /><path d="M12 8v6" /><circle cx="12" cy="17" r="1" /></svg></button>}{canDelete && <button className="comment-delete-button" type="button" onClick={() => void deleteComment(entry)} aria-label={t("material.deleteComment")} title={t("material.deleteComment")}>×</button>}</div><button type="button" data-i18n-skip onClick={() => onOpenUser?.(entry.userId)}>{author?.profile.name ?? t("material.user")}</button><small>{formatCommentDate(entry.createdAt, locale)}</small><p data-i18n-skip>{entry.text}</p></article>; })}</section></section>;
@@ -297,7 +295,7 @@ export function EventModal({ item, users = [], catalog: canonicalCatalog = [], c
     if (reminderSet || reminderBusy) return;
     setReminderBusy(true);
     try {
-      const response = await fetch(`/api/events/${item.id}/reminder`, { method: "POST", credentials: "same-origin" });
+      const response = await apiFetch(`/api/events/${item.id}/reminder`, { method: "POST", credentials: "same-origin" });
       if (!response.ok) throw new Error(localizedApiError((await response.json() as { error?: string }).error, t("event.reminderSetError")));
       setReminderSet(true);
       if (currentUserId) setReminderUserIds((current) => Array.from(new Set([...current, currentUserId])));
@@ -313,7 +311,7 @@ export function EventModal({ item, users = [], catalog: canonicalCatalog = [], c
     if (!reminderSet || reminderBusy) return;
     setReminderBusy(true);
     try {
-      const response = await fetch(`/api/events/${item.id}/reminder`, { method: "DELETE", credentials: "same-origin" });
+      const response = await apiFetch(`/api/events/${item.id}/reminder`, { method: "DELETE", credentials: "same-origin" });
       if (!response.ok) throw new Error(localizedApiError((await response.json() as { error?: string }).error, t("event.reminderCancelError")));
       setReminderSet(false);
       if (currentUserId) setReminderUserIds((current) => current.filter((id) => id !== currentUserId));
@@ -334,7 +332,7 @@ export function EventModal({ item, users = [], catalog: canonicalCatalog = [], c
     if (!attendeesOpen) return;
     const controller = new AbortController();
     setAttendeesLoading(true);
-    fetch(`/api/events/${item.id}/attendees?page=${attendeesPage}`, { credentials: "same-origin", signal: controller.signal }).then(async (response) => {
+    apiFetch(`/api/events/${item.id}/attendees?page=${attendeesPage}`, { credentials: "same-origin", signal: controller.signal }).then(async (response) => {
       const data = await response.json() as { attendees?: EventAttendee[]; page?: number; pageCount?: number; total?: number; error?: string };
       if (!response.ok) throw new Error(localizedApiError(data.error, t("event.attendeesError")));
       setPagedAttendees(data.attendees ?? []);
@@ -378,7 +376,7 @@ export function CityAutocomplete({ value, onChange, required = false, label, inv
   useEffect(() => {
     if (!open || query.trim().length < 1) { setOptions([]); return; }
     const controller = new AbortController();
-    const timer = window.setTimeout(() => fetch(`/api/cities?q=${encodeURIComponent(query.trim())}`, { signal: controller.signal }).then((response) => response.json()).then((data: { cities?: CityOption[] }) => { setOptions(includeSpecialLocations ? [...SPECIAL_LOCATIONS.filter((name) => name.toLocaleLowerCase("ru").includes(query.trim().toLocaleLowerCase("ru"))).map((name) => ({ id: -1, name, countryCode: "", country: t("location.special") })), ...(data.cities ?? [])] : data.cities ?? []); setOpen(true); }).catch(() => undefined), 180);
+    const timer = window.setTimeout(() => apiFetch(`/api/cities?q=${encodeURIComponent(query.trim())}`, { signal: controller.signal }).then((response) => response.json()).then((data: { cities?: CityOption[] }) => { setOptions(includeSpecialLocations ? [...SPECIAL_LOCATIONS.filter((name) => name.toLocaleLowerCase("ru").includes(query.trim().toLocaleLowerCase("ru"))).map((name) => ({ id: -1, name, countryCode: "", country: t("location.special") })), ...(data.cities ?? [])] : data.cities ?? []); setOpen(true); }).catch(() => undefined), 180);
     return () => { window.clearTimeout(timer); controller.abort(); };
   }, [open, query, includeSpecialLocations, t]);
   return <label className={`city-autocomplete ${invalid ? "field-invalid" : ""}`}>{label ?? t("content.city")}<input required={required} aria-invalid={invalid} value={query} onFocus={() => setOpen(true)} onBlur={() => window.setTimeout(() => setOpen(false), 120)} onChange={(event) => { const next = event.target.value.replace(/[^А-ЯЁа-яёІіҢңҒғҮүҰұҚқӨөҺһӘәЎўЇїЄєҐґЏџЉљЊњЋћЌќ\s.'’()-]/gu, ""); setQuery(next); onChange(next); }} placeholder={t("location.startCity")} autoComplete="off" />{open && query.trim() && <div className="city-suggestions">{options.map((city) => <button type="button" data-i18n-skip key={city.id} onMouseDown={(event) => event.preventDefault()} onClick={() => { setQuery(city.name); onChange(city.name, city.id, city.country); setOpen(false); }}>{city.name}<small>{city.country}</small></button>)}</div>}</label>;
@@ -526,7 +524,7 @@ export function ReadingModal({ item, currentUser, users = [], catalog: canonical
   const publisherPair = currentUser?.profile.type === "Издатель" || users.find((user) => user.id === item.ownerId)?.profile.type === "Издатель";
   async function deleteComment(entry: MaterialComment) {
     if (!window.confirm(t("material.deleteCommentConfirm"))) return;
-    const response = await fetch(`/api/comments/${entry.id}`, { method: "DELETE", credentials: "same-origin" });
+    const response = await apiFetch(`/api/comments/${entry.id}`, { method: "DELETE", credentials: "same-origin" });
     if (!response.ok) {
       const data = await response.json().catch(() => ({})) as { error?: string };
       window.alert(localizedApiError(data.error, t("material.deleteCommentError")));
@@ -542,8 +540,8 @@ export function ReadingModal({ item, currentUser, users = [], catalog: canonical
   useEffect(() => {
     let active = true;
     const refresh = () => Promise.all([
-      fetch(`/api/reactions?kind=${item.kind}&id=${item.id}`, { cache: "no-store" }).then((response) => response.json()) as Promise<{ userIds: number[] }>,
-      fetch(`/api/comments?kind=${item.kind}&id=${item.id}`, { cache: "no-store" }).then((response) => response.json()) as Promise<{ comments: MaterialComment[] }>,
+      apiFetch(`/api/reactions?kind=${item.kind}&id=${item.id}`, { cache: "no-store" }).then((response) => response.json()) as Promise<{ userIds: number[] }>,
+      apiFetch(`/api/comments?kind=${item.kind}&id=${item.id}`, { cache: "no-store" }).then((response) => response.json()) as Promise<{ comments: MaterialComment[] }>,
     ]).then(([reactionData, commentData]) => { if (active) { setHydratedLikedIds(reactionData.userIds ?? []); setComments(commentData.comments ?? []); } }).catch((error) => console.warn(error));
     void refresh();
     const timer = window.setInterval(refresh, 2500);
@@ -569,34 +567,6 @@ export function ReadingModal({ item, currentUser, users = [], catalog: canonical
         {showAllLikes && <div className="nested-modal-backdrop" onMouseDown={() => setShowAllLikes(false)}><section className="likes-list-modal" onMouseDown={(event) => event.stopPropagation()}><button className="modal-close" type="button" aria-label={t("common.close")} onClick={() => setShowAllLikes(false)}>×</button><h2>{t("material.likedBy")}</h2>{likedUsers.map((user) => <button type="button" data-i18n-skip key={user.id} onClick={() => onOpenUser?.(user.id)}><span className={`avatar avatar-sm avatar-${user.color}`}>{user.initials}</span><span><strong>{user.profile.name}</strong><small>{user.profile.type} · {user.profile.city}</small></span></button>)}</section></div>}
         {bookPopup && <UnifiedBookModal book={bookPopup} users={users} catalog={catalog} nested onClose={() => setBookPopup(null)} onOpenUser={onOpenUser} />}
       </article>
-    </div>
-  );
-}
-
-export function FriendProfile({ friend, onClose }: { friend: Friend; onClose: () => void }) {
-  const { t } = useI18n();
-  useEffect(() => {
-    const close = (event: KeyboardEvent) => event.key === "Escape" && onClose();
-    window.addEventListener("keydown", close);
-    return () => window.removeEventListener("keydown", close);
-  }, [onClose]);
-
-  return (
-    <div className="modal-backdrop" role="presentation" onMouseDown={onClose}>
-      <section className="profile-modal" role="dialog" aria-modal="true" aria-labelledby="friend-profile-title" onMouseDown={(event) => event.stopPropagation()}>
-        <button className="modal-close" type="button" onClick={onClose} aria-label={t("profile.close")}>×</button>
-        <div className="profile-cover" />
-        <div className="profile-modal-body">
-          <Avatar friend={friend} size="lg" />
-          <span className="profile-type" data-i18n-skip>{friend.type}</span>
-          <h2 id="friend-profile-title" data-i18n-skip>{friend.name}</h2>
-          <p className="profile-location" data-i18n-skip>⌖ {friend.city}</p>
-          <p className="profile-bio" data-i18n-skip>{friend.bio}</p>
-          <div className="profile-fact"><span>{t("profile.onShelf")}</span><strong>{friend.books}</strong></div>
-          <div className="profile-tags" data-i18n-skip><span>Современная проза</span><span>Книжные клубы</span><span>Прогулки</span></div>
-          <button className="primary-button" type="button" onClick={onClose}>{t("profile.backToChat")}</button>
-        </div>
-      </section>
     </div>
   );
 }
@@ -703,7 +673,7 @@ export function UserProfileModal({ user, viewer, users, catalog, profileFriends 
   }, [shownMaterials, publicProfileMaterials.length]);
 
   if (!routedPopup.active && !openedBook && !openedAuthorBook && !openedReview && !openedPublisherEvent && !openedPublisherNews && !openedOccasion) return null;
-  if (user.deletedAt || user.purged) return <div className="modal-backdrop profile-modal-backdrop" onMouseDown={routedClose}><section className="simple-warning-modal deleted-profile-notice" role="dialog" aria-modal="true" onMouseDown={(event) => event.stopPropagation()}><button className="modal-close" aria-label={t("common.close")} type="button" onClick={routedClose}>×</button><h2>{t("profile.deletedTitle")}</h2><p>{t("profile.deletedBody")}</p>{viewer.isAdmin && !user.purged ? <div className="form-actions"><button className="outline-button" type="button" title={t("profile.restore")} onClick={async () => { const response = await fetch(`/api/admin/users/${user.id}/restore`, { method: "POST", credentials: "same-origin" }); if (response.ok) window.location.reload(); }}>↶ {t("profile.restore")}</button><button className="quiet-danger-button" type="button" title={t("profile.deleteForever")} onClick={async () => { if (!window.confirm(t("profile.deleteForeverConfirm"))) return; const response = await fetch(`/api/admin/users/${user.id}/permanent`, { method: "DELETE", credentials: "same-origin" }); if (response.ok) window.location.reload(); }}>🗑 {t("profile.deleteForever")}</button></div> : <button className="primary-button" type="button" onClick={routedClose}>{t("common.close")}</button>}</section></div>;
+  if (user.deletedAt || user.purged) return <div className="modal-backdrop profile-modal-backdrop" onMouseDown={routedClose}><section className="simple-warning-modal deleted-profile-notice" role="dialog" aria-modal="true" onMouseDown={(event) => event.stopPropagation()}><button className="modal-close" aria-label={t("common.close")} type="button" onClick={routedClose}>×</button><h2>{t("profile.deletedTitle")}</h2><p>{t("profile.deletedBody")}</p>{viewer.isAdmin && !user.purged ? <div className="form-actions"><button className="outline-button" type="button" title={t("profile.restore")} onClick={async () => { const response = await apiFetch(`/api/admin/users/${user.id}/restore`, { method: "POST", credentials: "same-origin" }); if (response.ok) window.location.reload(); }}>↶ {t("profile.restore")}</button><button className="quiet-danger-button" type="button" title={t("profile.deleteForever")} onClick={async () => { if (!window.confirm(t("profile.deleteForeverConfirm"))) return; const response = await apiFetch(`/api/admin/users/${user.id}/permanent`, { method: "DELETE", credentials: "same-origin" }); if (response.ok) window.location.reload(); }}>🗑 {t("profile.deleteForever")}</button></div> : <button className="primary-button" type="button" onClick={routedClose}>{t("common.close")}</button>}</section></div>;
   return (
     <div className="modal-backdrop profile-overlay-top" role="presentation" onMouseDown={routedClose}>
       <section className="public-profile-modal" role="dialog" aria-modal="true" aria-labelledby="public-profile-title" onMouseDown={(event) => event.stopPropagation()}>
@@ -929,7 +899,7 @@ export function BookAutofillField({ value, onChange, onProduct, hidePlaceholder 
     const timer = window.setTimeout(async () => {
       setLoading(true);
       try {
-        const response = await fetch("/api/books/preview", { method: "POST", credentials: "same-origin", headers: { "content-type": "application/json" }, body: JSON.stringify({ productUrl: value }), signal: controller.signal });
+        const response = await apiFetch("/api/books/preview", { method: "POST", credentials: "same-origin", headers: { "content-type": "application/json" }, body: JSON.stringify({ productUrl: value }), signal: controller.signal });
         const data = await response.json() as { product?: MarketplaceProductPreview; error?: string };
         if (!response.ok || !data.product) throw new Error(localizedApiError(data.error, t("book.autofillError")));
         onProduct(data.product);
@@ -958,7 +928,7 @@ export function WishBookEditor({ ownerId, onClose, onSaved }: { ownerId: number;
     const timer = window.setTimeout(async () => {
       setPreviewLoading(true);
       try {
-        const response = await fetch("/api/wishlist/preview", { method: "POST", credentials: "same-origin", headers: { "content-type": "application/json" }, body: JSON.stringify({ productUrl: form.productUrl }), signal: controller.signal });
+        const response = await apiFetch("/api/wishlist/preview", { method: "POST", credentials: "same-origin", headers: { "content-type": "application/json" }, body: JSON.stringify({ productUrl: form.productUrl }), signal: controller.signal });
         const data = await response.json() as { product?: FlipProductPreview; error?: string };
         if (!response.ok || !data.product) throw new Error(localizedApiError(data.error, t("wishlist.previewError")));
         setPreview(data.product);
@@ -971,7 +941,7 @@ export function WishBookEditor({ ownerId, onClose, onSaved }: { ownerId: number;
     event.preventDefault(); setSaving(true); setError("");
     try {
       if (!preview) throw new Error(t("wishlist.waitPreview"));
-      const response = await fetch("/api/wishlist", { method: "POST", credentials: "same-origin", headers: { "content-type": "application/json" }, body: JSON.stringify(form) });
+      const response = await apiFetch("/api/wishlist", { method: "POST", credentials: "same-origin", headers: { "content-type": "application/json" }, body: JSON.stringify(form) });
       const data = await response.json() as { item?: WishBook; error?: string };
       if (!response.ok || !data.item) throw new Error(localizedApiError(data.error, t("wishlist.addError")));
       onSaved({ ...data.item, ownerId });
@@ -1001,15 +971,15 @@ export function WishBookModal({ item, owner, viewer, users, onClose, onChanged, 
   useEffect(() => {
     if (!current.privateVisible) return;
     let active = true;
-    fetch(`/api/wishlist/${current.id}/price`, { credentials: "same-origin" }).then((response) => response.json()).then((data: { price?: number; currency?: string; checkedAt?: string }) => { if (active) { const next = { ...current, price: data.price, priceCurrency: data.currency, priceCheckedAt: data.checkedAt }; setCurrent(next); onChanged(next); } }).catch(() => undefined);
+    apiFetch(`/api/wishlist/${current.id}/price`, { credentials: "same-origin" }).then((response) => response.json()).then((data: { price?: number; currency?: string; checkedAt?: string }) => { if (active) { const next = { ...current, price: data.price, priceCurrency: data.currency, priceCheckedAt: data.checkedAt }; setCurrent(next); onChanged(next); } }).catch(() => undefined);
     return () => { active = false; };
   }, [current.id]);
   async function reserve() {
     setWorking(true); const nextWindow = window.open("", "_blank");
-    try { const response = await fetch(`/api/wishlist/${current.id}/reserve`, { method: "POST", credentials: "same-origin" }); const data = await response.json() as { checkoutUrl?: string; reservedByUserId?: number; error?: string }; if (!response.ok || !data.checkoutUrl) throw new Error(localizedApiError(data.error, t("wishlist.reserveError"))); const next = { ...current, reservedByUserId: data.reservedByUserId, reservedAt: new Date().toISOString() }; setCurrent(next); onChanged(next); if (nextWindow) { nextWindow.opener = null; nextWindow.location.href = data.checkoutUrl; } } catch (error) { nextWindow?.close(); window.alert(error instanceof Error ? error.message : t("wishlist.reserveError")); } finally { setWorking(false); }
+    try { const response = await apiFetch(`/api/wishlist/${current.id}/reserve`, { method: "POST", credentials: "same-origin" }); const data = await response.json() as { checkoutUrl?: string; reservedByUserId?: number; error?: string }; if (!response.ok || !data.checkoutUrl) throw new Error(localizedApiError(data.error, t("wishlist.reserveError"))); const next = { ...current, reservedByUserId: data.reservedByUserId, reservedAt: new Date().toISOString() }; setCurrent(next); onChanged(next); if (nextWindow) { nextWindow.opener = null; nextWindow.location.href = data.checkoutUrl; } } catch (error) { nextWindow?.close(); window.alert(error instanceof Error ? error.message : t("wishlist.reserveError")); } finally { setWorking(false); }
   }
-  async function unlock() { const response = await fetch(`/api/wishlist/${current.id}/reservation`, { method: "DELETE", credentials: "same-origin" }); if (!response.ok) return; const next = { ...current, reservedByUserId: undefined, reservedAt: undefined }; setCurrent(next); onChanged(next); }
-  async function remove() { if (!window.confirm(t("wishlist.deleteConfirm"))) return; const response = await fetch(`/api/wishlist/${current.id}`, { method: "DELETE", credentials: "same-origin" }); if (response.ok) { onDeleted?.(current.id); onClose(); } }
+  async function unlock() { const response = await apiFetch(`/api/wishlist/${current.id}/reservation`, { method: "DELETE", credentials: "same-origin" }); if (!response.ok) return; const next = { ...current, reservedByUserId: undefined, reservedAt: undefined }; setCurrent(next); onChanged(next); }
+  async function remove() { if (!window.confirm(t("wishlist.deleteConfirm"))) return; const response = await apiFetch(`/api/wishlist/${current.id}`, { method: "DELETE", credentials: "same-origin" }); if (response.ok) { onDeleted?.(current.id); onClose(); } }
   return <div className="nested-modal-backdrop" onMouseDown={onClose}><section className="wishlist-book-modal" onMouseDown={(event) => event.stopPropagation()}><button className="modal-close" aria-label={t("common.close")} type="button" onClick={onClose}>×</button><div data-i18n-skip className={`library-book-cover library-cover-${current.coverTone}`} style={current.coverUrl ? { backgroundImage: `url(${current.coverUrl})` } : undefined}>{!current.coverUrl && <><em>{current.author}</em><strong>{current.title}</strong><span>Book Meet</span></>}</div><div><span className="section-subtitle">{t("wishlist.title")} · <span data-i18n-skip>{current.marketplace}</span></span><h2 data-i18n-skip>{current.title}</h2><p className="library-author" data-i18n-skip>{current.author}</p><p data-i18n-skip={Boolean(current.annotation)}>{current.annotation || t("book.noAnnotation")}</p>{current.privateVisible && <div className="wishlist-delivery"><div><span>{t("wishlist.currentPrice")}</span><strong>{current.price ? `${current.price.toLocaleString(locale === "kk" ? "kk-KZ" : locale === "en" ? "en-US" : "ru-RU")} ${current.priceCurrency === "KZT" ? "₸" : current.priceCurrency}` : t("wishlist.priceUnavailable")}</strong></div><div><span>{t("wishlist.recipient")}</span><strong data-i18n-skip>{current.recipientName}</strong></div><div><span>{t("wishlist.pickup")}</span><strong data-i18n-skip>{current.pickupAddress}</strong></div><div><span>{t("wishlist.recipientPhone")}</span><strong data-i18n-skip>{current.phone}</strong></div></div>}{current.reservedByUserId && <p className="wishlist-reserved-note">{t("wishlist.reservedBy")}: <strong data-i18n-skip={Boolean(reserver)}>{reserver?.profile.name ?? t("wishlist.friend")}</strong></p>}<div className="form-actions">{isOwner ? <><button className="quiet-danger-button" type="button" onClick={remove}>{t("wishlist.deleteCard")}</button>{current.reservedByUserId && <button className="outline-button" type="button" onClick={unlock}>{t("wishlist.unlock")}</button>}</> : current.reservedByUserId && current.reservedByUserId !== viewer.id ? <button className="outline-button" type="button" disabled>{t("wishlist.reserved")}</button> : <button className="primary-button" type="button" disabled={working} onClick={reserve}>{current.reservedByUserId === viewer.id ? t("wishlist.goPurchase") : t("wishlist.gift")}</button>}</div></div></section></div>;
 }
 
@@ -1246,8 +1216,7 @@ export function LibraryTab({ books, setBooks, userId, users, catalog = [], initi
     if (!file) return;
     setImporting(true);
     try {
-      const workbook = XLSX.read(await file.arrayBuffer(), { type: "array" });
-      const rows = XLSX.utils.sheet_to_json<Record<string, unknown>>(workbook.Sheets[workbook.SheetNames[0]], { defval: "" });
+      const rows = await readFirstWorksheetRows(file);
       const existing = new Set(canonicalCatalog.map((book) => normalizeBookKey(`${book.author}|${book.title}`)));
       const imported: LibraryBook[] = [];
       for (const row of rows.slice(0, 1000)) {
@@ -1256,7 +1225,7 @@ export function LibraryTab({ books, setBooks, userId, users, catalog = [], initi
         const title = value(["Название", "название", "Книга", "Title", "title"]);
         const key = normalizeBookKey(`${author}|${title}`);
         if (!author || !title || existing.has(key)) continue;
-        const response = await fetch("/api/books", { method: "POST", credentials: "same-origin", headers: { "content-type": "application/json" }, body: JSON.stringify({ userId, author, title, isbn: value(["ISBN", "isbn"]), publisher: value(["Издательство", "Publisher", "publisher"]), annotation: value(["Аннотация", "Описание", "Annotation", "annotation"]), coverUrl: value(["Обложка", "Cover", "coverUrl"]), genres: value(["Жанры", "Genres", "genres"]).split(/[,;]+/).map((item) => item.trim()).filter(Boolean), readingStatus: "read", rating: 0, shortReview: "", coverTone: "blue" }) });
+        const response = await apiFetch("/api/books", { method: "POST", credentials: "same-origin", headers: { "content-type": "application/json" }, body: JSON.stringify({ userId, author, title, isbn: value(["ISBN", "isbn"]), publisher: value(["Издательство", "Publisher", "publisher"]), annotation: value(["Аннотация", "Описание", "Annotation", "annotation"]), coverUrl: value(["Обложка", "Cover", "coverUrl"]), genres: value(["Жанры", "Genres", "genres"]).split(/[,;]+/).map((item) => item.trim()).filter(Boolean), readingStatus: "read", rating: 0, shortReview: "", coverTone: "blue" }) });
         if (!response.ok) continue;
         const data = await response.json() as { book?: LibraryBook };
         if (data.book) imported.push(data.book);
@@ -1271,7 +1240,7 @@ export function LibraryTab({ books, setBooks, userId, users, catalog = [], initi
   async function updateRating(id: number, rating: number) {
     const book = books.find((item) => item.id === id);
     if (!book) return;
-    const response = await fetch("/api/books", { method: "POST", credentials: "same-origin", headers: { "content-type": "application/json" }, body: JSON.stringify({ rating, shortReview: book.review, readMonth: book.readMonth, readYear: book.readYear, readingStatus: book.readingStatus ?? "read", lastReadChapter: book.lastReadChapter, readingComment: book.readingComment, top3: Boolean(book.topRank), useExistingId: book.catalogBookId ?? book.id }) });
+    const response = await apiFetch("/api/books", { method: "POST", credentials: "same-origin", headers: { "content-type": "application/json" }, body: JSON.stringify({ rating, shortReview: book.review, readMonth: book.readMonth, readYear: book.readYear, readingStatus: book.readingStatus ?? "read", lastReadChapter: book.lastReadChapter, readingComment: book.readingComment, top3: Boolean(book.topRank), useExistingId: book.catalogBookId ?? book.id }) });
     if (!response.ok) { window.alert(t("library.ratingSaveError")); return; }
     setBooks((current) => current.map((item) => item.id === id ? { ...item, rating } : item));
   }
@@ -1282,12 +1251,12 @@ export function LibraryTab({ books, setBooks, userId, users, catalog = [], initi
     const ownerFields = { rating: book.rating, shortReview: book.review, readMonth: book.readMonth, readYear: book.readYear, readingStatus: book.readingStatus ?? "read", lastReadChapter: book.lastReadChapter, readingComment: book.readingComment, top3: Boolean(book.topRank) };
     const payload = canonicalId ? { ...ownerFields, useExistingId: canonicalId } : { userId, author: book.author, title: book.title, isbn: book.isbn, publisher: book.publisher, genres: book.genres, annotation: book.annotation, isAdult: book.isAdult, coverUrl: book.coverUrl, coverTone: book.coverTone, flipUrl: book.flipUrl, links: book.links?.map(({ label, url, action }) => ({ label, url, action })), format: "Книга", ...ownerFields };
     try {
-      let response = await fetch("/api/books", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(payload) });
+      let response = await apiFetch("/api/books", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(payload) });
       if (response.status === 409) {
         const conflict = await response.json() as { code?: string; error?: string; match?: { id: number; title: string; author: string } };
         if (conflict.code === "TOP3_LIMIT") { window.alert(t("library.top3Full")); return; }
         if (!conflict.match || !window.confirm(t("book.matchConfirm", { author: conflict.match.author, title: conflict.match.title }))) return;
-        response = await fetch("/api/books", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ ...ownerFields, useExistingId: conflict.match.id }) });
+        response = await apiFetch("/api/books", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ ...ownerFields, useExistingId: conflict.match.id }) });
       }
       if (!response.ok) throw new Error(t("book.catalogSaveError"));
       const data = await response.json() as { bookId: number; topRank?: 1 | 2 | 3 };
@@ -1327,7 +1296,7 @@ export function LibraryTab({ books, setBooks, userId, users, catalog = [], initi
         ))}
       </div>
       {editingBook !== undefined && <BookEditor book={editingBook} catalog={canonicalCatalog} top3Count={books.filter((item) => item.topRank).length} onClose={() => { setEditingBook(undefined); closeActiveMobileWorkflow("/profile/library"); }} onSave={saveBook} />}
-      {viewingBook && <UnifiedBookModal book={viewingBook} users={users} catalog={canonicalCatalog} onClose={() => setViewingBook(null)} onEdit={() => { openMobileWorkflowRoute({ mode: "edit", kind: "book", id: viewingBook.id }); setEditingBook(viewingBook); setViewingBook(null); }} onDelete={async () => { if (!window.confirm(t("library.deleteConfirm", { title: viewingBook.title }))) return; const response = await fetch(`/api/books/${viewingBook.id}`, { method: "DELETE", credentials: "same-origin" }); if (!response.ok) { window.alert(t("book.deleteError")); return; } setBooks((current) => current.filter((book) => book.id !== viewingBook.id)); setViewingBook(null); }} />}
+      {viewingBook && <UnifiedBookModal book={viewingBook} users={users} catalog={canonicalCatalog} onClose={() => setViewingBook(null)} onEdit={() => { openMobileWorkflowRoute({ mode: "edit", kind: "book", id: viewingBook.id }); setEditingBook(viewingBook); setViewingBook(null); }} onDelete={async () => { if (!window.confirm(t("library.deleteConfirm", { title: viewingBook.title }))) return; const response = await apiFetch(`/api/books/${viewingBook.id}`, { method: "DELETE", credentials: "same-origin" }); if (!response.ok) { window.alert(t("book.deleteError")); return; } setBooks((current) => current.filter((book) => book.id !== viewingBook.id)); setViewingBook(null); }} />}
       {statsOpen && <ReadingStatsModal books={books} users={users} onClose={() => setStatsOpen(false)} />}
     </div>
   );
@@ -1421,21 +1390,12 @@ export function MyEventsTab({ createdEvents, participatingEvents, users, catalog
   const openBook = (item: BookEvent) => setOpenedBook(canonicalCatalog.find((book) => book.id === item.linkedBookId) ?? null);
   async function remove(item: BookEvent) {
     if (!window.confirm(t("event.deleteConfirm", { title: item.title }))) return;
-    const response = await fetch(`/api/events/${item.id}`, { method: "DELETE", credentials: "same-origin" });
+    const response = await apiFetch(`/api/events/${item.id}`, { method: "DELETE", credentials: "same-origin" });
     if (!response.ok) { window.alert(t("event.deleteError")); return; }
     setOpened(null);
     onDeleted(item.id);
   }
   return <div className="my-events-tab"><div className="profile-title-row"><div><h1>{t("event.myEvents")}</h1><p>{t("event.privateCount", { count: createdEvents.length + participatingEvents.length })}</p></div></div><div className="my-event-groups">{groups.map((group) => <details key={group.key} open><summary><span>{group.title}</span><b>{group.events.length}</b></summary>{group.events.length > 0 && <div className="events-grid">{group.events.map((item) => <EventCard key={item.id} item={item} own={group.own} compact onOpen={() => setOpened(item)} onOpenBook={item.linkedBookId ? () => openBook(item) : undefined} onEdit={group.own ? () => onEdit(item) : undefined} />)}</div>}</details>)}</div>{opened && <EventModal item={opened} users={users} catalog={canonicalCatalog} currentUserId={currentUserId} onOpenUser={onOpenUser} onOpenBook={opened.linkedBookId ? () => openBook(opened) : undefined} onClose={() => setOpened(null)} onEdit={openedIsOwn ? () => { onEdit(opened); setOpened(null); } : undefined} onDelete={openedIsOwn ? () => void remove(opened) : undefined} />}{openedBook && <UnifiedBookModal book={openedBook} users={users} catalog={canonicalCatalog} onClose={() => setOpenedBook(null)} onOpenUser={onOpenUser} />}</div>;
-}
-
-export function LegacyAuthorBooksTab({ books, setBooks, userId }: { books: AuthorBook[]; setBooks: React.Dispatch<React.SetStateAction<AuthorBook[]>>; userId: number }) {
-  const { t } = useI18n();
-  const [adding, setAdding] = useState(false);
-  const [warningUrl, setWarningUrl] = useState<string | null>(null);
-  const [form, setForm] = useState({ author: "", title: "", genres: [] as string[], annotation: "", pages: "", format: "Бумажная" as BookFormat, label: "", url: "" });
-  async function submit(event: FormEvent) { event.preventDefault(); const links = form.label && form.url ? [{ id: Date.now(), label: form.label, url: form.url }] : []; const newBook: AuthorBook = { id: Date.now(), author: form.author, title: form.title, genres: form.genres, annotation: form.annotation, pages: form.pages, durationHours: "", durationMinutes: "", format: form.format, coverTone: ["wine", "sky", "forest", "sand"][Math.floor(Math.random() * 4)], links }; const payload = { userId, ...newBook, isAuthor: true, links: links.map(({ label, url }) => ({ label, url })) }; try { let response = await fetch("/api/books", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(payload) }); if (response.status === 409) { const data = await response.json() as { match: { id: number; title: string; author: string } }; if (!window.confirm(t("book.matchConfirm", { author: data.match.author, title: data.match.title }))) return; response = await fetch("/api/books", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ ...payload, useExistingId: data.match.id }) }); } if (!response.ok) throw new Error(t("book.saveError")); } catch (error) { console.warn(error); } setBooks((current) => [newBook, ...current]); setAdding(false); }
-  return <div className="library-tab"><div className="profile-title-row library-title-row"><div><h1>{t("authorBooks.mine")}</h1><p>{t("authorBooks.writtenByYou")}</p></div><button className="primary-button" type="button" onClick={() => setAdding(true)}>＋ {t("content.addBook")}</button></div><div className="library-grid">{books.map((book) => <article data-i18n-skip className="library-book" key={book.id}><div className={`library-book-cover library-cover-${book.coverTone}`} style={book.coverUrl ? { backgroundImage: `url(${book.coverUrl})` } : undefined}>{!book.coverUrl && <><em>{book.author}</em><strong>{book.title}</strong><span>Book Meet</span></>}</div><div className="library-book-copy"><span data-i18n-skip={false} className="book-format">{t("authorBooks.authored")}</span><h3>{book.title}</h3><p>{book.author}</p><div className="writer-book-links">{book.links.map((link) => <button type="button" key={link.id} onClick={() => setWarningUrl(link.url)}>{link.label}</button>)}</div></div></article>)}</div>{adding && <div className="modal-backdrop" onMouseDown={() => setAdding(false)}><section className="review-editor" onMouseDown={(event) => event.stopPropagation()}><button className="modal-close" aria-label={t("common.close")} type="button" onClick={() => setAdding(false)}>×</button><h2>{t("authorBooks.addAuthored")}</h2><form className="book-fields" onSubmit={submit}><div className="form-row"><label>{t("content.author")} *<input required value={form.author} onChange={(event) => setForm({ ...form, author: event.target.value })} /></label><label>{t("content.title")} *<input required value={form.title} onChange={(event) => setForm({ ...form, title: event.target.value })} /></label></div><GenrePicker label={t("content.genre")} value={form.genres} onChange={(genres) => setForm({ ...form, genres })} /><label>{t("content.annotation")}<textarea rows={4} value={form.annotation} onChange={(event) => setForm({ ...form, annotation: event.target.value })} /></label><div className="form-row"><label>{t("book.storePortal")}<input value={form.label} onChange={(event) => setForm({ ...form, label: event.target.value })} /></label><label>{t("book.link")}<input type="url" value={form.url} onChange={(event) => setForm({ ...form, url: event.target.value })} /></label></div><div className="form-actions"><button type="button" onClick={() => setAdding(false)}>{t("common.cancel")}</button><button className="primary-button" type="submit">{t("book.save")}</button></div></form></section></div>}{warningUrl && <div className="modal-backdrop" onMouseDown={() => setWarningUrl(null)}><section className="external-warning" onMouseDown={(event) => event.stopPropagation()}><span className="section-subtitle">{t("book.externalLink")}</span><h2>{t("book.externalSite")}</h2><p data-i18n-skip>{warningUrl}</p><div className="form-actions"><button type="button" onClick={() => setWarningUrl(null)}>{t("common.cancel")}</button><button className="primary-button" type="button" onClick={() => window.open(warningUrl, "_blank", "noopener,noreferrer")}>{t("book.continue")}</button></div></section></div>}</div>;
 }
 
 export function WriterBookEditor({ book, author, allowFreeAuthor = false, onClose, onSave }: { book?: AuthorBook | null; author: string; allowFreeAuthor?: boolean; onClose: () => void; onSave: (book: AuthorBook) => void }) {
@@ -1506,7 +1466,7 @@ export function WriterBookEditor({ book, author, allowFreeAuthor = false, onClos
 export function AuthorBooksTab({ books, setBooks, userId, author, users, publisherMode = false, communityMode = false, canCreate = true }: { books: AuthorBook[]; setBooks: React.Dispatch<React.SetStateAction<AuthorBook[]>>; userId: number; author: string; users: DemoUser[]; publisherMode?: boolean; communityMode?: boolean; canCreate?: boolean }) {
   const { t } = useI18n();
   const [editing, setEditing] = useState<AuthorBook | null | undefined>(undefined); const [viewing, setViewing] = useState<AuthorBook | null>(null); const [warning, setWarning] = useState<BookLink | null>(null);
-  async function save(book: AuthorBook) { const existingBook = books.some((item) => item.id === book.id) || Boolean(book.catalogBookId); const payload = { userId, ...book, format: "Книга", isAuthor: true, useExistingId: existingBook ? (book.catalogBookId ?? book.id) : undefined, links: book.links.map(({ label, url, action }) => ({ label, url, action })) }; try { let response = await fetch("/api/books", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(payload) }); if (response.status === 409) { const data = await response.json() as { match: { id: number; title: string; author: string } }; if (!window.confirm(t("book.matchConfirm", { author: data.match.author, title: data.match.title }))) return; response = await fetch("/api/books", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ ...payload, useExistingId: data.match.id }) }); } if (!response.ok) throw new Error(t("book.saveError")); const data = await response.json() as { bookId: number }; const savedBook = { ...book, id: data.bookId }; setBooks((current) => current.some((item) => item.id === book.id) ? current.map((item) => item.id === book.id ? savedBook : item) : [savedBook, ...current]); setEditing(undefined); } catch (error) { console.warn(error); window.alert(t("book.saveConnectionError")); } }
+  async function save(book: AuthorBook) { const existingBook = books.some((item) => item.id === book.id) || Boolean(book.catalogBookId); const payload = { userId, ...book, format: "Книга", isAuthor: true, useExistingId: existingBook ? (book.catalogBookId ?? book.id) : undefined, links: book.links.map(({ label, url, action }) => ({ label, url, action })) }; try { let response = await apiFetch("/api/books", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(payload) }); if (response.status === 409) { const data = await response.json() as { match: { id: number; title: string; author: string } }; if (!window.confirm(t("book.matchConfirm", { author: data.match.author, title: data.match.title }))) return; response = await apiFetch("/api/books", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ ...payload, useExistingId: data.match.id }) }); } if (!response.ok) throw new Error(t("book.saveError")); const data = await response.json() as { bookId: number }; const savedBook = { ...book, id: data.bookId }; setBooks((current) => current.some((item) => item.id === book.id) ? current.map((item) => item.id === book.id ? savedBook : item) : [savedBook, ...current]); setEditing(undefined); } catch (error) { console.warn(error); window.alert(t("book.saveConnectionError")); } }
   return <div className="library-tab">
     <div className="profile-title-row library-title-row">
       <div><h1>{communityMode ? t("profile.communityBooks") : publisherMode ? t("profile.publisherBooks") : t("authorBooks.mine")}</h1><p>{communityMode ? t("authorBooks.communityHint") : publisherMode ? t("authorBooks.publisherHint") : t("authorBooks.writtenByYou")}</p></div>
@@ -1514,7 +1474,7 @@ export function AuthorBooksTab({ books, setBooks, userId, author, users, publish
     </div>
     <div className="library-grid">{books.map((book) => <article data-i18n-skip className="library-book material-clickable-card" role="button" tabIndex={0} key={book.id} onClick={() => setViewing(book)} onKeyDown={(event) => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); setViewing(book); } }}><div className={`library-book-cover library-cover-${book.coverTone}`} style={book.coverUrl ? { backgroundImage: `url(${book.coverUrl})` } : undefined}>{!book.coverUrl && <><em>{book.author}</em><strong>{book.title}</strong><span>Book Meet</span></>}</div><div className="library-book-copy"><h3>{book.title}</h3><p>{book.author}</p><div className="writer-book-links">{book.links.map((link) => <button type="button" key={link.id} onClick={(event) => { event.stopPropagation(); setWarning(link); }}><span data-i18n-skip={false}>{t(link.action === "Читать" ? "content.read" : link.action === "Слушать" ? "content.listen" : "content.buy")}</span> · {link.label}</button>)}</div></div></article>)}</div>
     {editing !== undefined && <WriterBookEditor book={editing} author={author} allowFreeAuthor={publisherMode} onClose={() => setEditing(undefined)} onSave={save} />}
-    {viewing && <UnifiedBookModal book={viewing} users={users} onClose={() => setViewing(null)} onEdit={canCreate ? () => { setEditing(viewing); setViewing(null); } : undefined} onDelete={canCreate ? async () => { if (!window.confirm(t("authorBooks.deleteConfirm", { title: viewing.title }))) return; const response = await fetch(`/api/books/${viewing.id}`, { method: "DELETE", credentials: "same-origin" }); if (!response.ok) { window.alert(t("book.deleteError")); return; } setBooks((current) => current.filter((book) => book.id !== viewing.id)); setViewing(null); } : undefined} />}
+    {viewing && <UnifiedBookModal book={viewing} users={users} onClose={() => setViewing(null)} onEdit={canCreate ? () => { setEditing(viewing); setViewing(null); } : undefined} onDelete={canCreate ? async () => { if (!window.confirm(t("authorBooks.deleteConfirm", { title: viewing.title }))) return; const response = await apiFetch(`/api/books/${viewing.id}`, { method: "DELETE", credentials: "same-origin" }); if (!response.ok) { window.alert(t("book.deleteError")); return; } setBooks((current) => current.filter((book) => book.id !== viewing.id)); setViewing(null); } : undefined} />}
     {warning && <div className="modal-backdrop" onMouseDown={() => setWarning(null)}><section className="external-warning" onMouseDown={(event) => event.stopPropagation()}><h2>{t("book.externalSite")}</h2><p data-i18n-skip>{warning.url}</p><div className="form-actions"><button type="button" onClick={() => setWarning(null)}>{t("common.cancel")}</button><button className="primary-button" type="button" onClick={() => window.open(warning.url, "_blank", "noopener,noreferrer")}>{t("book.continue")}</button></div></section></div>}
   </div>;
 }
@@ -1727,13 +1687,6 @@ export function AdminCatalogCard({ item, onOpen }: { item: AdminCatalogItem; onO
   return <button className={`admin-content-card admin-content-${item.kind}`} type="button" onClick={onOpen}><span data-i18n-skip className="section-subtitle">{item.subtitle}</span><h3 data-i18n-skip>{item.title}</h3><p data-i18n-skip>{item.text}</p><small>{t("admin.openMaterial")}</small></button>;
 }
 
-export function AdminExcerptEditor({ excerpt, writerBooks, onClose, onSave }: { excerpt: UserExcerpt; writerBooks: AuthorBook[]; onClose: () => void; onSave: (excerpt: UserExcerpt) => void }) {
-  const { t } = useI18n();
-  const [form, setForm] = useState(excerpt);
-  const [linked, setLinked] = useState(Boolean(excerpt.bookId));
-  return <div className="modal-backdrop" onMouseDown={onClose}><section className="review-editor blog-editor-modal" onMouseDown={(event) => event.stopPropagation()}><button className="modal-close" aria-label={t("common.close")} type="button" onClick={onClose}>×</button><h2>{t("publication.edit")}</h2><form className="book-fields" onSubmit={(event) => { event.preventDefault(); onSave({ ...form, bookId: linked ? form.bookId : undefined, bookTitle: linked ? form.bookTitle : "", previewText: form.previewText.trim(), bodyHtml: sanitizeRichHtml(form.bodyHtml, t("editor.inlineImage")), text: form.previewText.trim() }); }}><div className="blog-book-toggle"><span>{t("publication.linkedQuestion")}</span><button className={`switch-control ${linked ? "active" : ""}`} type="button" role="switch" aria-checked={linked} onClick={() => { setLinked((value) => !value); if (linked) setForm({ ...form, bookId: undefined, bookTitle: "" }); }}><span /></button></div>{linked && <div className="blog-book-picker">{writerBooks.map((book) => <button data-i18n-skip className={`blog-book-option ${form.bookId === book.id ? "selected" : ""}`} type="button" key={book.id} onClick={() => setForm({ ...form, bookId: book.id, bookTitle: book.title, link: "" })}><div className={`library-book-cover library-cover-${book.coverTone}`} style={book.coverUrl ? { backgroundImage: `url(${book.coverUrl})` } : undefined}>{!book.coverUrl && <><em>{book.author}</em><strong>{book.title}</strong><span>Book Meet</span></>}</div><strong>{book.title}</strong></button>)}</div>}<div className="blog-composer"><span className="field-label blog-composer-title">{t("news.whatsNew")}</span><label className="blog-text-block blog-preview-field"><span className="blog-block-title">{t("news.previewHint")}</span><textarea required rows={7} maxLength={500} placeholder={t("news.previewPlaceholder")} value={form.previewText} onChange={(event) => setForm({ ...form, previewText: event.target.value, text: event.target.value })} /><small className={form.previewText.length >= 500 ? "limit-reached" : ""}>{form.previewText.length}/500</small></label><div className="blog-text-block blog-rich-block"><span className="blog-block-title">{t("news.bodyHint")}</span><RichTextEditor value={form.bodyHtml} onChange={(bodyHtml) => setForm({ ...form, bodyHtml })} /></div></div><div className="form-actions"><button type="button" onClick={onClose}>{t("common.cancel")}</button><button className="primary-button creation-action-button" type="submit">{t("common.save")}</button></div></form></section></div>;
-}
-
 export function AdminCatalogOverlay({ item, users, catalog = [], onClose, onEdit, onDelete }: { item: AdminCatalogItem; users: DemoUser[]; catalog?: (LibraryBook | AuthorBook)[]; onClose: () => void; onEdit: () => void; onDelete: () => void }) {
   const { t } = useI18n();
   const admin = users.find((user) => user.isAdmin);
@@ -1752,7 +1705,7 @@ export function AdminCatalogEditor({ item, users, catalog = [], onClose, onSave 
   const canonicalCatalog = catalog.length ? catalog : catalogFromUsers(users);
   if (item.kind === "book") {
     const owner = users.find((user) => (user.authorBooks ?? []).some((book) => book.id === item.id) || user.books.some((book) => book.id === item.id));
-    if ("links" in item.source) return <WriterBookEditor book={item.source} author={item.source.author} onClose={onClose} onSave={(book) => onSave({ ...book, ownerId: owner?.id })} />;
+    if (item.source.rating === undefined) return <WriterBookEditor book={item.source} author={item.source.author} onClose={onClose} onSave={(book) => onSave({ ...book, ownerId: owner?.id })} />;
     return <BookEditor book={item.source} catalog={canonicalCatalog} onClose={onClose} onSave={(book) => onSave({ ...book, ownerId: owner?.id })} />;
   }
   if (item.kind === "review") return <ReviewEditor review={item.source} catalog={canonicalCatalog} onClose={onClose} onSave={(review) => onSave(review)} />;

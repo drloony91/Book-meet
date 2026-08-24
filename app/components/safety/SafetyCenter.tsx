@@ -2,6 +2,7 @@ import { FormEvent, useEffect, useState } from "react";
 import { createPortal } from "react-dom";
 import { reportTargetFromPathname, useRoutedPopup } from "../../navigation/routes";
 import { localizedApiError, useI18n } from "../../i18n";
+import { apiFetch } from "../../services/api";
 
 export type ReportTarget = {
   kind: "user" | "book" | "review" | "excerpt" | "event" | "occasion" | "publisher_news" | "chat" | "comment";
@@ -47,7 +48,7 @@ function SafetyReportDialog({ target, onClose, onChanged }: { target: ReportTarg
     setBusy(true);
     setError("");
     try {
-      const response = await fetch("/api/reports", {
+      const response = await apiFetch("/api/reports", {
         method: "POST",
         credentials: "same-origin",
         headers: { "content-type": "application/json" },

@@ -2,6 +2,8 @@
 
 ## 1. Подготовить домен и базу
 
+Канонический production-домен — `bookmeet.club`. `bot.oqyastana.kz` сохраняется только как legacy-домен и должен перенаправлять запросы на canonical origin.
+
 1. Отключить старое приложение бота в Plesk.
 2. Создать новую MySQL-базу и отдельного пользователя только для Book Meet.
 3. Выдать этому пользователю права на созданную базу, не использовать root.
@@ -27,7 +29,7 @@ httpdocs/book-meet
 - Application Root: каталог `book-meet`;
 - Document Root: `book-meet/dist/client`;
 - Application Startup File: `server/index.js`;
-- домен: `bot.oqyastana.kz`;
+- домен: `bookmeet.club`;
 
 Порт вручную фиксировать не нужно: приложение читает переменную `PORT`, которую выдаёт Plesk/Passenger.
 
@@ -35,7 +37,8 @@ httpdocs/book-meet
 
 ```text
 NODE_ENV=production
-APP_ORIGIN=https://bot.oqyastana.kz
+APP_ORIGIN=https://bookmeet.club
+LEGACY_ORIGIN=https://bot.oqyastana.kz
 DB_HOST=адрес_mysql
 DB_PORT=3306
 DB_NAME=имя_базы
@@ -46,7 +49,7 @@ SESSION_DAYS=7
 UPLOAD_DIR=../book-meet-uploads
 MAX_COVER_BYTES=5242880
 TEST1_PASSWORD=отдельный_сложный_пароль
-TEST2_PASSWORD=отдельный_сложный_пароль
+ADMIN_EMAIL=адрес_администратора
 ```
 
 Секреты задаются в панели Plesk или в недоступном из web `.env`; их нельзя помещать в Git.
@@ -61,22 +64,23 @@ corepack pnpm run build
 corepack pnpm run db:setup
 ```
 
-Если в тарифе недоступен Corepack/pnpm, использовать `npm install`; основной воспроизводимый вариант проекта — pnpm с сохранённым `pnpm-lock.yaml`.
+Используется только Corepack/pnpm с обязательным `--frozen-lockfile`; при недоступности этого инструмента установку следует остановить и устранить ограничение окружения. Production seed создаёт один административный аккаунт и требует явные `ADMIN_EMAIL` и `TEST1_PASSWORD`.
 
 После этого перезапустить Node.js-приложение в Plesk.
 
 ## 6. Включить HTTPS
 
-Выпустить сертификат Let's Encrypt для `bot.oqyastana.kz`, включить постоянное перенаправление HTTP → HTTPS и только после этого проверять авторизацию: production-cookie помечаются `Secure`.
+Выпустить сертификат Let's Encrypt для `bookmeet.club` (и legacy-домена, если он обслуживается этим же Plesk), включить постоянное перенаправление HTTP → HTTPS и проверить 301 с `bot.oqyastana.kz` на canonical origin. Production-cookie помечаются `Secure`.
 
 ## 7. Проверить перед открытием
 
-1. `https://bot.oqyastana.kz/api/health` отвечает JSON с `"ok": true` и `"database": "mysql"`.
-2. Открывается главная страница и выполняется вход обоими тестовыми аккаунтами.
-3. Из Тест 1 отправляется предложение дружбы, из Тест 2 оно принимается.
-4. Сообщение, лайк и комментарий видны после выхода, повторного входа и обновления страницы.
-5. Новая книга после обновления страницы остаётся в библиотеке; обложка открывается по `/uploads/...`.
-6. В логах нет ошибок доступа к `book-meet-uploads` и MySQL.
+1. `https://bookmeet.club/api/health` отвечает JSON с `"ok": true` и `"database": "mysql"`.
+2. Открываются canonical root и прямые SPA-маршруты; legacy-домен возвращает 301 на `https://bookmeet.club` с сохранением пути.
+3. Выполняется вход единственным seed-аккаунтом администратора.
+4. Новая книга после обновления страницы остаётся в библиотеке; обложка открывается по `/uploads/...`.
+5. В логах нет ошибок доступа к `book-meet-uploads` и MySQL.
+
+Автоматический `pnpm test` не поднимает отдельную реальную MySQL-базу. Если disposable-база доступна, миграцию, seed и вход проверьте отдельным эксплуатационным smoke перед открытием домена.
 
 ## 8. Резервное копирование
 
@@ -98,4 +102,4 @@ corepack pnpm run build
 corepack pnpm run db:migrate
 ```
 
-После успешных миграций перезапустить приложение и проверить `/api/health`. `db:seed` на обычных обновлениях запускать не нужно: он предназначен для создания/сброса паролей двух тестовых аккаунтов.
+После успешных миграций перезапустить приложение и проверить `/api/health`. `db:seed` на обычных обновлениях запускать не нужно: он предназначен для создания единственного seed-аккаунта администратора и сброса его пароля.

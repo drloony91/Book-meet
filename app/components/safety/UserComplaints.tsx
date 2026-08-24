@@ -2,6 +2,7 @@ import { FormEvent, useEffect, useState } from "react";
 import { createPortal } from "react-dom";
 import type { SafetyReport } from "../../types/domain";
 import { localizedApiError, useI18n, type Translate } from "../../i18n";
+import { apiFetch } from "../../services/api";
 
 function statusLabel(status: SafetyReport["status"], t: Translate) {
   return status === "new" ? t("safety.status.new") : status === "reviewing" ? t("safety.status.reviewing") : status === "satisfied" ? t("safety.status.satisfied") : t("safety.status.rejected");
@@ -16,7 +17,7 @@ export function UserComplaints() {
   const [portalTarget, setPortalTarget] = useState<Element | null>(null);
 
   async function load() {
-    const response = await fetch("/api/reports/mine", { credentials: "same-origin" });
+    const response = await apiFetch("/api/reports/mine", { credentials: "same-origin" });
     const data = await response.json().catch(() => ({})) as { reports?: SafetyReport[] };
     if (response.ok) setReports(data.reports ?? []);
   }
@@ -25,7 +26,7 @@ export function UserComplaints() {
   async function submitAppeal(event: FormEvent) {
     event.preventDefault();
     if (!selected || !appeal.trim()) return;
-    const response = await fetch(`/api/reports/${selected.id}/appeal`, { method: "POST", credentials: "same-origin", headers: { "content-type": "application/json" }, body: JSON.stringify({ text: appeal }) });
+    const response = await apiFetch(`/api/reports/${selected.id}/appeal`, { method: "POST", credentials: "same-origin", headers: { "content-type": "application/json" }, body: JSON.stringify({ text: appeal }) });
     const data = await response.json().catch(() => ({})) as { error?: string };
     if (!response.ok) { setError(localizedApiError(data.error, t("safety.appealError"))); return; }
     setAppeal(""); setSelected(null); await load();

@@ -214,16 +214,23 @@ export type AuthResult = { error?: string; code?: string; requiresTotp?: boolean
 export type AdminMaterialKind = "book" | "review" | "excerpt" | "event" | "occasion";
 export type AdminCatalogKind = AdminMaterialKind | "publisher_news";
 export type AdminSection = "dashboard" | "moderation" | "reports-new" | "reports-reviewed" | "users-active" | "users-blocked" | "users-deleted" | AdminMaterialKind;
-export type AdminCatalogItem = {
+type AdminCatalogItemBase<K extends AdminCatalogKind> = {
   id: number;
-  kind: AdminCatalogKind;
+  kind: K;
   title: string;
   subtitle: string;
   text: string;
   coverUrl?: string;
   coverTone?: string;
-  source: any;
 };
+export type AdminCatalogOwnerMetadata = { ownerId: number; ownerName: string };
+export type AdminCatalogItem =
+  | (AdminCatalogItemBase<"book"> & { source: LibraryBook | AuthorBook })
+  | (AdminCatalogItemBase<"review"> & { source: UserReview & AdminCatalogOwnerMetadata })
+  | (AdminCatalogItemBase<"excerpt"> & { source: UserExcerpt & AdminCatalogOwnerMetadata })
+  | (AdminCatalogItemBase<"publisher_news"> & { source: PublisherNews & AdminCatalogOwnerMetadata })
+  | (AdminCatalogItemBase<"event"> & { source: BookEvent })
+  | (AdminCatalogItemBase<"occasion"> & { source: Occasion });
 
 export type AdminStatistics = {
   totalUsers: number;

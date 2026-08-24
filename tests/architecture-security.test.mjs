@@ -75,6 +75,14 @@ test("mailer is an env-only safe no-op when SMTP is not configured", async () =>
   assert.deepEqual(await sendAccountEmail({ to: "person@example.com", subject: "test", text: "text" }, {}), { delivered: false, reason: "disabled" });
 });
 
+test("Nodemailer dynamic import and createTransport API remain compatible without delivery", async () => {
+  const { default: nodemailer } = await import("nodemailer");
+  const transport = nodemailer.createTransport({ streamTransport: true, newline: "unix", buffer: true });
+  assert.equal(typeof transport.sendMail, "function");
+  assert.equal(typeof transport.close, "function");
+  transport.close();
+});
+
 test("public catalog maps only the minimal read-only DTO", async () => {
   const results = [
     [[{ id: 1, author: "Автор", title: "Книга", genres: "[]", annotation: "Текст", cover_tone: "blue", created_at: "2026-01-01", popularity: 2 }]],
@@ -253,6 +261,19 @@ test("участие в сообществе не является дружбо�
   assert.match(controller, /isCommunityMemberPair/);
   assert.match(controller, /community-member/);
   assert.match(bootstrapRouter, /communityMemberships/);
+});
+
+test("material stats reuses a request-local readability cache across all material loops", async () => {
+  const api = await readFile(path.join(root, "server", "api.js"), "utf8");
+  const routeStart = api.indexOf('router.get("/material-stats"');
+  const routeEnd = api.indexOf('router.post("/comments"', routeStart);
+  assert.ok(routeStart >= 0 && routeEnd > routeStart, "material-stats route boundaries must remain discoverable");
+  const route = api.slice(routeStart, routeEnd);
+  assert.match(route, /const readableMaterialCache = new Map\(\);/);
+  assert.match(route, /const key = `\$\{kind\}-\$\{materialId\}`;/);
+  assert.match(route, /readableMaterialCache\.set\(key, readableMaterialInfo\(pool, request\.bookMeetUser\.id, kind, materialId\)\.catch\(\(\) => null\)\)/);
+  assert.equal((route.match(/readableMaterialInfo\(/g) ?? []).length, 1, "the route loop bodies must call the shared helper");
+  assert.equal((route.match(/await getReadableMaterial\(/g) ?? []).length, 3, "comment, viewer-save and global-save loops must share the helper");
 });
 
 test("тип загруженного изображения определяется по содержимому, а не по расширению", () => {

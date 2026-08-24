@@ -1,5 +1,9 @@
-import { closePool, withTransaction } from "../server/db.js";
-import { hashPassword, normalizeIdentity } from "../server/security.js";
+if (process.env.NODE_ENV === "production") {
+  throw new Error("scripts/seed-publisher.js is a local-only fixture and is prohibited in production");
+}
+
+const { closePool, withTransaction } = await import("../server/db.js");
+const { hashPassword, normalizeIdentity } = await import("../server/security.js");
 
 const email = process.env.PUBLISHER_TEST_EMAIL || "publisher.test@bookmeet.kz";
 const password = process.env.PUBLISHER_TEST_PASSWORD || "publisher2026";

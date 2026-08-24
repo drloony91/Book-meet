@@ -1,11 +1,13 @@
 import React, { FormEvent, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
-import * as XLSX from "xlsx";
 import { CustomSelect } from "../components/common/CustomSelect";
 import { ModalIconActions } from "../components/modals/ModalIconActions";
 import { AdminSafetySection } from "../components/safety/AdminSafety";
 import { UserComplaints } from "../components/safety/UserComplaints";
 import { AdminStatisticsPanel } from "../components/admin/AdminStatisticsPanel";
 import { AdminCompliancePanel } from "../components/admin/AdminCompliancePanel";
+import { readFirstWorksheetRows } from "../services/spreadsheet";
+import { apiFetch } from "../services/api";
+import { getGoogleIdentity } from "../lib/google-identity";
 import {
   AdminCatalogCard,
   AdminCatalogEditor as BaseAdminCatalogEditor,
@@ -133,9 +135,9 @@ function LinkedProfileControls({ profileType, settings = false }: { profileType:
   const [mode, setMode] = useState<"none" | "choose" | "create" | "attach" | "unlink">("none");
   const [email, setEmail] = useState(""); const [password, setPassword] = useState(""); const [name, setName] = useState(() => t("linked.defaultName")); const [notice, setNotice] = useState(""); const [busy, setBusy] = useState(false);
   const personal = ["Читатель", "Писатель", "Блогер"].includes(profileType);
-  useEffect(() => { fetch("/api/bootstrap/session", { credentials: "same-origin" }).then((response) => response.json()).then((data: { linkedProfile?: LinkedProfileCard }) => setLinked(data.linkedProfile ?? null)).catch(() => undefined); }, []);
+  useEffect(() => { apiFetch("/api/bootstrap/session", { credentials: "same-origin" }).then((response) => response.json()).then((data: { linkedProfile?: LinkedProfileCard }) => setLinked(data.linkedProfile ?? null)).catch(() => undefined); }, []);
   async function request(path: string, body?: unknown) {
-    const response = await fetch(path, { method: path.includes("unlink") ? "DELETE" : "POST", credentials: "same-origin", headers: body ? { "content-type": "application/json" } : undefined, body: body ? JSON.stringify(body) : undefined });
+    const response = await apiFetch(path, { method: path.includes("unlink") ? "DELETE" : "POST", credentials: "same-origin", headers: body ? { "content-type": "application/json" } : undefined, body: body ? JSON.stringify(body) : undefined });
     const data = await response.json().catch(() => ({})) as { error?: string; requiresTotp?: boolean };
     if (!response.ok && response.status !== 202) throw new Error(localizedApiError(data.error, t("common.actionError")));
     return { response, data };
@@ -144,8 +146,8 @@ function LinkedProfileControls({ profileType, settings = false }: { profileType:
   async function googleLink() {
     setNotice(t("linked.openingGoogle"));
     try {
-      const providers = await fetch("/api/auth/providers", { credentials: "same-origin" }).then((response) => response.json()) as { googleClientId?: string };
-      if (!(window as any).google?.accounts?.id) {
+      const providers = await apiFetch("/api/auth/providers", { credentials: "same-origin" }).then((response) => response.json()) as { googleClientId?: string };
+      if (!getGoogleIdentity()?.accounts.id) {
         await new Promise<void>((resolve, reject) => {
           const existing = document.querySelector<HTMLScriptElement>('script[src="https://accounts.google.com/gsi/client"]');
           if (existing) { existing.addEventListener("load", () => resolve(), { once: true }); existing.addEventListener("error", () => reject(new Error(t("auth.googleUnavailable"))), { once: true }); return; }
@@ -153,7 +155,7 @@ function LinkedProfileControls({ profileType, settings = false }: { profileType:
           script.onload = () => resolve(); script.onerror = () => reject(new Error(t("auth.googleUnavailable"))); document.head.append(script);
         });
       }
-      const gsi = (window as any).google?.accounts?.id;
+      const gsi = getGoogleIdentity()?.accounts.id;
       if (!providers.googleClientId || !gsi) throw new Error(t("auth.googleWindowUnavailable"));
       gsi.initialize({ client_id: providers.googleClientId, locale, callback: async ({ credential }: { credential?: string }) => { try { await request("/api/linked-profiles/google", { credential, mode: mode === "create" ? "create" : "attach", name }); await switchProfile(mode === "create"); } catch (error) { setNotice(error instanceof Error ? error.message : t("auth.googleConfirmError")); } } });
       gsi.prompt();
@@ -193,8 +195,7 @@ function AdminBookImport({ onComplete }: { onComplete: () => void }) {
     if (!file) return;
     setBusy(true);
     try {
-      const workbook = XLSX.read(await file.arrayBuffer(), { type: "array" });
-      const sourceRows = XLSX.utils.sheet_to_json<Record<string, unknown>>(workbook.Sheets[workbook.SheetNames[0]], { defval: "" });
+      const sourceRows = await readFirstWorksheetRows(file);
       const rows = sourceRows.map((row) => ({
         author: read(row, ["автор", "author"]),
         title: read(row, ["название", "название книги", "title", "book"]),
@@ -205,7 +206,7 @@ function AdminBookImport({ onComplete }: { onComplete: () => void }) {
         coverUrl: read(row, ["обложка", "ссылка на обложку", "cover", "coverurl"]),
         sourceUrl: read(row, ["ссылка", "url", "source", "источник"]),
       })).filter((row) => row.author || row.title || row.sourceUrl);
-      const response = await fetch("/api/admin/books/import/preview", { method: "POST", credentials: "same-origin", headers: { "content-type": "application/json" }, body: JSON.stringify({ rows }) });
+      const response = await apiFetch("/api/admin/books/import/preview", { method: "POST", credentials: "same-origin", headers: { "content-type": "application/json" }, body: JSON.stringify({ rows }) });
       const data = await response.json() as { createdCount?: number; conflicts?: AdminImportConflict[]; error?: string };
       if (!response.ok) throw new Error(localizedApiError(data.error, t("admin.importCatalogError")));
       setCreatedCount(data.createdCount ?? 0);
@@ -218,7 +219,7 @@ function AdminBookImport({ onComplete }: { onComplete: () => void }) {
   async function resolve(conflict: AdminImportConflict, action: "replace" | "supplement" | "duplicate") {
     setBusy(true);
     try {
-      const response = await fetch("/api/admin/books/import/resolve", { method: "POST", credentials: "same-origin", headers: { "content-type": "application/json" }, body: JSON.stringify({ existingId: conflict.existing.id, incoming: conflict.incoming, action }) });
+      const response = await apiFetch("/api/admin/books/import/resolve", { method: "POST", credentials: "same-origin", headers: { "content-type": "application/json" }, body: JSON.stringify({ existingId: conflict.existing.id, incoming: conflict.incoming, action }) });
       const data = await response.json() as { error?: string };
       if (!response.ok) throw new Error(localizedApiError(data.error, t("admin.applyDecisionError")));
       setConflicts((current) => current.filter((item) => item.key !== conflict.key));
@@ -249,7 +250,7 @@ export function AdminTab({ events, occasions, users, catalog = [], reports, onMo
   const [catalogBooks, setCatalogBooks] = useState<LibraryBook[] | null>(() => catalog.length ? catalog.map((book) => ({ rating: 0, review: "", ...book } as LibraryBook)) : null);
   useEffect(() => {
     let active = true;
-    fetch("/api/admin/statistics", { credentials: "same-origin", cache: "no-store" })
+    apiFetch("/api/admin/statistics", { credentials: "same-origin", cache: "no-store" })
       .then(async (response) => {
         if (!response.ok) throw new Error(t("admin.statisticsLoadError"));
         return response.json() as Promise<AdminStatistics>;
@@ -260,7 +261,7 @@ export function AdminTab({ events, occasions, users, catalog = [], reports, onMo
   }, []);
   useEffect(() => {
     let active = true;
-    fetch("/api/books/catalog", { credentials: "same-origin", cache: "no-store" })
+    apiFetch("/api/books/catalog", { credentials: "same-origin", cache: "no-store" })
       .then(async (response) => {
         if (!response.ok) throw new Error(t("admin.catalogLoadError"));
         return response.json() as Promise<{ books?: Partial<LibraryBook>[] }>;
@@ -294,7 +295,7 @@ export function AdminTab({ events, occasions, users, catalog = [], reports, onMo
   };
   const labels: Record<AdminMaterialKind, string> = { book: t("nav.books"), review: t("content.reviews"), excerpt: t("content.publications"), event: t("content.events"), occasion: t("content.occasionsShort") };
   const saveCatalogItem = async (item: AdminCatalogItem, payload: unknown) => {
-    const response = await fetch(`/api/admin/materials/${item.kind}/${item.id}`, { method: "PATCH", credentials: "same-origin", headers: { "content-type": "application/json" }, body: JSON.stringify(payload) });
+    const response = await apiFetch(`/api/admin/materials/${item.kind}/${item.id}`, { method: "PATCH", credentials: "same-origin", headers: { "content-type": "application/json" }, body: JSON.stringify(payload) });
     const data = await response.json().catch(() => ({})) as { error?: string };
     if (!response.ok) { window.alert(localizedApiError(data.error, t("common.saveChangesError"))); return; }
     window.location.reload();
@@ -358,7 +359,7 @@ export function AdminSecurityPanel({ onBack }: { onBack: () => void }) {
   const [action, setAction] = useState<"regenerate" | "disable" | null>(null);
 
   async function loadStatus() {
-    const response = await fetch("/api/auth/totp/status", { credentials: "same-origin" });
+    const response = await apiFetch("/api/auth/totp/status", { credentials: "same-origin" });
     const data = await response.json() as TotpStatus & { error?: string };
     if (!response.ok) throw new Error(localizedApiError(data.error, t("security.statusError")));
     setStatus(data);
@@ -372,7 +373,7 @@ export function AdminSecurityPanel({ onBack }: { onBack: () => void }) {
     setBusy(true);
     setError("");
     try {
-      const response = await fetch(url, { method: "POST", credentials: "same-origin", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
+      const response = await apiFetch(url, { method: "POST", credentials: "same-origin", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
       const data = await response.json() as T & { error?: string };
       if (!response.ok) throw new Error(localizedApiError(data.error, t("security.saveError")));
       return data;
@@ -818,7 +819,7 @@ export function MyProfile({ onBack, user, users, catalog, friends, friendRequest
   }
 
   async function deleteProfile() {
-    const response = await fetch("/api/users/me/profile", { method: "DELETE", credentials: "same-origin" });
+    const response = await apiFetch("/api/users/me/profile", { method: "DELETE", credentials: "same-origin" });
     const data = await response.json().catch(() => ({})) as { error?: string };
     if (!response.ok) {
       window.alert(localizedApiError(data.error, t("profile.deleteError")));
@@ -956,7 +957,7 @@ export function MyProfile({ onBack, user, users, catalog, friends, friendRequest
           {activeTab === "communities" && <div className="simple-profile-tab profile-communities-tab"><section><h2>{t("communities.memberOf")}</h2><div className="profile-community-list">{joinedCommunities.map((community) => <button type="button" key={community.id} className="profile-community-card" onClick={() => onOpenUser(community.id)}><span className={`avatar avatar-sm avatar-${community.color} ${community.avatarUrl ? "has-photo" : ""}`} style={community.avatarUrl ? { backgroundImage: `url(${community.avatarUrl})` } : undefined}>{!community.avatarUrl && community.initials}</span><span><strong data-i18n-skip>{community.profile.name}</strong><small data-i18n-skip>@{community.username}</small></span></button>)}</div>{!joinedCommunities.length && <p>{t("common.empty")}</p>}</section><section><h2>{t("communities.pending")}</h2><div className="profile-community-list">{pendingCommunities.map((community) => <article key={community.id} className="profile-community-card"><button type="button" onClick={() => onOpenUser(community.id)}><span className={`avatar avatar-sm avatar-${community.color} ${community.avatarUrl ? "has-photo" : ""}`} style={community.avatarUrl ? { backgroundImage: `url(${community.avatarUrl})` } : undefined}>{!community.avatarUrl && community.initials}</span><span><strong data-i18n-skip>{community.profile.name}</strong><small data-i18n-skip>@{community.username}</small></span></button><button className="outline-button" type="button" onClick={() => onCancelFriendRequest(community.id)}>{t("profile.cancelRequest")}</button></article>)}</div>{!pendingCommunities.length && <p>{t("common.empty")}</p>}</section></div>}
           {activeTab === "reviews" && (profile.type === "Читатель" || profile.type === "Блогер") && <ReviewsTab reviews={reviews} setReviews={setReviews} owner={{ ...user, profile, books, reviews }} users={users} catalog={catalog} likes={likes} onToggleLike={onToggleLike} onComment={onComment} onOpenUser={onOpenUser} initialAdd={initialAction === "review" && !initialEditId} initialEditId={initialAction === "review" ? initialEditId : null} />}
           {activeTab === "events" && <MyEventsTab createdEvents={events.filter((item) => item.creatorId === user.id && eventTimestamp(item) >= Date.now())} participatingEvents={events.filter((item) => item.creatorId !== user.id && item.reminderSet && eventTimestamp(item) >= Date.now())} users={users} catalog={catalog} currentUserId={user.id} onOpenUser={onOpenUser} onEdit={onEditEvent} onDeleted={onDeleteEvent} />}
-          {activeTab === "occasions" && <div className="simple-profile-tab"><div className="profile-title-row"><div><h1>{t("profile.occasions")}</h1><p>{t("occasion.createdCount", { count: formatNumber(occasions.filter((item) => item.creatorId === user.id).length) })}</p></div></div><div className="occasion-grid">{occasions.filter((item) => item.creatorId === user.id).map((item) => <OccasionCard key={item.id} item={item} own onOpen={() => setOpenedOwnOccasion(item)} onEdit={() => onEditOccasion(item)} />)}</div>{!occasions.some((item) => item.creatorId === user.id) && <div className="profile-tab-placeholder">{t("occasion.noneCreated")}</div>}{openedOwnOccasion && <OccasionModal item={openedOwnOccasion} currentUser={user} users={users} onOpenUser={onOpenUser} onOpenBook={setOpenedOwnOccasionBookId} onClose={() => setOpenedOwnOccasion(null)} onEdit={() => { onEditOccasion(openedOwnOccasion); setOpenedOwnOccasion(null); }} onDelete={async () => { if (!window.confirm(t("occasion.deleteConfirm"))) return; const response = await fetch(`/api/occasions/${openedOwnOccasion.id}`, { method: "DELETE", credentials: "same-origin" }); if (!response.ok) { window.alert(t("occasion.deleteError")); return; } onDeleteOccasion(openedOwnOccasion.id); setOpenedOwnOccasion(null); }} />}{openedOwnOccasionBookId && catalog.find((book) => book.id === openedOwnOccasionBookId) && <UnifiedBookModal book={catalog.find((book) => book.id === openedOwnOccasionBookId)!} users={users} catalog={catalog} nested onOpenUser={onOpenUser} onClose={() => setOpenedOwnOccasionBookId(null)} />}</div>}
+          {activeTab === "occasions" && <div className="simple-profile-tab"><div className="profile-title-row"><div><h1>{t("profile.occasions")}</h1><p>{t("occasion.createdCount", { count: formatNumber(occasions.filter((item) => item.creatorId === user.id).length) })}</p></div></div><div className="occasion-grid">{occasions.filter((item) => item.creatorId === user.id).map((item) => <OccasionCard key={item.id} item={item} own onOpen={() => setOpenedOwnOccasion(item)} onEdit={() => onEditOccasion(item)} />)}</div>{!occasions.some((item) => item.creatorId === user.id) && <div className="profile-tab-placeholder">{t("occasion.noneCreated")}</div>}{openedOwnOccasion && <OccasionModal item={openedOwnOccasion} currentUser={user} users={users} onOpenUser={onOpenUser} onOpenBook={setOpenedOwnOccasionBookId} onClose={() => setOpenedOwnOccasion(null)} onEdit={() => { onEditOccasion(openedOwnOccasion); setOpenedOwnOccasion(null); }} onDelete={async () => { if (!window.confirm(t("occasion.deleteConfirm"))) return; const response = await apiFetch(`/api/occasions/${openedOwnOccasion.id}`, { method: "DELETE", credentials: "same-origin" }); if (!response.ok) { window.alert(t("occasion.deleteError")); return; } onDeleteOccasion(openedOwnOccasion.id); setOpenedOwnOccasion(null); }} />}{openedOwnOccasionBookId && catalog.find((book) => book.id === openedOwnOccasionBookId) && <UnifiedBookModal book={catalog.find((book) => book.id === openedOwnOccasionBookId)!} users={users} catalog={catalog} nested onOpenUser={onOpenUser} onClose={() => setOpenedOwnOccasionBookId(null)} />}</div>}
           {activeTab === "friends" && <ProfileFriendsTab friends={friends} outgoing={friendRequests.filter((request) => request.status === "pending" && request.fromId === user.id).map((request) => users.find((item) => item.id === request.toId)).filter(Boolean) as DemoUser[]} incoming={friendRequests.filter((request) => request.status === "pending" && request.toId === user.id).map((request) => users.find((item) => item.id === request.fromId)).filter(Boolean) as DemoUser[]} subscriptions={follows.filter((follow) => follow.followerId === user.id).map((follow) => users.find((item) => item.id === follow.targetId)).filter((item): item is DemoUser => Boolean(item) && !item!.isAdmin)} followers={follows.filter((follow) => follow.targetId === user.id).map((follow) => users.find((item) => item.id === follow.followerId)).filter((item): item is DemoUser => Boolean(item) && !item!.isAdmin)} communityMode={profile.type === "Сообщество"} publisherMode={profile.type === "Издатель"} onOpenUser={onOpenUser} />}
         </div>
       </section>

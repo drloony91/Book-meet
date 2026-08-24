@@ -2,22 +2,10 @@
 
 import { FormEvent, useEffect, useRef, useState } from "react";
 import { apiFetch } from "../services/api";
+import { getGoogleIdentity } from "../lib/google-identity";
 import type { AuthResult, LegalDocument } from "../types/domain";
 import { localizedApiError, useI18n } from "../i18n";
 import { AuthLocaleRow } from "../i18n/LocaleSwitcher";
-
-declare global {
-  interface Window {
-    google?: {
-      accounts: {
-        id: {
-          initialize: (options: { client_id: string; callback: (response: { credential: string }) => void }) => void;
-          renderButton: (element: HTMLElement, options: Record<string, string | number>) => void;
-        };
-      };
-    };
-  }
-}
 
 export function LoginScreen({ onLogin, onRegister, initialError = "" }: { onLogin: (email: string, password: string, totp?: string) => Promise<AuthResult>; onRegister: (value: { email: string; username: string; password: string; legalAcceptance: { agreementAccepted: boolean; personalDataAccepted: boolean; documentIds: number[] } }) => Promise<AuthResult>; initialError?: string }) {
   const { locale, t } = useI18n();
@@ -87,9 +75,10 @@ export function LoginScreen({ onLogin, onRegister, initialError = "" }: { onLogi
     let active = true;
 
     const renderGoogleButton = () => {
-      if (!active || !window.google || !googleButtonRef.current) return;
+      const google = getGoogleIdentity();
+      if (!active || !google || !googleButtonRef.current) return;
       googleButtonRef.current.replaceChildren();
-      window.google.accounts.id.initialize({
+      google.accounts.id.initialize({
         client_id: providers.googleClientId,
         callback: async ({ credential }) => {
           if (mode === "register" && legalConfig.required && (!legalConfig.configured || !agreementAccepted || !personalDataAccepted)) {
@@ -134,7 +123,7 @@ export function LoginScreen({ onLogin, onRegister, initialError = "" }: { onLogi
           }
         },
       });
-      window.google.accounts.id.renderButton(googleButtonRef.current, {
+      google.accounts.id.renderButton(googleButtonRef.current, {
         type: "standard",
         theme: "outline",
         size: "large",
@@ -146,7 +135,7 @@ export function LoginScreen({ onLogin, onRegister, initialError = "" }: { onLogi
     };
 
     const existingScript = document.querySelector<HTMLScriptElement>('script[src="https://accounts.google.com/gsi/client"]');
-    if (window.google) renderGoogleButton();
+    if (getGoogleIdentity()) renderGoogleButton();
     else if (existingScript) existingScript.addEventListener("load", renderGoogleButton, { once: true });
     else {
       const script = document.createElement("script");

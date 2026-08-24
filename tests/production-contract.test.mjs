@@ -22,11 +22,58 @@ const readFrontendSource = async () => (await Promise.all([
 test("legacy production domain redirects to the canonical origin without losing the path", async () => {
   const server = await readFile(path.join(root, "server", "index.js"), "utf8");
   const environment = await readFile(path.join(root, ".env.example"), "utf8");
+  const deployRunbook = await readFile(path.join(root, "PLESK_DEPLOY.md"), "utf8");
   assert.match(server, /configuredOrigin\(process\.env\.LEGACY_ORIGIN\)/);
   assert.match(server, /request\.hostname\.toLowerCase\(\) !== legacyHostname/);
   assert.match(server, /response\.redirect\(301, `\$\{canonicalOrigin\}\$\{requestPath\}`\)/);
-  assert.match(environment, /APP_ORIGIN=https:\/\/bookmeet\.club/);
-  assert.match(environment, /LEGACY_ORIGIN=https:\/\/bot\.oqyastana\.kz/);
+  assert.match(environment, /APP_ORIGIN=http:\/\/localhost:3000/);
+  assert.match(environment, /^LEGACY_ORIGIN=$/m);
+  assert.match(deployRunbook, /APP_ORIGIN=https:\/\/bookmeet\.club/);
+  assert.match(deployRunbook, /LEGACY_ORIGIN=https:\/\/bot\.oqyastana\.kz/);
+});
+
+test("Block 1 фиксирует fail-fast verify и production-safe seed", async () => {
+  const packageJson = JSON.parse(await readFile(path.join(root, "package.json"), "utf8"));
+  const seed = await readFile(path.join(root, "scripts", "seed.js"), "utf8");
+  const environment = await readFile(path.join(root, ".env.example"), "utf8");
+  assert.equal(packageJson.scripts.verify, "pnpm run check && pnpm test");
+  assert.doesNotMatch(packageJson.scripts.verify, /build/);
+  assert.match(seed, /process\.env\.ADMIN_EMAIL/);
+  assert.match(seed, /process\.env\.TEST1_PASSWORD/);
+  assert.match(seed, /production && \(!configuredAdminEmail \|\| !hasConfiguredTest1Password\)/);
+  assert.match(seed, /email: adminEmail/);
+  assert.match(seed, /password: test1Password/);
+  assert.doesNotMatch(seed, /email:\s*["']dr\.loony91@gmail\.com/);
+  assert.doesNotMatch(seed, /process\.env\.TEST1_PASSWORD\s*\|\|\s*["']testtest1/);
+  assert.doesNotMatch(environment, /dr\.loony91@gmail\.com|testtest1|testtest2/);
+  assert.match(environment, /ADMIN_EMAIL=admin@example\.com/);
+  assert.match(environment, /TEST1_PASSWORD=replace-with-a-strong-unique-password/);
+});
+
+test("Block 1 документация использует canonical domain, один seed и frozen pnpm", async () => {
+  const readme = await readFile(path.join(root, "README.md"), "utf8");
+  const plesk = await readFile(path.join(root, "PLESK_DEPLOY.md"), "utf8");
+  for (const document of [readme, plesk]) {
+    assert.match(document, /bookmeet\.club/);
+    assert.match(document, /bot\.oqyastana\.kz.*legacy|legacy.*bot\.oqyastana\.kz/is);
+    assert.doesNotMatch(document, /\bnpm\s+(?:install|ci)\b/i);
+    assert.doesNotMatch(document, /TEST2_PASSWORD|Тест 2|обоими тестовыми аккаунтами|Из Тест 1/);
+  }
+  assert.match(readme, /реальному MySQL.*не входит/is);
+  assert.match(plesk, /не поднимает отдельную реальную MySQL-базу/is);
+});
+
+test("Block 4b запрещает publisher fixture в production до DB или hash вызовов", async () => {
+  const seed = await readFile(path.join(root, "scripts", "seed-publisher.js"), "utf8");
+  const guardIndex = seed.indexOf('if (process.env.NODE_ENV === "production")');
+  const dbImportIndex = seed.indexOf('await import("../server/db.js")');
+  const securityImportIndex = seed.indexOf('await import("../server/security.js")');
+  assert.ok(guardIndex >= 0, "publisher seed must have an exact production guard");
+  assert.ok(guardIndex < dbImportIndex, "production guard must precede DB module loading");
+  assert.ok(guardIndex < securityImportIndex, "production guard must precede hash module loading");
+  assert.match(seed, /PUBLISHER_TEST_EMAIL/);
+  assert.match(seed, /PUBLISHER_TEST_PASSWORD/);
+  assert.match(seed, /local-only fixture and is prohibited in production/);
 });
 
 test("production SPA собрана", async () => {
@@ -34,6 +81,23 @@ test("production SPA собрана", async () => {
   const html = await readFile(path.join(root, "dist", "client", "index.html"), "utf8");
   assert.match(html, /Book Meet/);
   assert.match(html, /assets\/index-/);
+});
+
+test("production branding uses active assets and keeps obsolete files out", async () => {
+  const index = await readFile(path.join(root, "index.html"), "utf8");
+  const layout = await readFile(path.join(root, "app", "components", "layout", "AppLayout.tsx"), "utf8");
+  for (const asset of ["public/book-meet-favicon-v2.png", "public/book-meet-header-logo-v3.png"]) await access(path.join(root, asset));
+  for (const asset of [
+    "public/book-meet-favicon.png",
+    "public/book-meet-header-logo.png",
+    "public/book-meet-header-logo-v2.png",
+    "public/favicon.svg",
+    "public/file.svg",
+    "public/globe.svg",
+    "public/window.svg",
+  ]) await assert.rejects(access(path.join(root, asset)), { code: "ENOENT" });
+  assert.match(index, /book-meet-favicon-v2\.png/);
+  assert.match(layout, /book-meet-header-logo-v3\.png/);
 });
 
 test("MySQL-схема содержит все MVP-сущности", async () => {
@@ -553,7 +617,7 @@ test("полный каталог админки, издательские ма�
   const profile = await readFile(path.join(root, "app", "screens", "ProfileScreens.tsx"), "utf8");
   const auth = await readFile(path.join(root, "app", "screens", "AuthScreens.tsx"), "utf8");
   const css = await readFile(path.join(root, "app", "globals.css"), "utf8");
-  assert.match(profile, /fetch\("\/api\/books\/catalog"/);
+  assert.match(profile, /apiFetch\("\/api\/books\/catalog"/);
   assert.match(profile, /kind: "publisher_news" as const/);
   assertLocalized(profile, "admin.publisherEvent");
   assert.match(api, /\["book", "review", "excerpt", "publisher_news"\]/);

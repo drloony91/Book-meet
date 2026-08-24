@@ -1,6 +1,7 @@
 import { FormEvent, useMemo, useState } from "react";
 import { localizedApiError, useI18n, type Translate } from "../../i18n";
 import type { DemoUser, SafetyReport } from "../../types/domain";
+import { apiFetch } from "../../services/api";
 
 function materialPath(report: SafetyReport) {
   const roots: Record<string, string> = { book: "books", review: "reviews", excerpt: "blog", event: "events", occasion: "meet", publisher_news: "publishing" };
@@ -39,7 +40,7 @@ export function AdminSafetySection({ mode, reports, users, onBack, onOpenUser, o
   const shownUsers = useMemo(() => users.filter((user) => !user.isAdmin && (mode === "users-deleted" ? Boolean(user.deletedAt && !user.purged) : !user.deletedAt && !user.purged && (mode === "users-blocked" ? Boolean(user.suspension) : !user.suspension))), [users, mode]);
 
   async function action(url: string, options: RequestInit = {}) {
-    const response = await fetch(url, { credentials: "same-origin", ...options, headers: { "content-type": "application/json", ...(options.headers ?? {}) } });
+    const response = await apiFetch(url, { credentials: "same-origin", ...options, headers: { "content-type": "application/json", ...(options.headers ?? {}) } });
     const data = await response.json().catch(() => ({})) as { error?: string };
     if (!response.ok) throw new Error(localizedApiError(data.error, t("common.actionError")));
     setSelected(null);
