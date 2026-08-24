@@ -16,6 +16,7 @@ export type MainView =
   | "chat"
   | "liked"
   | "saved"
+  | "notifications"
   | "profile"
   | "search";
 
@@ -69,6 +70,7 @@ export const mainViewPaths: Record<RoutableMainView, string> = {
   chat: "/chat",
   liked: "/liked",
   saved: "/saved",
+  notifications: "/notifications",
 };
 
 export const mainViewTitleKeys: Record<RoutableMainView, MessageKey> = {
@@ -85,6 +87,7 @@ export const mainViewTitleKeys: Record<RoutableMainView, MessageKey> = {
   chat: "header.chats",
   liked: "feed.liked",
   saved: "feed.saved",
+  notifications: "notifications.title",
 };
 
 export function mainViewTitle(view: RoutableMainView, t: Translate) {
@@ -171,7 +174,7 @@ export function appRouteFromPathname(pathname: string): ParsedAppRoute {
     { pattern: /^\/meet\/(\d+)$/, kind: "occasion", view: "occasions" },
     { pattern: /^\/publishing\/(\d+)$/, kind: "publisher-news", view: "publishing" },
     { pattern: /^\/chat\/(\d+)$/, kind: "chat", view: "chat" },
-    { pattern: /^\/notifications\/(\d+)$/, kind: "notification", view: "home" },
+    { pattern: /^\/notifications\/(\d+)$/, kind: "notification", view: "notifications" },
     { pattern: /^\/reports\/[a-z_-]+\/(\d+)$/, kind: "report", view: "home" },
   ];
   for (const route of dynamicRoutes) {

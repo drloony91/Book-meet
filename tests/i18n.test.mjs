@@ -11,6 +11,12 @@ test("all locale dictionaries have identical non-empty keys", () => {
   for (const locale of [ru, kk, en]) for (const key of keys) assert.ok(locale[key].trim(), `${key} must not be empty`);
 });
 
+test("the primary profile tab is named Profile in every locale", () => {
+  assert.equal(ru["profile.main"], "Профиль");
+  assert.equal(kk["profile.main"], "Профиль");
+  assert.equal(en["profile.main"], "Profile");
+});
+
 test("occasion and profile setting copy stays aligned in every locale", () => {
   assert.equal(ru["occasion.invite"], "Хочу пригласить");
   assert.equal(kk["occasion.invite"], "Шақырғым келеді");

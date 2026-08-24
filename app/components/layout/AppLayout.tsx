@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { FriendsPanel } from "../chat/ChatComponents";
 import type { Friend } from "../chat/types";
-import { LocaleSwitcher } from "../../i18n/LocaleSwitcher";
+import { CompactLocaleButtons, LocaleSwitcher } from "../../i18n/LocaleSwitcher";
 import { useI18n, type Translate } from "../../i18n";
 import type { RoutableMainView } from "../../navigation/routes";
 import type { UserProfileData } from "../../types/domain";
@@ -120,29 +120,34 @@ export function MobileNavigationDrawer({
   activeView,
   onClose,
   onNavigate,
+  createOptions = [],
 }: {
   open: boolean;
   activeView?: string;
   onClose: () => void;
   onNavigate: (view: RoutableMainView) => void;
+  createOptions?: MobileCreateOption[];
 }) {
   const { t } = useI18n();
+  const [drawerCreateOpen, setDrawerCreateOpen] = useState(false);
   const items = workspaceNavigationItems(t);
   const isActive = (target: RoutableMainView) => target === "home" ? ["home", "publications"].includes(activeView ?? "") : target === activeView;
   if (!open) return null;
   return <>
     <button className="mobile-navigation-overlay" type="button" aria-label={t("nav.closeMobileMenu")} onClick={onClose} />
     <aside className="mobile-navigation-drawer" aria-label={t("nav.mobileMenu")}>
-      <div className="mobile-navigation-drawer-header">
-        <strong>Book Meet</strong>
-        <button type="button" onClick={onClose} aria-label={t("nav.closeMobileMenu")}>×</button>
+      <div className="mobile-navigation-drawer-header"><img src="/mobile-icons/book-meet-logo.png" alt="Book Meet" /></div>
+      <div className="mobile-navigation-quick-row">
+        {items.filter((item) => item.group === "personal").map((item) => <button type="button" key={item.view} className={isActive(item.view) ? "is-active" : ""} onClick={() => { onNavigate(item.view); onClose(); }} aria-label={item.label} title={item.label} aria-current={isActive(item.view) ? "page" : undefined}><img src={item.view === "liked" ? "/desktop-icons/heart.png" : "/desktop-icons/bookmark.png"} alt="" aria-hidden="true" /></button>)}
+        <div className={`mobile-drawer-create ${drawerCreateOpen ? "is-open" : ""}`}><button type="button" aria-expanded={drawerCreateOpen} aria-label={t("content.createMaterial")} title={t("content.createMaterial")} onClick={() => setDrawerCreateOpen((value) => !value)}><img src="/desktop-icons/plus.png" alt="" aria-hidden="true" /></button><div className="mobile-drawer-create-menu" aria-hidden={!drawerCreateOpen}>{createOptions.map((option) => <button type="button" key={option.label} onClick={() => { option.onClick(); setDrawerCreateOpen(false); onClose(); }}>{option.label}</button>)}</div></div>
       </div>
-      <div className="mobile-navigation-locale"><LocaleSwitcher /></div>
-      <nav className="mobile-navigation-list" aria-label={t("nav.sectionsLeft")}>
-        {items.map((item) => <button type="button" key={item.view} className={isActive(item.view) ? "is-active" : ""} onClick={() => { onNavigate(item.view); onClose(); }} aria-current={isActive(item.view) ? "page" : undefined}>
-          <span>{item.label}</span>
-        </button>)}
+      <nav className="mobile-navigation-list mobile-navigation-feed" aria-label={t("nav.sectionsLeft")}>
+        {items.filter((item) => item.group === "feed").map((item) => <button type="button" key={item.view} className={isActive(item.view) ? "is-active" : ""} onClick={() => { onNavigate(item.view); onClose(); }} aria-current={isActive(item.view) ? "page" : undefined}><span>{item.label}</span></button>)}
       </nav>
+      <nav className="mobile-navigation-list mobile-navigation-library" aria-label={t("nav.sectionsRight")}>
+        {items.filter((item) => item.group === "library").map((item) => <button type="button" key={item.view} className={isActive(item.view) ? "is-active" : ""} onClick={() => { onNavigate(item.view); onClose(); }} aria-current={isActive(item.view) ? "page" : undefined}><span>{item.label}</span></button>)}
+      </nav>
+      <div className="mobile-navigation-locale"><CompactLocaleButtons /></div>
     </aside>
   </>;
 }
@@ -178,29 +183,40 @@ export function MobileBottomNavigation({
 }) {
   const { t } = useI18n();
   const [createOpen, setCreateOpen] = useState(false);
+  const [hidden, setHidden] = useState(false);
+  const lastScrollY = useRef(0);
+  useEffect(() => {
+    const onScroll = () => {
+      const y = window.scrollY;
+      if (y < 24 || y < lastScrollY.current - 8) setHidden(false);
+      else if (y > lastScrollY.current + 8) setHidden(true);
+      lastScrollY.current = y;
+    };
+    lastScrollY.current = window.scrollY;
+    window.addEventListener("scroll", onScroll, { passive: true });
+    return () => window.removeEventListener("scroll", onScroll);
+  }, []);
+  useEffect(() => { setHidden(false); }, [activeView]);
+  useEffect(() => { if (createOpen) setHidden(false); }, [createOpen]);
   const activateCreate = (action: () => void) => { setCreateOpen(false); action(); };
-  return <nav className="mobile-bottom-navigation" aria-label={t("nav.mobileBottom")}>
+  return <nav className={`mobile-bottom-navigation ${hidden ? "is-hidden" : ""}`} aria-label={t("nav.mobileBottom")}>
     <button type="button" className={activeView === "home" || activeView === "publications" ? "is-active" : ""} onClick={onHome} aria-current={activeView === "home" || activeView === "publications" ? "page" : undefined} aria-label={t("nav.main")} title={t("nav.main")}>
       <span className="mobile-bottom-icon"><img src="/mobile-icons/home.png" alt="" aria-hidden="true" /></span>
-      <span>{t("nav.main")}</span>
     </button>
     <button type="button" className={chatsOpen || activeView === "chat" ? "is-active" : ""} onClick={onChats} aria-label={`${t("header.chats")}: ${unreadMessages}`} aria-current={activeView === "chat" ? "page" : undefined} title={t("header.chats")}>
       <span className="mobile-bottom-icon"><img src="/desktop-icons/chat.png" alt="" aria-hidden="true" />{unreadMessages > 0 && <b>{unreadMessages > 99 ? "99+" : unreadMessages}</b>}</span>
-      <span>{t("header.chats")}</span>
     </button>
     <div className={`mobile-bottom-create ${createOpen ? "is-open" : ""}`}>
       <div className="mobile-bottom-create-menu" aria-hidden={!createOpen}>
         {createOptions.map((option) => <button type="button" key={option.label} onClick={() => activateCreate(option.onClick)}>{option.label}</button>)}
       </div>
-      <button className="mobile-bottom-create-toggle" type="button" aria-expanded={createOpen} aria-label={t("content.createMaterial")} title={t("content.createMaterial")} onClick={() => setCreateOpen((value) => !value)}><span aria-hidden="true">+</span></button>
+      <button className="mobile-bottom-create-toggle" type="button" aria-expanded={createOpen} aria-label={t("content.createMaterial")} title={t("content.createMaterial")} onClick={() => setCreateOpen((value) => !value)}><img src="/desktop-icons/plus.png" alt="" aria-hidden="true" /></button>
     </div>
-    <button type="button" className={notificationsOpen ? "is-active" : ""} onClick={onNotifications} aria-label={`${t("header.notifications")}: ${unreadCount}`} aria-expanded={notificationsOpen} title={t("header.notifications")}>
+    <button type="button" className={notificationsOpen || activeView === "notifications" ? "is-active" : ""} onClick={onNotifications} aria-label={`${t("header.notifications")}: ${unreadCount}`} aria-expanded={notificationsOpen} aria-current={activeView === "notifications" ? "page" : undefined} title={t("header.notifications")}>
       <span className="mobile-bottom-icon"><img src={unreadCount ? "/desktop-icons/bell-active.png" : "/desktop-icons/bell.png"} alt="" aria-hidden="true" />{unreadCount > 0 && <b>{unreadCount > 99 ? "99+" : unreadCount}</b>}</span>
-      <span>{t("header.notifications")}</span>
     </button>
     <button type="button" className={activeView === "profile" ? "is-active" : ""} onClick={onProfile} aria-current={activeView === "profile" ? "page" : undefined} aria-label={t("nav.profile")} title={t("nav.profile")}>
       <span className={`avatar avatar-sm mobile-bottom-avatar ${avatarUrl ? "has-photo" : ""}`} style={avatarUrl ? { backgroundImage: `url(${avatarUrl})` } : undefined}>{!avatarUrl && initials}</span>
-      <span>{t("nav.profile")}</span>
     </button>
   </nav>;
 }

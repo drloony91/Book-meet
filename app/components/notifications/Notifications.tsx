@@ -17,6 +17,11 @@ export function NotificationsMenu({ notifications, users, onOpen, onClose, onMar
   );
 }
 
+export function NotificationsPage({ notifications, users, onOpen, onMarkAllRead }: { notifications: SocialNotification[]; users: DemoUser[]; onOpen: (notification: SocialNotification) => void; onMarkAllRead: () => void }) {
+  const { locale, t } = useI18n();
+  return <main className="notifications-page"><header><h1>{t("notifications.center")}</h1><button className="mark-read-button" type="button" onClick={onMarkAllRead}>{t("notifications.allRead")}</button></header><div className="notifications-list">{notifications.length ? notifications.map((notification) => { const actor = users.find((user) => user.id === notification.actorId); return <button type="button" className={`notification-item ${notification.unread ? "unread" : ""}`} key={notification.id} onClick={() => onOpen(notification)}><span className={`notification-avatar avatar-${actor?.color ?? "navy"}`}>{actor?.initials ?? "BM"}</span><span><strong>{localizedNotificationTitle(locale, notification.type, notification.title)}</strong><p>{localizedNotificationText(locale, notification.type, notification.text, { name: actor?.profile.name })}</p><small>{localizedNotificationDate(locale, notification.createdAt)}</small></span></button>; }) : <div className="notifications-empty">{t("notifications.empty")}</div>}</div></main>;
+}
+
 export function NotificationDetail({ notification, actor, isFollowing, onClose, onFollow }: { notification: SocialNotification; actor?: DemoUser; isFollowing: boolean; onClose: () => void; onFollow: () => void }) {
   const { locale, t } = useI18n();
   const localizedTitle = localizedNotificationTitle(locale, notification.type, notification.title);

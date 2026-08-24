@@ -223,7 +223,7 @@ test("дата рождения, спойлеры и материалы 18+ за
   assert.match(visibilityMigration, /birth_date_visibility ENUM\('nobody', 'friends', 'everyone'\)/);
   assert.match(data, /birth_date_visibility === "friends" && isViewerFriend/);
   assertLocalized(profile, "profile.birthVisibility");
-  assertLocalized(profile, "settings.changeOrder");
+  assert.doesNotMatch(profile, /t\("settings\.changeOrder"\)/);
   assertLocalized(content, "editor.spoiler");
   assertLocalized(content, "library.chaptersRead");
 });

@@ -157,9 +157,9 @@ export function MaterialActionBar({ likesCount = 0, commentsCount = 0, savesCoun
   const { t } = useI18n();
   const action = (handler?: () => void) => (event: React.MouseEvent<HTMLButtonElement>) => { event.stopPropagation(); handler?.(); };
   return <div className="material-action-bar" aria-label={t("material.actions")}>
-    <button type="button" className={liked ? "is-active" : ""} aria-pressed={liked} aria-label={t("material.like")} title={t("material.like")} onClick={action(onToggleLike)}><img className="desktop-material-action-icon" src="/desktop-icons/heart.png" alt="" aria-hidden="true" /><span className="mobile-material-action-icon" aria-hidden="true">{liked ? "♥" : "♡"}</span><b>{Math.max(0, likesCount)}</b></button>
-    <button type="button" aria-label={t("content.comments")} title={t("content.comments")} onClick={(event) => { event.stopPropagation(); if (!onOpenComments) return; window.sessionStorage.setItem(COMMENTS_SCROLL_REQUEST, "1"); onOpenComments(); }}><img className="desktop-material-action-icon" src="/desktop-icons/comment.png" alt="" aria-hidden="true" /><span className="mobile-material-action-icon" aria-hidden="true">◯</span><b>{Math.max(0, commentsCount)}</b></button>
-    <button type="button" className={saved ? "is-active" : ""} aria-pressed={saved} aria-label={t("material.save")} title={t("material.save")} onClick={action(onToggleSave)}><img className="desktop-material-action-icon" src="/desktop-icons/bookmark.png" alt="" aria-hidden="true" /><span className="mobile-material-action-icon" aria-hidden="true">{saved ? "▰" : "▱"}</span><b>{Math.max(0, savesCount)}</b></button>
+    <button type="button" className={liked ? "is-active" : ""} aria-pressed={liked} aria-label={t("material.like")} title={t("material.like")} onClick={action(onToggleLike)}><img className="material-action-icon" src="/desktop-icons/heart.png" alt="" aria-hidden="true" /><b>{Math.max(0, likesCount)}</b></button>
+    <button type="button" aria-label={t("content.comments")} title={t("content.comments")} onClick={(event) => { event.stopPropagation(); if (!onOpenComments) return; window.sessionStorage.setItem(COMMENTS_SCROLL_REQUEST, "1"); onOpenComments(); }}><img className="material-action-icon" src="/desktop-icons/comment.png" alt="" aria-hidden="true" /><b>{Math.max(0, commentsCount)}</b></button>
+    <button type="button" className={saved ? "is-active" : ""} aria-pressed={saved} aria-label={t("material.save")} title={t("material.save")} onClick={action(onToggleSave)}><img className="material-action-icon" src="/desktop-icons/bookmark.png" alt="" aria-hidden="true" /><b>{Math.max(0, savesCount)}</b></button>
   </div>;
 }
 
@@ -623,7 +623,7 @@ function PublicProfileDetails({ user }: { user: DemoUser }) {
   </div>;
 }
 
-export function UserProfileModal({ user, viewer, users, catalog, profileFriends = [], profileFollowers = [], profileFollowing = [], profileCommunities = [], events = [], occasions = [], likes, friendCount, followerCount = 0, relationship, incomingMessage, isFollowing, canMessage, blockedByMe = false, onClose, onAddFriend, onCancelFriendRequest, onAccept, onReject, onRemoveFriend, onOpenChat, onFollow, onUnfollow, onBlock, onUnblock, onReport, onToggleLike, onComment, onOpenUser }: { user: DemoUser; viewer: DemoUser; users: DemoUser[]; catalog: (LibraryBook | AuthorBook)[]; profileFriends?: DemoUser[]; profileFollowers?: DemoUser[]; profileFollowing?: DemoUser[]; profileCommunities?: DemoUser[]; events?: BookEvent[]; occasions?: Occasion[]; likes: Record<string, number[]>; friendCount: number; followerCount?: number; relationship: SocialRelationship; incomingMessage?: string; isFollowing: boolean; canMessage: boolean; blockedByMe?: boolean; onClose: () => void; onAddFriend: (message: string) => void; onCancelFriendRequest: () => Promise<void>; onAccept: () => void; onReject: (comment: string) => void; onRemoveFriend: () => void; onOpenChat: () => void; onFollow: () => void; onUnfollow: () => Promise<void>; onBlock?: () => Promise<void>; onUnblock?: () => Promise<void>; onReport?: () => void; onToggleLike: (item: ReadingItem) => void; onComment: (item: ReadingItem, text: string) => Promise<MaterialComment | null>; onOpenUser: (userId: number) => void }) {
+export function UserProfileModal({ user, viewer, users, catalog, profileFriends = [], profileCommunities = [], events = [], occasions = [], likes, friendCount, followerCount = 0, relationship, incomingMessage, isFollowing, canMessage, blockedByMe = false, onClose, onAddFriend, onCancelFriendRequest, onAccept, onReject, onRemoveFriend, onOpenChat, onFollow, onUnfollow, onBlock, onUnblock, onReport, onToggleLike, onComment, onOpenUser }: { user: DemoUser; viewer: DemoUser; users: DemoUser[]; catalog: (LibraryBook | AuthorBook)[]; profileFriends?: DemoUser[]; profileCommunities?: DemoUser[]; events?: BookEvent[]; occasions?: Occasion[]; likes: Record<string, number[]>; friendCount: number; followerCount?: number; relationship: SocialRelationship; incomingMessage?: string; isFollowing: boolean; canMessage: boolean; blockedByMe?: boolean; onClose: () => void; onAddFriend: (message: string) => void; onCancelFriendRequest: () => Promise<void>; onAccept: () => void; onReject: (comment: string) => void; onRemoveFriend: () => void; onOpenChat: () => void; onFollow: () => void; onUnfollow: () => Promise<void>; onBlock?: () => Promise<void>; onUnblock?: () => Promise<void>; onReport?: () => void; onToggleLike: (item: ReadingItem) => void; onComment: (item: ReadingItem, text: string) => Promise<MaterialComment | null>; onOpenUser: (userId: number) => void }) {
   const { t, domainLabel } = useI18n();
   const routedPopup = useRoutedPopup(`/users/${user.id}`, "/users", onClose, `${user.profile.name} — Book Meet`);
   const routedClose = routedPopup.close;
@@ -652,7 +652,6 @@ export function UserProfileModal({ user, viewer, users, catalog, profileFriends 
       ? "read"
       : user.books.some((book) => book.readingStatus === "reading") ? "reading" : "want",
   );
-  const [mobileSocialView, setMobileSocialView] = useState<"friends" | "followers" | "following" | "communities" | null>(null);
   const commonBooks = viewer.books.filter((book) => user.books.some((other) => other.title.toLowerCase() === book.title.toLowerCase() && other.author.toLowerCase() === book.author.toLowerCase()));
   const commonFavoriteGenres = viewer.profile.favoriteGenres.filter((genre) => user.profile.favoriteGenres.includes(genre));
   const commonDislikedGenres = viewer.profile.dislikedGenres.filter((genre) => user.profile.dislikedGenres.includes(genre));
@@ -681,18 +680,14 @@ export function UserProfileModal({ user, viewer, users, catalog, profileFriends 
     ...publicEvents.map((item) => ({ type: "event" as const, id: item.id, createdAt: item.createdAt, searchable: `${item.title} ${item.summary} ${item.description}`, item })),
     ...publicOccasions.map((item) => ({ type: "occasion" as const, id: item.id, createdAt: item.createdAt, searchable: `${item.primaryText} ${item.audienceText}`, item })),
   ].filter((entry) => !materialQuery || entry.searchable.toLocaleLowerCase().includes(materialQuery.toLocaleLowerCase())).sort((left, right) => Date.parse(right.createdAt ?? "") - Date.parse(left.createdAt ?? ""));
-  const mobileSocialUsers = mobileSocialView === "friends" ? profileFriends : mobileSocialView === "followers" ? profileFollowers : mobileSocialView === "following" ? profileFollowing : profileCommunities;
-  const mobileSocialTitle = mobileSocialView === "friends" ? t("profile.friends") : mobileSocialView === "followers" ? t("profile.followers") : mobileSocialView === "following" ? t("profile.subscriptions") : t("profile.communities");
-
   useEffect(() => {
     const close = (event: KeyboardEvent) => {
       if (event.key !== "Escape") return;
-      if (mobileSocialView) setMobileSocialView(null);
-      else routedClose();
+      routedClose();
     };
     window.addEventListener("keydown", close);
     return () => window.removeEventListener("keydown", close);
-  }, [mobileSocialView, routedClose]);
+  }, [routedClose]);
 
   useEffect(() => {
     const timeout = window.setTimeout(() => { setMaterialQuery(materialQueryDraft.trim()); setShownMaterials(12); }, 260);
@@ -712,7 +707,6 @@ export function UserProfileModal({ user, viewer, users, catalog, profileFriends 
   return (
     <div className="modal-backdrop profile-overlay-top" role="presentation" onMouseDown={routedClose}>
       <section className="public-profile-modal" role="dialog" aria-modal="true" aria-labelledby="public-profile-title" onMouseDown={(event) => event.stopPropagation()}>
-        {mobileSocialView && <section className="mobile-public-profile-social" aria-labelledby="mobile-public-profile-social-title"><header><button type="button" aria-label={t("common.back")} onClick={() => setMobileSocialView(null)}>{"<"}</button><h2 id="mobile-public-profile-social-title">{mobileSocialTitle}</h2></header><div>{mobileSocialUsers.map((profileUser) => <button type="button" className="mobile-public-profile-person" key={profileUser.id} onClick={() => { setMobileSocialView(null); onOpenUser(profileUser.id); }}><span className={`avatar avatar-sm avatar-${profileUser.color} ${profileUser.avatarUrl ? "has-photo" : ""}`} style={profileUser.avatarUrl ? { backgroundImage: `url(${profileUser.avatarUrl})` } : undefined}>{!profileUser.avatarUrl && profileUser.initials}</span><span><strong data-i18n-skip>{profileUser.profile.name}</strong><small data-i18n-skip>@{profileUser.username}</small></span></button>)}</div>{!mobileSocialUsers.length && <p>{t("common.empty")}</p>}</section>}
         <div className="modal-icon-actions public-profile-icon-actions">
           {onReport && <button className="modal-tool-button modal-report-button" type="button" onClick={onReport} data-tooltip={t("safety.report")} aria-label={t("safety.report")}><svg viewBox="0 0 24 24"><path d="M12 3 2.8 20h18.4L12 3Z" /><path d="M12 9v5m0 3h.01" /></svg></button>}
           {!blockedByMe && onBlock && <button className="modal-tool-button modal-report-button public-profile-block-button" type="button" onClick={() => void onBlock()} data-tooltip={viewer.isAdmin ? t("profile.blockSite") : t("profile.block")} aria-label={t("profile.block")}><svg viewBox="0 0 24 24"><rect x="5" y="10" width="14" height="11" rx="2" /><path d="M8 10V7a4 4 0 0 1 8 0v3" /></svg></button>}
@@ -725,7 +719,7 @@ export function UserProfileModal({ user, viewer, users, catalog, profileFriends 
           <div className={`avatar avatar-lg avatar-${user.color} ${user.avatarUrl ? "has-photo" : ""}`} style={user.avatarUrl ? { backgroundImage: `url(${user.avatarUrl})` } : undefined}>{!user.avatarUrl && user.initials}{user.online && <span className="online-dot" />}</div>
           <h2 id="public-profile-title" data-i18n-skip style={{ fontSize: `${Math.max(16, 30 - Math.max(0, user.profile.name.length - 18) * .5)}px` }}>{user.profile.name}</h2><p className="public-profile-username" data-i18n-skip style={{ fontSize: `${Math.max(10, 14 - Math.max(0, user.username.length - 20) * .25)}px` }}>@{user.username}</p><p className="profile-location">{domainLabel(user.profile.type)}{user.profile.city && <> · ⌖ <span data-i18n-skip>{user.profile.city}</span></>}</p>{user.profile.birthDate && <p className="profile-birthday">{t("profile.birthDate")}: <span data-i18n-skip>{user.profile.birthDate.slice(5).split("-").reverse().join(".")}</span></p>}
           <div className="profile-social-summary public-profile-social-desktop"><span>{t("profile.followerCount", { count: followerCount })}</span><i aria-hidden="true" /><span>{t("profile.friendCount", { count: friendCount })}</span></div>
-          <div className="mobile-public-profile-social-links"><button type="button" onClick={() => setMobileSocialView("friends")}><strong>{friendCount}</strong><span>{t("profile.friends")}</span></button><button type="button" onClick={() => setMobileSocialView("followers")}><strong>{followerCount}</strong><span>{t("profile.followers")}</span></button><button type="button" onClick={() => setMobileSocialView("following")}><strong>{profileFollowing.length}</strong><span>{t("profile.subscriptions")}</span></button><button type="button" onClick={() => setMobileSocialView("communities")}><strong>{profileCommunities.length}</strong><span>{t("profile.communities")}</span></button></div>
+          <div className="mobile-public-profile-social-links"><div><strong>{friendCount}</strong><span>{t("profile.friends")}</span></div><div><strong>{followerCount}</strong><span>{t("profile.followers")}</span></div></div>
           <div className="public-profile-actions">
             {blockedByMe && <><span className="blocked-profile-label">{t("profile.blockedByYou")}</span><button className="outline-button" type="button" onClick={() => setUnblockConfirm(true)}>{t("profile.unblock")}</button></>}
             {!blockedByMe && <>

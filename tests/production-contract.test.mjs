@@ -455,8 +455,8 @@ test("профили сообществ, видимость меню и изда
   assert.match(demo, /const blockedPair = state\.blocks\.some/);
   assert.match(profile, /placeholder=\{t\("linked\.communityPlaceholder"\)\}/);
   assertLocalized(profile, "linked.communityPlaceholder");
-  assertLocalized(profile, "settings.showMenu");
-  assert.match(profile, /draggedTab === "main" \|\| target === "main"/);
+  assert.doesNotMatch(profile, /t\("settings\.showMenu"\)/);
+  assert.doesNotMatch(profile, /profile-menu-visibility-settings/);
   assertLocalized(directory, "directory.communityType");
   assert.match(content, /const publisherPair =/);
   assert.match(content, /publisherMode \? \[/);
