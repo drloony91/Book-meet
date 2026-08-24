@@ -46,7 +46,7 @@ export async function loadUsers(connection = getPool(), viewerId = null) {
     `SELECT u.id, u.username, u.username_is_temporary, u.initials, u.color, u.avatar_path, u.role, u.created_at, u.last_seen_at,
             u.deleted_at, u.deletion_expires_at, u.purged_at,
             u.suspension_reason, u.suspended_until, u.suspended_permanently,
-            p.display_name, p.city, p.city_id, c.country_name, p.profile_type, p.gender, p.birth_date, p.show_birth_date_to_friends, p.birth_date_visibility, p.profile_tab_order, p.hidden_profile_tabs, p.home_view,
+            p.display_name, p.city, p.city_id, c.country_name, p.profile_type, p.gender, p.birth_date, p.show_birth_date_to_friends, p.birth_date_visibility, p.followers_visibility, p.friends_visibility, p.wishlist_visibility, p.profile_tab_order, p.hidden_profile_tabs, p.home_view,
             p.bio, p.author_influences, p.writing_themes, p.weekend, p.joy, p.talk,
             p.stranger_message, p.favorite_genres, p.disliked_genres,
             p.publisher_status, p.publisher_website, p.publisher_sales_links, p.publisher_legal_name,
@@ -60,6 +60,8 @@ export async function loadUsers(connection = getPool(), viewerId = null) {
        LEFT JOIN cities c ON c.id = p.city_id
       ORDER BY u.id`,
   );
+  const [allFriendshipRows] = await connection.query("SELECT user_low_id, user_high_id FROM friendships");
+  const [allFollowRows] = await connection.query("SELECT follower_user_id, target_user_id FROM follows");
   const [bookRows] = await connection.query(
     `SELECT ub.user_id, ub.rating, ub.short_review, ub.read_month, ub.read_year, ub.reading_status, ub.top_rank, ub.last_read_chapter, ub.reading_comment, ub.is_author,
              b.id, b.creator_user_id, b.author, b.title, b.isbn, b.publisher, b.genres, b.annotation, b.is_adult, b.cover_path, b.cover_tone, b.flip_url, b.created_at AS book_created_at
@@ -170,6 +172,12 @@ export async function loadUsers(connection = getPool(), viewerId = null) {
       createdAtValue: book.book_created_at ? new Date(book.book_created_at).toISOString() : undefined,
     }));
     const deletedView = Boolean(row.deleted_at || row.purged_at);
+    // Memberships never grant friendship-scoped visibility.
+    const isOwner = Number(row.id) === Number(viewerId);
+    const canView = (visibility) => viewerIsAdmin || isOwner || visibility === "everyone" || visibility === "friends" && isViewerFriend(row.id);
+    const canViewFollowers = !deletedView && canView(row.followers_visibility ?? "friends");
+    const canViewFriends = !deletedView && canView(row.friends_visibility ?? "friends");
+    const canViewWishlist = !deletedView && canView(row.wishlist_visibility ?? "friends");
     return {
       id: Number(row.id),
       username: deletedView ? "deleted-user" : row.username,
@@ -191,8 +199,10 @@ export async function loadUsers(connection = getPool(), viewerId = null) {
       deletedAt: row.deleted_at ? new Date(row.deleted_at).toISOString() : undefined,
       deletionExpiresAt: row.deletion_expires_at ? new Date(row.deletion_expires_at).toISOString() : undefined,
       purged: Boolean(row.purged_at),
-      friendCount: deletedView ? 0 : Number(row.friend_count ?? 0),
-      followerCount: deletedView ? 0 : Number(row.follower_count ?? 0),
+      friendCount: canViewFriends ? Number(row.friend_count ?? 0) : undefined,
+      followerCount: canViewFollowers ? Number(row.follower_count ?? 0) : undefined,
+      friendIds: canViewFriends ? allFriendshipRows.filter((item) => Number(item.user_low_id) === Number(row.id) || Number(item.user_high_id) === Number(row.id)).map((item) => Number(item.user_low_id) === Number(row.id) ? Number(item.user_high_id) : Number(item.user_low_id)) : undefined,
+      followerIds: canViewFollowers ? allFollowRows.filter((item) => Number(item.target_user_id) === Number(row.id)).map((item) => Number(item.follower_user_id)) : undefined,
       profile: {
         name: deletedView ? "Удалённый пользователь" : row.display_name,
         city: deletedView ? "" : row.city,
@@ -204,6 +214,12 @@ export async function loadUsers(connection = getPool(), viewerId = null) {
         age: !deletedView && (Number(row.id) === Number(viewerId) || viewerIsAdmin) ? ageFromBirthDate(row.birth_date) ?? undefined : undefined,
         ageGroup: deletedView || ageFromBirthDate(row.birth_date) === null ? "missing" : ageFromBirthDate(row.birth_date) < 18 ? "minor" : "adult",
         birthDateVisibility: deletedView ? undefined : Number(row.id) === Number(viewerId) || viewerIsAdmin ? row.birth_date_visibility ?? (row.show_birth_date_to_friends ? "friends" : "nobody") : undefined,
+        followersVisibility: deletedView || !(isOwner || viewerIsAdmin) ? undefined : row.followers_visibility ?? "friends",
+        friendsVisibility: deletedView || !(isOwner || viewerIsAdmin) ? undefined : row.friends_visibility ?? "friends",
+        wishlistVisibility: deletedView || !(isOwner || viewerIsAdmin) ? undefined : row.wishlist_visibility ?? "friends",
+        canViewFollowers,
+        canViewFriends,
+        canViewWishlist,
         showBirthDateToFriends: deletedView ? undefined : Number(row.id) === Number(viewerId) || viewerIsAdmin ? Boolean(row.show_birth_date_to_friends) : undefined,
         tabOrder: deletedView ? [] : parseJson(row.profile_tab_order),
         hiddenProfileTabs: deletedView ? [] : parseJson(row.hidden_profile_tabs),
@@ -515,7 +531,9 @@ export async function loadBootstrap(userId, options = {}) {
   }
   const usersWithWishlists = users.map((user) => ({
     ...user,
-    wishBooks: wishlistRows.filter((row) => Number(row.user_id) === user.id).map((row) => {
+    // Hidden wishlists are omitted rather than redacted, so their contents and
+    // count cannot be recovered from a bootstrap response.
+    wishBooks: user.profile.canViewWishlist ? wishlistRows.filter((row) => Number(row.user_id) === user.id).map((row) => {
       const privateVisible = visibleWishlistOwnerIds.has(user.id);
       return {
         id: Number(row.id), ownerId: user.id,
@@ -533,7 +551,7 @@ export async function loadBootstrap(userId, options = {}) {
         reservedByUserId: privateVisible && row.reserved_by_user_id ? Number(row.reserved_by_user_id) : undefined,
         reservedAt: privateVisible && row.reserved_at ? new Date(row.reserved_at).toISOString() : undefined,
       };
-    }),
+    }) : undefined,
   }));
   const visibleOccasionRows = occasionRows.filter((row) => {
     if (currentUser?.isAdmin) return true;

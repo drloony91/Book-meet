@@ -1,6 +1,7 @@
 @import "tailwindcss";
 
 :root {
+  --desktop-header-height: 76px;
   --red: #e30613;
   --red-dark: #bd0010;
   --red-soft: #fff1f2;
@@ -685,7 +686,7 @@ button { color: inherit; }
 .primary-button { border: 0; border-radius: 10px; background: var(--red); color: white; padding: 12px 20px; cursor: pointer; font-weight: 750; font-size: 13px; }
 .primary-button:hover { background: var(--red-dark); }
 
-.my-profile-page { min-height: calc(100vh - 76px); padding: 32px clamp(25px, 6vw, 90px) 60px; background: #f5f2ed; }
+.my-profile-page { min-height: calc(100vh - var(--desktop-header-height)); padding: 32px clamp(25px, 6vw, 90px) 60px; background: #f5f2ed; }
 .profile-page-topbar { max-width: 1120px; min-height: 35px; margin: 0 auto 20px; display: flex; justify-content: space-between; align-items: center; }
 .back-button { border: 0; background: transparent; color: #6f6760; cursor: pointer; font-size: 13px; }
 .back-button:hover { color: var(--red); }
@@ -1103,6 +1104,7 @@ select option {
 
 /* Navigation, friends workspace and directory refinements. */
 @media (min-width: 801px) {
+  .profile-overlay-top { inset: var(--desktop-header-height) 0 0; padding-top: 24px; align-items: start; overflow-y: auto; }
   .topbar { grid-template-columns: auto minmax(0, 1fr) minmax(0, 1fr) auto; column-gap: clamp(12px, 1.8vw, 28px); }
   .topbar-menu { width: 100%; justify-content: space-around; gap: clamp(12px, 2vw, 34px); }
   .topbar-menu-left, .topbar-menu-right { justify-self: stretch; }
@@ -3633,6 +3635,8 @@ select {
 .material-author-row > div:last-child { min-width: 0; }
 .material-author-row .inline-user-link { max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .material-author-row small { display: block; overflow-wrap: anywhere; color: var(--muted); }
+.material-author-row .material-author-username { color: var(--blue); font-size: .82rem; line-height: 1.15; }
+.profile-material-actions { display: flex; justify-content: flex-end; margin: 0 0 12px; }
 .publication-editor-simple { width: min(620px, calc(100vw - 30px)); }
 .publication-text-field { display: grid; gap: 8px; }
 .publication-text-field textarea { width: 100%; resize: vertical; white-space: pre-wrap; }
@@ -3898,6 +3902,7 @@ select {
   .profile-aside-meta { margin-top: 10px !important; }
   .profile-aside-identity > .profile-social-summary { justify-content: center; }
   .my-profile-main > .profile-title-row:first-child { display: none; }
+  .workflow-page-backdrop .creation-action-button { display: inline-flex !important; }
   .profile-communities-tab { display: grid; gap: 24px; }
   .profile-communities-tab h2 { margin: 0 0 12px; }
   .profile-community-list { display: grid; grid-template-columns: minmax(0, 1fr); gap: 10px; }
@@ -3916,10 +3921,6 @@ select {
   .profile-edit-settings-divider { height: 1px; margin: 12px 0; background: var(--line); }
   .profile-edit-settings-section { display: grid; gap: 12px; padding: 18px; border: 1px solid var(--line); border-radius: 14px; background: #fbfcfd; }
   .profile-edit-settings-section h2 { margin: 0; font-size: 18px; }
-  .my-profile-main.library-main .library-title-row h1,
-  .wishlist-tab .library-title-row h1,
-  .my-profile-main.library-main .view-switcher { display: none !important; }
-  .wishlist-tab .library-title-row { align-items: flex-start; }
 }
 
 /* Desktop verification pass: unified feeds, profiles and fixed application shell. */
@@ -3932,7 +3933,8 @@ select {
   .content-scroll.directory-page { overflow: visible; }
   .directory-page-shell > .directory-page { padding-top: 26px; }
   .desktop-navigation { top: 0; height: 100%; overflow: visible; }
-  .app-shell > .my-profile-page { height: calc(100vh - 76px); overflow-y: auto; scrollbar-gutter: stable; box-sizing: border-box; }
+  .app-shell > .mobile-shell-surface { height: calc(100vh - var(--desktop-header-height)); min-height: 0; overflow-y: auto; scrollbar-gutter: stable; }
+  .app-shell > .mobile-shell-surface > .my-profile-page { min-height: calc(100vh - var(--desktop-header-height)); overflow: visible; box-sizing: border-box; }
 
   .brand-header-logo { position: absolute; left: 110px; justify-self: auto; transform: translateX(-50%); }
   .desktop-brand-mark { width: 58px; height: 58px; }
@@ -4359,6 +4361,8 @@ select {
   .my-profile-page { padding-top: 54px; }
   .my-profile-page .profile-page-topbar { position: fixed; top: var(--mobile-header-height); right: 0; left: 0; }
   .app-shell.mobile-header-hidden .my-profile-page .profile-page-topbar { top: 0; }
+  .my-profile-main.library-main .library-title-row h1,
+  .wishlist-tab .library-title-row h1 { display: none !important; }
   .mobile-menu-toggle,
   .mobile-search-button { display: grid; }
   .brand-header-logo {

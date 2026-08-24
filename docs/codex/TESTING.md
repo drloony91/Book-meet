@@ -29,7 +29,52 @@ node --test tests/codex-docs-contract.test.mjs
 pnpm build
 ```
 
+## Disposable MySQL integration workflow
+
+Docker Desktop with Docker Compose v2 is a required external prerequisite. The repository pins Docker Official Image `mysql:8.4.11` in `compose.mysql-test.yml`; it exposes only the local test database `book_meet_test` at `127.0.0.1:3307` with test-only credentials.
+
+```bash
+pnpm db:test:up
+pnpm db:test
+pnpm db:test:down
+pnpm verify:db
+pnpm db:migrate:status
+pnpm db:migrate:retry -- <exact-migration-name.sql> --confirm-schema-reviewed
+```
+
+`pnpm db:test` requires the dedicated container already running and rejects any environment other than `NODE_ENV=test`, `MYSQL_INTEGRATION_TEST=1`, local host `127.0.0.1`, exact database `book_meet_test`, and exact test user. `pnpm verify:db` removes only the named volume within the dedicated Compose project, starts it with health waiting, runs the suite using its fixed test environment, and removes it in `finally`, including after a failed test. It proves real migration application and second-run no-op behavior, final schema/ledger, seed idempotency and production seed guards, DML rollback, foreign keys, representative `CASCADE`/`SET NULL`, and the A-01 partial-DDL fixture.
+
+`pnpm db:migrate:status` only reports unresolved attempt markers against the canonical ledger. If it reports one, inspect the actual schema first. `pnpm db:migrate:retry -- <exact-migration-name.sql> --confirm-schema-reviewed` then clears only that exact marker after checking that the migration is a selected file and absent from `schema_migrations`; it never drops, alters or otherwise reconciles schema automatically. It explicitly leaves actual schema and the canonical ledger unchanged.
+
+`pnpm verify` intentionally remains Docker-free. A-01 was reproduced on an isolated real MariaDB 10.6.27 database: the first DDL persisted, the next DDL failed, no canonical ledger row was written, and the unguarded retry hit the existing table. On 2026-08-24 the updated runner and its explicit recovery workflow passed `pnpm verify:db` on disposable MySQL 8.4.11: the first DDL remained after the forced failure, the failed marker blocked blind rerun, status exposed the exact statement/error, an unconfirmed retry was refused, and a confirmed marker clear after manual schema reconciliation allowed the migration to finish. A-01 is closed by this fail-closed operational recovery path; this does not claim transactional MySQL DDL rollback. Run `pnpm verify:db` before a release that changes schema/migrations, seed behavior, database transaction code, or relational constraints.
+
 The last command is a direct Vite build; the `pnpm test` build is already part of the canonical suite. Use the exact package script for the full suite rather than relying on a hand-maintained subset.
+
+## Browser regression (demo)
+
+The permanent Playwright suite runs the built frontend against an isolated local `DEMO_MODE=1` server on port `4173`. The web server is rebuilt and started for the run, each test resets the process-local demo fixtures through the demo-only `/api/__test__/reset` hook, and the desktop (`1440x900`) and touch mobile (`390x844`) projects use the same logical scenarios. Playwright screenshots and traces are retained only for failures; `playwright-report/` and `test-results/` are ignored.
+
+Install the Chromium browser once on a machine that will execute the suite, then use the canonical command or the focused project/upload commands:
+
+```bash
+pnpm exec playwright install chromium
+pnpm test:e2e
+pnpm test:e2e:desktop
+pnpm test:e2e:mobile
+pnpm test:e2e:upload
+```
+
+Use these gates after the corresponding changes:
+
+| Change | Required browser command after the normal focused checks |
+| --- | --- |
+| Backend-only with no browser/API contract change | No browser run; use the relevant Node/security checks and `pnpm lint` |
+| Frontend, route, auth, feed, social, chat or desktop interaction | `pnpm build` and `pnpm test:e2e:desktop` |
+| Mobile layout, header/menu/search/touch behavior | `pnpm build` and `pnpm test:e2e:mobile` |
+| Avatar/file or shared upload flow | `pnpm build` and `pnpm test:e2e:upload`; run full `pnpm test:e2e` when shared upload code or routes changed |
+| Release or cross-cutting client/API change | `pnpm test:e2e` after `pnpm check` and `pnpm test` |
+
+The fixture fails on page errors, console errors and non-React unexpected warnings, failed requests, broken local assets, and unexpected HTTP 4xx/5xx responses. The demo realtime endpoint is a valid SSE connection; it is not globally ignored. Chromium's generic negative-response console message is tolerated only when its observed status and source path match an explicit allowance in the current test; other negative responses must be allowed by the individual test. This suite checks deterministic in-memory demo behavior and does not replace real-DB, production-auth, multi-process, email, storage, or Plesk checks.
 
 ## Change-type checklist
 
@@ -43,8 +88,8 @@ The last command is a direct Vite build; the `pnpm test` build is already part o
 
 ## Explicit gaps
 
-- The automated suite does **not** provision or connect to a disposable real MySQL/MariaDB instance. `server/demo-api.js` is an in-memory adapter and cannot prove SQL schema, transaction atomicity, DDL migration recovery, indexes or production seed behavior.
-- No automated browser visual/interaction suite is part of `pnpm test`; static mobile/desktop contracts do not replace browser QA. Navigation, responsive CSS, chat and modal changes need manual/browser checks.
+- `pnpm verify` does **not** provision or connect to a disposable real MySQL/MariaDB instance. `server/demo-api.js` is an in-memory adapter and cannot prove SQL schema, transaction atomicity, DDL migration recovery, indexes or production seed behavior. `pnpm verify:db` covers these only when Docker Desktop/Compose is actually available and succeeds.
+- The Playwright browser suite is intentionally separate from `pnpm test` and `pnpm verify` because it requires an installed browser and a longer build/server run. Static mobile/desktop contracts do not replace browser QA; use the browser gates above for navigation, responsive CSS, chat, modal and upload changes.
 - Production checks are not run by CI. Before a Plesk release, separately verify `/api/health`, fresh JS/CSS, direct routes, HTTPS/legacy redirect, migration/seed and relevant authenticated behavior.
 - `pnpm audit --audit-level high` is a separate dependency check; it is not silently folded into `pnpm verify`.
 

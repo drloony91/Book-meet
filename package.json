@@ -13,16 +13,26 @@
     "setup": "pnpm install --frozen-lockfile",
     "build": "vite build",
     "start": "node server/index.js",
-    "test": "vite build && node --test tests/security.test.mjs tests/architecture-security.test.mjs tests/book-query.test.mjs tests/bootstrap-router.test.mjs tests/production-contract.test.mjs tests/i18n.test.mjs tests/compliance.test.mjs tests/desktop-identity.test.mjs tests/desktop-ui-contract.test.mjs tests/mobile-shell-contract.test.mjs tests/mobile-chat-contract.test.mjs tests/mobile-profile-contract.test.mjs tests/mobile-content-routes-contract.test.mjs tests/material-search.test.mjs tests/spreadsheet-lazy-contract.test.mjs tests/response-validation.test.mjs tests/codex-docs-contract.test.mjs",
+    "test:e2e": "playwright test",
+    "test:e2e:desktop": "playwright test --project=desktop",
+    "test:e2e:mobile": "playwright test --project=mobile",
+    "test:e2e:upload": "playwright test tests/browser/book-meet.spec.ts -g \"avatar upload\"",
+    "test": "vite build && node --test tests/security.test.mjs tests/architecture-security.test.mjs tests/book-query.test.mjs tests/bootstrap-router.test.mjs tests/production-contract.test.mjs tests/i18n.test.mjs tests/compliance.test.mjs tests/desktop-identity.test.mjs tests/desktop-ui-contract.test.mjs tests/mobile-shell-contract.test.mjs tests/mobile-chat-contract.test.mjs tests/mobile-profile-contract.test.mjs tests/profile-tz-contract.test.mjs tests/mobile-content-routes-contract.test.mjs tests/material-search.test.mjs tests/spreadsheet-lazy-contract.test.mjs tests/response-validation.test.mjs tests/codex-docs-contract.test.mjs tests/mysql-integration-contract.test.mjs",
     "lint": "tsc --noEmit",
     "check": "pnpm run lint && node scripts/check-architecture.mjs && node scripts/check-migrations.mjs && pnpm run docs:check",
     "verify": "pnpm run check && pnpm test",
     "docs:generate": "node scripts/generate-codex-docs.mjs",
     "docs:check": "node scripts/generate-codex-docs.mjs --check",
     "db:migrate": "node scripts/migrate.js",
+    "db:migrate:status": "node scripts/migrate-status.mjs",
+    "db:migrate:retry": "node scripts/migrate-retry.mjs",
     "db:seed": "node scripts/seed.js",
     "db:seed-publisher": "node scripts/seed-publisher.js",
-    "db:setup": "node scripts/migrate.js && node scripts/seed.js"
+    "db:setup": "node scripts/migrate.js && node scripts/seed.js",
+    "db:test:up": "node scripts/db-test.mjs up",
+    "db:test": "node scripts/db-test.mjs test",
+    "db:test:down": "node scripts/db-test.mjs down",
+    "verify:db": "node scripts/db-test.mjs verify"
   },
   "dependencies": {
     "dotenv": "^16.4.5",
@@ -36,6 +46,7 @@
     "xlsx": "https://cdn.sheetjs.com/xlsx-0.20.3/xlsx-0.20.3.tgz"
   },
   "devDependencies": {
+    "@playwright/test": "1.55.0",
     "@tailwindcss/postcss": "4.2.1",
     "@types/node": "22.19.19",
     "@types/react": "19.2.14",

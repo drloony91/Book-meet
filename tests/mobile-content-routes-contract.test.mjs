@@ -27,9 +27,9 @@ test("mobile entities and long workflows own full-page routed surfaces", async (
   assert.match(controller, /workflow\.kind === "book" && \["Издатель", "Сообщество"\]\.includes\(viewer\.profile\.type\)/);
   assert.match(controller, /item\.creatorId === viewer\.id \|\| viewer\.isAdmin/);
   assert.match(content, /entity-page-backdrop/);
-  assert.match(content, /useRoutedPopup\(`\/publishing\/\$\{item\.id\}`.*mobileRoute\)/);
+  assert.match(content, /useRoutedPopup\(`\/publishing\/\$\{item\.id\}`.*mobileRoute && routed\)/);
   assert.match(controller, /selectedPublisherNews/);
-  assert.match(controller, /if \(window\.matchMedia\("\(min-width: 801px\)"\)\.matches\)/);
+  assert.match(controller, /if \(window\.matchMedia\("\(min-width: 801px\)"\)\.matches && route\.workflow\.kind !== "publisher-news"\)/);
   assert.match(controller, /route\.overlay\.kind === "publisher-news"/);
   assert.match(controller, /!routeData\.blockedByUserIds\.includes\(user\.id\)/);
   assert.match(controller, /owner\?\.publisherNews\?\.find/);

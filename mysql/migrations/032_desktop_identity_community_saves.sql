@@ -6,6 +6,20 @@ CREATE TEMPORARY TABLE migration_032_usernames AS
 SELECT id, LOWER(username) AS username
   FROM users;
 
+-- MySQL cannot read the same temporary table more than once in a statement.
+-- Materialize each additional role used by the final UPDATE separately.
+CREATE TEMPORARY TABLE migration_032_valid_usernames AS
+SELECT username
+  FROM migration_032_usernames
+ WHERE username REGEXP '^[a-z0-9]([a-z0-9._-]{1,28})[a-z0-9]$'
+   AND username NOT IN ('admin', 'api', 'auth', 'profile', 'users', 'books', 'events', 'reviews', 'blog', 'meet', 'chat', 'publishing', 'communities', 'notifications', 'login', 'register', 'settings', 'support', 'book-meet-return')
+ GROUP BY username
+HAVING COUNT(*) = 1;
+
+CREATE TEMPORARY TABLE migration_032_username_conflicts AS
+SELECT id, username
+  FROM migration_032_usernames;
+
 -- First move every unique key to a value legacy generators could not have
 -- emitted. This prevents a transient UNIQUE collision when, for example,
 -- user #2 previously owned the otherwise-valid `user-1`.
@@ -23,23 +37,18 @@ UPDATE users
 
 UPDATE users u
 JOIN migration_032_usernames legacy ON legacy.id = u.id
-LEFT JOIN (
-  SELECT username
-    FROM migration_032_usernames
-   WHERE username REGEXP '^[a-z0-9]([a-z0-9._-]{1,28})[a-z0-9]$'
-     AND username NOT IN ('admin', 'api', 'auth', 'profile', 'users', 'books', 'events', 'reviews', 'blog', 'meet', 'chat', 'publishing', 'communities', 'notifications', 'login', 'register', 'settings', 'support', 'book-meet-return')
-   GROUP BY username
-  HAVING COUNT(*) = 1
-) valid_unique ON valid_unique.username = legacy.username
+LEFT JOIN migration_032_valid_usernames valid_unique ON valid_unique.username = legacy.username
    SET u.username = legacy.username,
        u.username_key = legacy.username,
        u.username_is_temporary = 0
  WHERE valid_unique.username IS NOT NULL
    AND NOT EXISTS (
-     SELECT 1 FROM migration_032_usernames conflict
+     SELECT 1 FROM migration_032_username_conflicts conflict
       WHERE conflict.id <> u.id AND CONCAT('user-', conflict.id) = legacy.username
    );
 
+DROP TEMPORARY TABLE migration_032_username_conflicts;
+DROP TEMPORARY TABLE migration_032_valid_usernames;
 DROP TEMPORARY TABLE migration_032_usernames;
 
 ALTER TABLE profiles

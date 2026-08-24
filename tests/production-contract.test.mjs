@@ -721,7 +721,7 @@ test("communities, membership chats and responsive conversation panels share pro
   assert.match(api, /creator_user_id AS owner_id, title FROM events/);
   assert.match(api, /creator_user_id AS owner_id, primary_text AS title FROM occasions/);
   assert.match(api, /publisher_news n JOIN profiles p/);
-  assertLocalized(profile, "communities.memberOf");
+  assert.doesNotMatch(profile, /t\("communities\.memberOf"\)/);
   assertLocalized(content, "profile.joinCommunity");
   assert.match(content, /profileFriends/);
   assert.match(directory, /export function CommunitiesDirectoryPage/);

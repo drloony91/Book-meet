@@ -74,7 +74,7 @@ test("desktop routes, username and privacy controls have stable contracts", asyn
   assert.match(css, /mobile-chat-button\.mobile-chat-button-hidden/);
   assert.match(css, /\.desktop-navigation \{ top: 0; height: 100%; overflow: visible; \}/);
   assert.match(css, /\.desktop-brand-title \{ position: absolute; grid-column: auto; left: calc\(50% \+ 110px\);/);
-  assert.match(css, /\.app-shell > \.my-profile-page \{ height: calc\(100vh - 76px\); overflow-y: auto; scrollbar-gutter: stable;/);
+  assert.match(css, /\.app-shell > \.mobile-shell-surface \{ height: calc\(100vh - var\(--desktop-header-height\)\); min-height: 0; overflow-y: auto; scrollbar-gutter: stable;/);
   assert.match(css, /\.my-profile-page \{ width: 100%; \}/);
   assert.match(css, /\.my-profile-card \{ width: min\(1260px, 100%\); max-width: none;/);
   assert.match(css, /\.directory-heading \{ width: min\(760px, 100%\); min-height: 50px; margin: 42px auto 20px; padding: 0; border: 0;/);

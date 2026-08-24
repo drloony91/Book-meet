@@ -17,12 +17,15 @@ const sessions = new Map();
 const passwords = new Map([
   [1, process.env.TEST1_PASSWORD || "testtest1"],
   [2, process.env.PUBLISHER_TEST_PASSWORD || "publisher2026"],
+  [3, process.env.READER_TEST_PASSWORD || "reader2026"],
 ]);
+const demoRealtimeClients = new Set();
 const demoAccountActionTokens = new Map();
 const loginAttempts = new LoginAttemptTracker({ limit: 10, windowMs: 15 * 60 * 1000 });
 const demoLegalAcceptances = new Map([
   [1, new Set([1, 2, 3])],
   [2, new Set([1, 2, 3])],
+  [3, new Set([1, 2, 3])],
 ]);
 let nextId = 100;
 
@@ -180,6 +183,45 @@ const users = [
     ],
     wishBooks: [],
   },
+  {
+    id: 3,
+    isAdmin: false,
+    username: "test-reader",
+    email: "reader.test@bookmeet.kz",
+    initials: "ЧТ",
+    color: "violet",
+    joined: "сегодня",
+    joinedAt: new Date(Date.now() - 15_000).toISOString(),
+    profile: {
+      name: "Тестовый читатель",
+      city: "Астана",
+      cityId: 1,
+      country: "Казахстан",
+      type: "Читатель",
+      gender: "Женский",
+      birthDate: "1993-05-10",
+      age: 33,
+      birthDateVisibility: "everyone",
+      showBirthDateToFriends: true,
+      tabOrder: [],
+      bio: "Читательский профиль для browser regression.",
+      authorInfluences: "",
+      writingThemes: "",
+      weekend: "",
+      joy: "",
+      talk: "",
+      strangerMessage: "",
+      favoriteGenres: ["Современная проза"],
+      dislikedGenres: [],
+    },
+    books: [
+      { id: 301, catalogBookId: 24, author: "Айгерим Жансугурова", title: "Точки на карте", genres: ["Современная проза"], annotation: "Личная запись читателя для проверки библиотеки.", pages: "", format: "Бумажная", durationHours: "", durationMinutes: "", rating: 4.5, review: "", readingStatus: "read", readMonth: 8, readYear: 2026, coverTone: "mint", links: [] },
+    ],
+    authorBooks: [],
+    reviews: [],
+    excerpts: [],
+    wishBooks: [],
+  },
 ];
 
 const state = {
@@ -191,7 +233,9 @@ const state = {
   ],
   messages: {},
   friendRequests: [],
-  friendships: [],
+  // Keep one deterministic reader/publisher conversation available to the
+  // browser suite without granting any additional production permissions.
+  friendships: [{ userA: 2, userB: 3 }],
   communityMemberships: [],
   follows: [],
   blocks: [],
@@ -211,6 +255,32 @@ const state = {
   }],
   occasions: [],
 };
+
+// Keep a deep, process-local baseline for browser regression tests. The demo
+// adapter is intentionally in-memory; restoring the baseline makes each test
+// independent without touching the production router or database contract.
+const demoInitialUsers = structuredClone(users);
+const demoInitialState = structuredClone(state);
+const demoInitialPasswords = new Map(passwords);
+const demoInitialLegalAcceptances = new Map([...demoLegalAcceptances].map(([userId, documents]) => [userId, new Set(documents)]));
+
+function resetDemoState() {
+  for (const client of demoRealtimeClients) {
+    try { client.end(); } catch { /* client may already be closed */ }
+  }
+  demoRealtimeClients.clear();
+  sessions.clear();
+  demoAccountActionTokens.clear();
+  loginAttempts.buckets.clear();
+  passwords.clear();
+  for (const [userId, password] of demoInitialPasswords) passwords.set(userId, password);
+  demoLegalAcceptances.clear();
+  for (const [userId, documents] of demoInitialLegalAcceptances) demoLegalAcceptances.set(userId, new Set(documents));
+  users.splice(0, users.length, ...structuredClone(demoInitialUsers));
+  for (const key of Object.keys(state)) delete state[key];
+  Object.assign(state, structuredClone(demoInitialState));
+  nextId = 100;
+}
 
 function cookieValue(request, name) {
   const cookies = String(request.headers.cookie || "").split(";");
@@ -252,22 +322,32 @@ function bootstrap(userId) {
   const blockedByUserIds = relatedBlocks.filter((block) => block.blockedId === userId).map((block) => block.blockerId);
   const friendCountByUser = new Map(users.map((user) => [user.id, state.friendships.filter((entry) => entry.userA === user.id || entry.userB === user.id).length]));
   const followerCountByUser = new Map(users.map((user) => [user.id, state.follows.filter((entry) => entry.targetId === user.id && !state.friendships.some((friendship) => [friendship.userA, friendship.userB].includes(user.id) && [friendship.userA, friendship.userB].includes(entry.followerId))).length]));
-  const visibleUsers = users.map((user) => ({ ...user, friendCount: user.deletedAt || user.purged ? 0 : friendCountByUser.get(user.id) ?? 0, followerCount: user.deletedAt || user.purged ? 0 : followerCountByUser.get(user.id) ?? 0 })).filter((user) => !["Издатель", "Сообщество"].includes(user.profile.type)
+  const visibleUsers = users.map((user) => {
+    const friend = state.friendships.some((entry) => [entry.userA, entry.userB].includes(user.id) && [entry.userA, entry.userB].includes(userId));
+    const canView = (visibility) => user.id === userId || viewer?.isAdmin || visibility === "everyone" || visibility === "friends" && friend;
+    const canViewFollowers = canView(user.profile.followersVisibility ?? "friends");
+    const canViewFriends = canView(user.profile.friendsVisibility ?? "friends");
+    return { ...user, friendCount: user.deletedAt || user.purged || !canViewFriends ? undefined : friendCountByUser.get(user.id) ?? 0, followerCount: user.deletedAt || user.purged || !canViewFollowers ? undefined : followerCountByUser.get(user.id) ?? 0, friendIds: canViewFriends ? state.friendships.filter((entry) => entry.userA === user.id || entry.userB === user.id).map((entry) => entry.userA === user.id ? entry.userB : entry.userA) : undefined, followerIds: canViewFollowers ? state.follows.filter((entry) => entry.targetId === user.id).map((entry) => entry.followerId) : undefined };
+  }).filter((user) => !["Издатель", "Сообщество"].includes(user.profile.type)
     || user.profile.publisherStatus === "approved"
     || user.id === userId
     || viewer?.isAdmin).filter((user) => viewer?.isAdmin || user.id === userId || !blockedByUserIds.includes(user.id)).map((user) => {
     const friend = state.friendships.some((entry) => [entry.userA, entry.userB].includes(user.id) && [entry.userA, entry.userB].includes(userId));
     const privateVisible = user.id === userId || friend;
+    const canViewWishlist = user.id === userId || viewer?.isAdmin || user.profile.wishlistVisibility === "everyone" || (user.profile.wishlistVisibility ?? "friends") === "friends" && friend;
     const profile = user.id === userId || viewer?.isAdmin ? user.profile : {
       ...user.profile,
       birthDate: (user.profile.birthDateVisibility ?? (user.profile.showBirthDateToFriends ? "friends" : "nobody")) === "everyone" || (user.profile.birthDateVisibility ?? (user.profile.showBirthDateToFriends ? "friends" : "nobody")) === "friends" && friend ? user.profile.birthDate : undefined,
       birthDateVisibility: undefined,
+      followersVisibility: undefined, friendsVisibility: undefined, wishlistVisibility: undefined,
+      canViewFollowers: user.followerCount !== undefined, canViewFriends: user.friendCount !== undefined, canViewWishlist,
       showBirthDateToFriends: undefined,
       publisherLegalName: undefined, publisherBin: undefined, publisherAccount: undefined,
       publisherBik: undefined, publisherBank: undefined, publisherLegalAddress: undefined,
       publisherPostalAddress: undefined, publisherModerationNote: undefined,
     };
-    return { ...user, books: (user.books ?? []).filter((item) => adultStatus === "adult" || !item.isAdult), authorBooks: (user.authorBooks ?? []).filter((item) => adultStatus === "adult" || !item.isAdult), reviews: (user.reviews ?? []).filter((item) => adultStatus === "adult" || !item.isAdult), excerpts: (user.excerpts ?? []).filter((item) => adultStatus === "adult" || !item.isAdult), blockedByMe: relatedBlocks.some((block) => block.blockerId === userId && block.blockedId === user.id), profile, wishBooks: (user.wishBooks ?? []).map((item) => privateVisible ? { ...item, productUrl: user.id === userId ? item.productUrl : undefined, privateVisible: true } : { id: item.id, ownerId: item.ownerId, catalogBookId: item.catalogBookId, author: item.author, title: item.title, genres: item.genres, annotation: item.annotation, coverUrl: item.coverUrl, coverTone: item.coverTone, marketplace: item.marketplace, reservedByUserId: item.reservedByUserId, privateVisible: false }) };
+    if (user.id === userId || viewer?.isAdmin) Object.assign(profile, { canViewFollowers: true, canViewFriends: true, canViewWishlist: true });
+    return { ...user, books: (user.books ?? []).filter((item) => adultStatus === "adult" || !item.isAdult), authorBooks: (user.authorBooks ?? []).filter((item) => adultStatus === "adult" || !item.isAdult), reviews: (user.reviews ?? []).filter((item) => adultStatus === "adult" || !item.isAdult), excerpts: (user.excerpts ?? []).filter((item) => adultStatus === "adult" || !item.isAdult), blockedByMe: relatedBlocks.some((block) => block.blockerId === userId && block.blockedId === user.id), profile, wishBooks: canViewWishlist ? (user.wishBooks ?? []).map((item) => privateVisible ? { ...item, productUrl: user.id === userId ? item.productUrl : undefined, privateVisible: true } : { id: item.id, ownerId: item.ownerId, catalogBookId: item.catalogBookId, author: item.author, title: item.title, genres: item.genres, annotation: item.annotation, coverUrl: item.coverUrl, coverTone: item.coverTone, marketplace: item.marketplace, reservedByUserId: item.reservedByUserId, privateVisible: false }) : undefined };
   });
   const link = state.linkedProfiles.find((item) => item.personalUserId === userId || item.communityUserId === userId);
   const linked = link ? users.find((item) => item.id === (link.personalUserId === userId ? link.communityUserId : link.personalUserId)) : undefined;
@@ -308,10 +388,18 @@ router.get("/auth/legal-documents", (_request, response) => response.json({ requ
 // never part of the production API.
 router.get("/auth/demo-login", (request, response) => {
   const token = randomBytes(24).toString("hex");
-  sessions.set(token, Number(request.query.user) === 2 ? 2 : 1);
+  const requestedUserId = Number(request.query.user);
+  sessions.set(token, [1, 2, 3].includes(requestedUserId) ? requestedUserId : 1);
   response.setHeader("Set-Cookie", `book_meet_demo=${token}; Path=/; HttpOnly; SameSite=Lax`);
   response.redirect("/");
 });
+
+if (process.env.DEMO_MODE === "1") {
+  router.post("/__test__/reset", (_request, response) => {
+    resetDemoState();
+    response.json({ ok: true, mode: "demo", nextId });
+  });
+}
 
 router.post("/auth/login", (request, response) => {
   const locale = requestLocale(request);
@@ -482,6 +570,21 @@ router.post("/auth/deleted-profile/new", (request, response) => {
 });
 
 router.use(requireUser);
+
+// Demo-only realtime transport. The production server has its own realtime
+// implementation; the in-memory adapter only needs a valid SSE connection so
+// authenticated browser tests do not fall through to the SPA HTML shell.
+router.get("/realtime", (request, response) => {
+  response.status(200);
+  response.setHeader("Content-Type", "text/event-stream; charset=utf-8");
+  response.setHeader("Cache-Control", "no-cache, no-transform");
+  response.setHeader("Connection", "keep-alive");
+  response.setHeader("X-Accel-Buffering", "no");
+  response.flushHeaders?.();
+  response.write("event: connected\ndata: demo\n\n");
+  demoRealtimeClients.add(response);
+  request.on("close", () => demoRealtimeClients.delete(response));
+});
 
 router.get("/search/materials", (request, response) => {
   const result = searchBootstrapMaterials(bootstrap(request.demoUserId), request.query.q, { page: request.query.page, limit: request.query.limit });
@@ -853,6 +956,9 @@ router.put("/users/me/state", (request, response) => {
     profile.publisherStatus = "not_required";
     profile.communityIsClosed = false;
   }
+  for (const key of ["followersVisibility", "friendsVisibility", "wishlistVisibility"]) {
+    if (!["nobody", "friends", "everyone"].includes(profile[key])) profile[key] = "friends";
+  }
   if (switchingToPublisher) {
     state.friendRequests = state.friendRequests.filter((item) => !((item.fromId === user.id || item.toId === user.id) && !(item.fromId === user.id && users.find((entry) => entry.id === item.toId)?.profile.type === "Сообщество")));
     state.notifications = state.notifications.filter((item) => !(item.type === "friend_request" && (item.userId === user.id || item.actorId === user.id) && users.find((entry) => entry.id === item.userId)?.profile.type !== "Сообщество"));
@@ -966,6 +1072,47 @@ router.post("/books", (request, response) => {
     if (!readerUsesExistingCanonical) state.catalogBooks[catalogIndex] = { ...state.catalogBooks[catalogIndex], ...book, rating: 0, review: "", readingStatus: undefined, topRank: undefined };
   } else state.catalogBooks.push({ ...book, rating: 0, review: "", readingStatus: undefined, topRank: undefined });
   response.json({ ok: true, bookId: id, topRank });
+});
+
+function saveDemoReadingMaterial(request, response, kind, id = 0) {
+  const user = users.find((item) => item.id === request.demoUserId);
+  const payload = request.body ?? {};
+  if (!user) return response.status(404).json({ error: "Пользователь не найден" });
+  const collection = kind === "review" ? user.reviews : (user.excerpts ??= []);
+  const existing = id ? collection.find((item) => item.id === id) : null;
+  if (id && !existing) return response.status(404).json({ error: "Материал не найден" });
+  if (kind === "review") {
+    const book = state.catalogBooks.find((item) => item.id === Number(payload.bookId));
+    if (!book || !payload.preview || !payload.rating || !String(payload.bodyHtml ?? payload.fullText ?? "").trim()) return response.status(400).json({ error: "Заполните книгу, оценку и текст" });
+    const value = { id: existing?.id ?? nextId++, bookId: book.id, bookTitle: book.title, bookAuthor: book.author, rating: Number(payload.rating), preview: String(payload.preview), fullText: String(payload.fullText ?? payload.bodyHtml).replace(/<[^>]+>/g, " ").trim(), bodyHtml: String(payload.bodyHtml ?? payload.fullText), isAdult: Boolean(payload.isAdult), createdAt: existing?.createdAt ?? new Date().toLocaleDateString("ru-RU"), createdAtValue: existing?.createdAtValue ?? new Date().toISOString() };
+    if (existing) Object.assign(existing, value); else collection.unshift(value);
+    return response.status(existing ? 200 : 201).json({ id: value.id, bookTitle: value.bookTitle, bookAuthor: value.bookAuthor });
+  }
+  const text = String(payload.previewText ?? payload.text ?? "").trim();
+  if (!text) return response.status(400).json({ error: "Добавьте текст публикации" });
+  const value = { id: existing?.id ?? nextId++, bookId: undefined, bookIds: [], bookTitle: "", previewText: text, text, bodyHtml: String(payload.bodyHtml ?? `<p>${text}</p>`), link: "", isAdult: Boolean(payload.isAdult), createdAt: existing?.createdAt ?? new Date().toLocaleDateString("ru-RU"), createdAtValue: existing?.createdAtValue ?? new Date().toISOString() };
+  if (existing) Object.assign(existing, value); else collection.unshift(value);
+  return response.status(existing ? 200 : 201).json({ id: value.id, bookTitle: value.bookTitle, bookIds: value.bookIds });
+}
+router.post("/reviews", (request, response) => saveDemoReadingMaterial(request, response, "review"));
+router.patch("/reviews/:id", (request, response) => saveDemoReadingMaterial(request, response, "review", Number(request.params.id)));
+router.post("/excerpts", (request, response) => saveDemoReadingMaterial(request, response, "excerpt"));
+router.patch("/excerpts/:id", (request, response) => saveDemoReadingMaterial(request, response, "excerpt", Number(request.params.id)));
+
+router.patch("/books/:id", (request, response) => {
+  const user = users.find((item) => item.id === request.demoUserId); const id = Number(request.params.id); const payload = request.body ?? {};
+  const book = user?.books.find((item) => item.id === id);
+  if (!book) return response.status(404).json({ error: "Книга не найдена в вашей библиотеке" });
+  const readingStatus = payload.readingStatus ?? book.readingStatus ?? "read";
+  const rating = Number(payload.rating ?? book.rating);
+  if (readingStatus === "read" && (!Number.isInteger(rating * 2) || rating < .5 || rating > 5 || !String(payload.shortReview ?? payload.review ?? "").trim())) return response.status(400).json({ error: "Заполните оценку и краткий отзыв" });
+  const top3Requested = payload.top3 === true || Number(payload.topRank) > 0;
+  if (top3Requested && !top3Eligibility({ isAuthor: false, readingStatus }).allowed) return response.status(400).json({ error: "В TOP3 можно добавлять только прочитанные книги из своей библиотеки" });
+  const topBooks = user.books.filter((item) => item.topRank);
+  const topRank = top3Requested ? nextTopRank(topBooks, id) : undefined;
+  if (top3Requested && !topRank) return response.status(409).json({ error: "В TOP3 уже добавлены три книги. Сначала снимите отметку с одной из них.", code: "TOP3_LIMIT" });
+  Object.assign(book, { rating, review: String(payload.shortReview ?? payload.review ?? book.review), readingStatus, readMonth: readingStatus === "read" ? payload.readMonth : undefined, readYear: readingStatus === "read" ? payload.readYear : undefined, lastReadChapter: readingStatus === "reading" ? payload.lastReadChapter : undefined, readingComment: readingStatus === "reading" ? payload.readingComment : "", topRank });
+  response.json({ bookId: id, topRank });
 });
 
 function demoMarketplace(value) {

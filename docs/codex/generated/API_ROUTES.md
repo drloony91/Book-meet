@@ -52,6 +52,7 @@ Production Express routes only; demo-api routes are intentionally excluded. The 
 | `GET` | `/api/books` |
 | `POST` | `/api/books` |
 | `DELETE` | `/api/books/:id` |
+| `PATCH` | `/api/books/:id` |
 | `GET` | `/api/books/catalog` |
 | `POST` | `/api/books/preview` |
 | `GET` | `/api/bootstrap` |
@@ -66,6 +67,8 @@ Production Express routes only; demo-api routes are intentionally excluded. The 
 | `GET` | `/api/events/:id/attendees` |
 | `DELETE` | `/api/events/:id/reminder` |
 | `POST` | `/api/events/:id/reminder` |
+| `POST` | `/api/excerpts` |
+| `PATCH` | `/api/excerpts/:id` |
 | `GET` | `/api/health` |
 | `POST` | `/api/legal/acceptances` |
 | `DELETE` | `/api/linked-profiles` |
@@ -89,6 +92,8 @@ Production Express routes only; demo-api routes are intentionally excluded. The 
 | `POST` | `/api/reports` |
 | `POST` | `/api/reports/:id/appeal` |
 | `GET` | `/api/reports/mine` |
+| `POST` | `/api/reviews` |
+| `PATCH` | `/api/reviews/:id` |
 | `DELETE` | `/api/saves` |
 | `GET` | `/api/saves` |
 | `POST` | `/api/saves` |

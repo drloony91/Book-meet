@@ -1,6 +1,6 @@
 ALTER TABLE users
-  ADD COLUMN IF NOT EXISTS email_verified_at DATETIME NULL AFTER email_key,
-  ADD COLUMN IF NOT EXISTS password_login_enabled TINYINT(1) NOT NULL DEFAULT 1 AFTER password_hash;
+  ADD COLUMN email_verified_at DATETIME NULL AFTER email_key,
+  ADD COLUMN password_login_enabled TINYINT(1) NOT NULL DEFAULT 1 AFTER password_hash;
 
 -- Existing accounts keep their current ability to sign in; verification is only pending for new password registrations.
 UPDATE users

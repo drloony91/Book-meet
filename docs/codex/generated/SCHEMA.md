@@ -38,3 +38,4 @@ This is a deterministic file-level inventory of migration names and `CREATE TABL
 | `031_community_moderation_legal_document.sql` | `ALTER TABLE legal_documents`, `ALTER TABLE legal_acceptances` |
 | `032_desktop_identity_community_saves.sql` | `ALTER TABLE users`, `ALTER TABLE profiles`, `CREATE TABLE material_saves` |
 | `033_profile_birth_date_visibility.sql` | `ALTER TABLE profiles` |
+| `034_profile_social_visibility.sql` | `ALTER TABLE profiles` |
