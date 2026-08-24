@@ -270,7 +270,6 @@
     transform: translateX(0);
     transition: transform .28s cubic-bezier(.22,.8,.3,1);
   }
-  .mobile-bottom-navigation.is-hidden { transform: translateY(110%); }
   .app-shell.mobile-navigation-open .mobile-bottom-navigation { transform: translateX(var(--mobile-drawer-width)); }
   .mobile-bottom-navigation > button,
   .mobile-bottom-create-toggle { position: relative; display: grid; min-width: 0; place-items: center; align-content: center; gap: 2px; border: 0; border-radius: 11px; padding: 3px 2px; color: #697682; background: transparent; cursor: pointer; font-size: 9px; font-weight: 750; line-height: 1.1; }
@@ -307,7 +306,6 @@
   .topbar { position: fixed; right: 0; left: 0; width: 100%; }
   .app-shell.mobile-header-hidden .mobile-shell-surface { padding-top: 0; }
 
-  .mobile-bottom-navigation.is-hidden { transform: translateY(110%); }
   .mobile-bottom-icon,
   .mobile-bottom-avatar { width: 30px; height: 30px; min-width: 30px; }
   .mobile-bottom-icon img { width: 30px; height: 30px; }
@@ -4222,11 +4220,8 @@ select {
   .mobile-profile-primary-actions > .linked-profile-actions { display: grid; }
   .mobile-profile-editing .my-profile-aside,
   .mobile-profile-editing .profile-main-nav,
-  .mobile-profile-subpage .my-profile-aside,
-  .mobile-profile-subpage .profile-main-nav,
   .mobile-profile-editing .mobile-profile-primary-actions { display: none !important; }
-  .mobile-profile-editing .my-profile-main,
-  .mobile-profile-subpage .my-profile-main { margin-top: 12px; }
+  .mobile-profile-editing .my-profile-main { margin-top: 12px; }
   .profile-form,
   .profile-details,
   .profile-details > div,
@@ -4363,6 +4358,7 @@ select {
   .app-shell.mobile-header-hidden .mobile-shell-surface { padding-top: 0; }
   .my-profile-page { padding-top: 54px; }
   .my-profile-page .profile-page-topbar { position: fixed; top: var(--mobile-header-height); right: 0; left: 0; }
+  .app-shell.mobile-header-hidden .my-profile-page .profile-page-topbar { top: 0; }
   .mobile-menu-toggle,
   .mobile-search-button { display: grid; }
   .brand-header-logo {
@@ -4407,4 +4403,32 @@ select {
   .excerpt-card.material-preview-card.publisher-news-card { border: 1px solid var(--line); border-radius: 16px; color: var(--ink); background: #fff; box-shadow: 0 8px 26px rgb(27 61 102 / 8%); font-style: normal; }
   .publication-preview-card > p,
   .publisher-news-card > p { color: var(--ink); font-style: normal; font-family: inherit; }
+  .mobile-profile-back,
+  .public-profile-back,
+  .profile-social-mobile-back,
+  .mobile-public-profile-social > header button,
+  .mobile-global-search-back,
+  .chat-mobile-back,
+  .mobile-page-back,
+  .workflow-page-backdrop .modal-close,
+  .entity-page-backdrop .modal-close-button {
+    display: grid !important;
+    flex: 0 0 36px !important;
+    width: 36px !important;
+    min-width: 36px !important;
+    max-width: 36px !important;
+    height: 36px !important;
+    min-height: 36px !important;
+    max-height: 36px !important;
+    aspect-ratio: 1;
+    box-sizing: border-box;
+    place-items: center;
+    border: 1px solid #b8c8d9 !important;
+    border-radius: 50% !important;
+    padding: 0 !important;
+    color: #315b88 !important;
+    background: #f7fafc !important;
+    font-size: 22px !important;
+    line-height: 1 !important;
+  }
 }

@@ -34,6 +34,9 @@ test("mobile entities and long workflows own full-page routed surfaces", async (
   assert.match(controller, /!routeData\.blockedByUserIds\.includes\(user\.id\)/);
   assert.match(controller, /owner\?\.publisherNews\?\.find/);
   assert.match(content, /workflow-page-backdrop/);
+  assert.match(content, /COMMENTS_SCROLL_REQUEST/);
+  assert.match(content, /comments-block textarea"\)\?\.focus\(\)/);
+  assert.doesNotMatch(content, /comments-block textarea"\)\?\.focus\(\{ preventScroll: true \}\)/);
   assert.match(actions, /mobile \? "<" : "×"/);
   assert.match(actions, /common\.back/);
   assert.match(css, /@media \(max-width: 800px\)[\s\S]*\.entity-page-backdrop/);

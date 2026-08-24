@@ -250,7 +250,9 @@ function bootstrap(userId) {
   };
   const relatedBlocks = state.blocks.filter((block) => block.blockerId === userId || block.blockedId === userId);
   const blockedByUserIds = relatedBlocks.filter((block) => block.blockedId === userId).map((block) => block.blockerId);
-  const visibleUsers = users.filter((user) => !["Издатель", "Сообщество"].includes(user.profile.type)
+  const friendCountByUser = new Map(users.map((user) => [user.id, state.friendships.filter((entry) => entry.userA === user.id || entry.userB === user.id).length]));
+  const followerCountByUser = new Map(users.map((user) => [user.id, state.follows.filter((entry) => entry.targetId === user.id && !state.friendships.some((friendship) => [friendship.userA, friendship.userB].includes(user.id) && [friendship.userA, friendship.userB].includes(entry.followerId))).length]));
+  const visibleUsers = users.map((user) => ({ ...user, friendCount: user.deletedAt || user.purged ? 0 : friendCountByUser.get(user.id) ?? 0, followerCount: user.deletedAt || user.purged ? 0 : followerCountByUser.get(user.id) ?? 0 })).filter((user) => !["Издатель", "Сообщество"].includes(user.profile.type)
     || user.profile.publisherStatus === "approved"
     || user.id === userId
     || viewer?.isAdmin).filter((user) => viewer?.isAdmin || user.id === userId || !blockedByUserIds.includes(user.id)).map((user) => {

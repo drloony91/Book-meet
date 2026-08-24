@@ -183,23 +183,8 @@ export function MobileBottomNavigation({
 }) {
   const { t } = useI18n();
   const [createOpen, setCreateOpen] = useState(false);
-  const [hidden, setHidden] = useState(false);
-  const lastScrollY = useRef(0);
-  useEffect(() => {
-    const onScroll = () => {
-      const y = window.scrollY;
-      if (y < 24 || y < lastScrollY.current - 8) setHidden(false);
-      else if (y > lastScrollY.current + 8) setHidden(true);
-      lastScrollY.current = y;
-    };
-    lastScrollY.current = window.scrollY;
-    window.addEventListener("scroll", onScroll, { passive: true });
-    return () => window.removeEventListener("scroll", onScroll);
-  }, []);
-  useEffect(() => { setHidden(false); }, [activeView]);
-  useEffect(() => { if (createOpen) setHidden(false); }, [createOpen]);
   const activateCreate = (action: () => void) => { setCreateOpen(false); action(); };
-  return <nav className={`mobile-bottom-navigation ${hidden ? "is-hidden" : ""}`} aria-label={t("nav.mobileBottom")}>
+  return <nav className="mobile-bottom-navigation" aria-label={t("nav.mobileBottom")}>
     <button type="button" className={activeView === "home" || activeView === "publications" ? "is-active" : ""} onClick={onHome} aria-current={activeView === "home" || activeView === "publications" ? "page" : undefined} aria-label={t("nav.main")} title={t("nav.main")}>
       <span className="mobile-bottom-icon"><img src="/mobile-icons/home.png" alt="" aria-hidden="true" /></span>
     </button>

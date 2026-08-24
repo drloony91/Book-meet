@@ -129,7 +129,7 @@ function scrollToComments(containerSelector: string) {
     const container = document.querySelector(containerSelector);
     const target = container?.querySelector(".comments-block form") ?? container?.querySelector(".comments-block");
     target?.scrollIntoView({ behavior: "smooth", block: "start" });
-    window.setTimeout(() => container?.querySelector<HTMLTextAreaElement>(".comments-block textarea")?.focus({ preventScroll: true }), 260);
+    window.setTimeout(() => container?.querySelector<HTMLTextAreaElement>(".comments-block textarea")?.focus(), 260);
   });
 }
 

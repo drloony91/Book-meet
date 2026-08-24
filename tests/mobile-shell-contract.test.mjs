@@ -40,7 +40,7 @@ test("mobile shell keeps the shared navigation contract and isolates desktop", a
   assert.match(routes, /notifications: "\/notifications"/);
   assert.match(routes, /kind: "notification", view: "notifications"/);
   assert.match(notifications, /export function NotificationsPage/);
-  assert.match(controller, /view === "search" \|\| view === "chat" \|\| view === "notifications" \? "mobile-header-hidden"/);
+  assert.match(controller, /view === "search" \|\| view === "chat" \|\| view === "notifications" \|\| view === "profile" \? "mobile-header-hidden"/);
   assert.match(controller, /document\.documentElement\.style\.overflow = "hidden"/);
   assert.match(controller, /document\.body\.style\.overflow = "hidden"/);
   assert.match(controller, /setMobileNavigationOpen\(false\)/);
@@ -50,9 +50,11 @@ test("mobile shell keeps the shared navigation contract and isolates desktop", a
   assert.match(css, /mobile-navigation-open.*mobile-shell-surface|mobile-shell-surface.*mobile-navigation-open/);
   assert.match(css, /mobile-navigation-open.*mobile-bottom-navigation|mobile-bottom-navigation.*mobile-navigation-open/);
   assert.match(css, /mobile-navigation-drawer[^\{]*\{/);
-  assert.match(css, /\.mobile-bottom-navigation\.is-hidden/);
+  assert.doesNotMatch(layout, /lastScrollY|setHidden|mobile-bottom-navigation \$\{hidden/);
+  assert.doesNotMatch(css, /\.mobile-bottom-navigation\.is-hidden/);
   assert.match(css, /\.topbar \{ position: fixed/);
   assert.match(css, /\.app-shell\.mobile-header-hidden \.topbar \{ display: none; \}/);
+  assert.match(css, /\.app-shell\.mobile-header-hidden \.my-profile-page \.profile-page-topbar \{ top: 0; \}/);
   assert.match(css, /\.notifications-page \{ width: 100%; min-height: 100dvh/);
   assert.match(css, /compact-locale-buttons button\.is-active/);
   assert.match(css, /mobile-navigation-overlay[\s\S]*display: block/);

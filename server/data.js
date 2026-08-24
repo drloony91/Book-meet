@@ -52,6 +52,9 @@ export async function loadUsers(connection = getPool(), viewerId = null) {
             p.publisher_status, p.publisher_website, p.publisher_sales_links, p.publisher_legal_name,
             p.publisher_bin, p.publisher_account, p.publisher_bik, p.publisher_bank,
             p.publisher_legal_address, p.publisher_postal_address, p.publisher_moderation_note, p.community_type, p.community_rules, p.community_is_closed
+            , (SELECT COUNT(*) FROM friendships f WHERE f.user_low_id = u.id OR f.user_high_id = u.id) AS friend_count
+            , (SELECT COUNT(*) FROM follows fl WHERE fl.target_user_id = u.id
+                 AND NOT EXISTS (SELECT 1 FROM friendships f2 WHERE (f2.user_low_id = u.id AND f2.user_high_id = fl.follower_user_id) OR (f2.user_high_id = u.id AND f2.user_low_id = fl.follower_user_id))) AS follower_count
        FROM users u
        JOIN profiles p ON p.user_id = u.id
        LEFT JOIN cities c ON c.id = p.city_id
@@ -188,6 +191,8 @@ export async function loadUsers(connection = getPool(), viewerId = null) {
       deletedAt: row.deleted_at ? new Date(row.deleted_at).toISOString() : undefined,
       deletionExpiresAt: row.deletion_expires_at ? new Date(row.deletion_expires_at).toISOString() : undefined,
       purged: Boolean(row.purged_at),
+      friendCount: deletedView ? 0 : Number(row.friend_count ?? 0),
+      followerCount: deletedView ? 0 : Number(row.follower_count ?? 0),
       profile: {
         name: deletedView ? "Удалённый пользователь" : row.display_name,
         city: deletedView ? "" : row.city,

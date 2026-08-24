@@ -859,10 +859,10 @@ export function MyProfile({ onBack, user, users, catalog, friends, friendRequest
   }
 
   return (
-    <main className={`my-profile-page ${editing ? "mobile-profile-editing" : ""} ${activeTab !== "main" ? "mobile-profile-subpage" : ""}`}>
+    <main className={`my-profile-page ${editing ? "mobile-profile-editing" : ""}`}>
       <div className="profile-page-topbar">
         <button type="button" className="back-button profile-desktop-back" onClick={() => leaveOrWarn(onBack)}>← {t("common.back")}</button>
-        <button type="button" className="mobile-profile-back" aria-label={t("common.back")} onClick={() => editing ? closeProfileEditing() : activeTab !== "main" ? openTab("main") : leaveOrWarn(onBack)}>{"<"}</button>
+        <button type="button" className="mobile-profile-back" aria-label={t("common.back")} onClick={() => editing ? closeProfileEditing() : leaveOrWarn(onBack)}>{"<"}</button>
         <div className="profile-top-actions">{saved && <span className="saved-toast">{t("common.changesSaved")}</span>}{!editing && !mobileProfile && <button className="outline-button profile-edit-button" type="button" onClick={openProfileEditing}>{t("common.edit")}</button>}{!mobileProfile && <LinkedProfileControls profileType={profile.type} />}<button type="button" className="back-button" onClick={() => leaveOrWarn(onLogout)}>{t("common.logout")}</button></div>
       </div>
       <section className="my-profile-card">
