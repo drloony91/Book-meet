@@ -3933,8 +3933,8 @@ select {
   .content-scroll.directory-page { overflow: visible; }
   .directory-page-shell > .directory-page { padding-top: 26px; }
   .desktop-navigation { top: 0; height: 100%; overflow: visible; }
-  .app-shell > .mobile-shell-surface { height: calc(100vh - var(--desktop-header-height)); min-height: 0; overflow-y: auto; scrollbar-gutter: stable; }
-  .app-shell > .mobile-shell-surface > .my-profile-page { min-height: calc(100vh - var(--desktop-header-height)); overflow: visible; box-sizing: border-box; }
+  .app-shell > .mobile-shell-surface { height: 100vh; min-height: 0; overflow: hidden; }
+  .app-shell > .mobile-shell-surface > .my-profile-page { height: calc(100vh - var(--desktop-header-height)); min-height: 0; overflow-y: auto; scrollbar-gutter: stable; box-sizing: border-box; }
 
   .brand-header-logo { position: absolute; left: 110px; justify-self: auto; transform: translateX(-50%); }
   .desktop-brand-mark { width: 58px; height: 58px; }

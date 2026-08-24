@@ -506,7 +506,7 @@ export function useBookMeetController() {
   }, [currentUser?.id]);
 
   useEffect(() => {
-    if (!selectedFriend || chatExpanded) return;
+    if (!selectedFriend || chatExpanded || view === "chat") return;
     const closeOnOutsideInteraction = (event: PointerEvent) => {
       const target = event.target;
       if (target instanceof Element && (target.closest(".chat-popup, .friends-panel") || target.closest(".mobile-chat-dialog"))) return;
@@ -522,7 +522,7 @@ export function useBookMeetController() {
     };
     document.addEventListener("pointerdown", closeOnOutsideInteraction, true);
     return () => document.removeEventListener("pointerdown", closeOnOutsideInteraction, true);
-  }, [selectedFriend, chatExpanded]);
+  }, [selectedFriend, chatExpanded, view]);
 
   function applyBootstrap(data: BootstrapData) {
     setUsers(data.users);
