@@ -62,8 +62,9 @@ export async function loadUsers(connection = getPool(), viewerId = null) {
   );
   const [allFriendshipRows] = await connection.query("SELECT user_low_id, user_high_id FROM friendships");
   const [allFollowRows] = await connection.query("SELECT follower_user_id, target_user_id FROM follows");
+  const [allCommunityMembershipRows] = await connection.query("SELECT community_user_id, member_user_id FROM community_memberships");
   const [bookRows] = await connection.query(
-    `SELECT ub.user_id, ub.rating, ub.short_review, ub.read_month, ub.read_year, ub.reading_status, ub.top_rank, ub.last_read_chapter, ub.reading_comment, ub.is_author,
+    `SELECT ub.user_id, ub.rating, ub.short_review, ub.read_month, ub.read_year, ub.reading_status, ub.top_rank, ub.last_read_chapter, ub.reading_comment, ub.featured_month, ub.featured_year, ub.is_author,
              b.id, b.creator_user_id, b.author, b.title, b.isbn, b.publisher, b.genres, b.annotation, b.is_adult, b.cover_path, b.cover_tone, b.flip_url, b.created_at AS book_created_at
        FROM user_books ub
        JOIN books b ON b.id = ub.book_id
@@ -149,6 +150,10 @@ export async function loadUsers(connection = getPool(), viewerId = null) {
       })),
       createdAtValue: book.book_created_at ? new Date(book.book_created_at).toISOString() : undefined,
     }));
+    const communityBooks = row.profile_type === "Сообщество" ? library.map((book) => {
+      const association = userBooks.find((entry) => Number(entry.id) === Number(book.id));
+      return { ...book, featuredMonth: association?.featured_month ? Number(association.featured_month) : undefined, featuredYear: association?.featured_year ? Number(association.featured_year) : undefined };
+    }) : undefined;
     const authorBooks = userBooks.filter((book) => book.is_author).map((book) => ({
       id: Number(book.id),
       creatorUserId: book.creator_user_id ? Number(book.creator_user_id) : undefined,
@@ -203,6 +208,8 @@ export async function loadUsers(connection = getPool(), viewerId = null) {
       followerCount: canViewFollowers ? Number(row.follower_count ?? 0) : undefined,
       friendIds: canViewFriends ? allFriendshipRows.filter((item) => Number(item.user_low_id) === Number(row.id) || Number(item.user_high_id) === Number(row.id)).map((item) => Number(item.user_low_id) === Number(row.id) ? Number(item.user_high_id) : Number(item.user_low_id)) : undefined,
       followerIds: canViewFollowers ? allFollowRows.filter((item) => Number(item.target_user_id) === Number(row.id)).map((item) => Number(item.follower_user_id)) : undefined,
+      memberIds: row.profile_type === "Сообщество" ? allCommunityMembershipRows.filter((item) => Number(item.community_user_id) === Number(row.id)).map((item) => Number(item.member_user_id)) : undefined,
+      memberCount: row.profile_type === "Сообщество" ? allCommunityMembershipRows.filter((item) => Number(item.community_user_id) === Number(row.id)).length : undefined,
       profile: {
         name: deletedView ? "Удалённый пользователь" : row.display_name,
         city: deletedView ? "" : row.city,
@@ -213,7 +220,7 @@ export async function loadUsers(connection = getPool(), viewerId = null) {
         birthDate: !deletedView && (Number(row.id) === Number(viewerId) || viewerIsAdmin || row.birth_date_visibility === "everyone" || row.birth_date_visibility === "friends" && isViewerFriend(row.id)) ? sqlDate(row.birth_date) || undefined : undefined,
         age: !deletedView && (Number(row.id) === Number(viewerId) || viewerIsAdmin) ? ageFromBirthDate(row.birth_date) ?? undefined : undefined,
         ageGroup: deletedView || ageFromBirthDate(row.birth_date) === null ? "missing" : ageFromBirthDate(row.birth_date) < 18 ? "minor" : "adult",
-        birthDateVisibility: deletedView ? undefined : Number(row.id) === Number(viewerId) || viewerIsAdmin ? row.birth_date_visibility ?? (row.show_birth_date_to_friends ? "friends" : "nobody") : undefined,
+        birthDateVisibility: deletedView ? undefined : Number(row.id) === Number(viewerId) || viewerIsAdmin ? row.birth_date_visibility ?? "friends" : undefined,
         followersVisibility: deletedView || !(isOwner || viewerIsAdmin) ? undefined : row.followers_visibility ?? "friends",
         friendsVisibility: deletedView || !(isOwner || viewerIsAdmin) ? undefined : row.friends_visibility ?? "friends",
         wishlistVisibility: deletedView || !(isOwner || viewerIsAdmin) ? undefined : row.wishlist_visibility ?? "friends",
@@ -248,8 +255,9 @@ export async function loadUsers(connection = getPool(), viewerId = null) {
         communityRules: deletedView ? "" : row.community_rules ?? "",
         communityIsClosed: !deletedView && row.profile_type === "Сообщество" ? Boolean(row.community_is_closed) : false,
       },
-      books: library,
+      books: row.profile_type === "Сообщество" ? [] : library,
       authorBooks,
+      communityBooks,
       reviews: reviewRows.filter((review) => Number(review.user_id) === Number(row.id) && (!hideAdultMaterials || !review.is_adult)).map((review) => ({
         id: Number(review.id),
         bookId: Number(review.book_id),
@@ -553,6 +561,12 @@ export async function loadBootstrap(userId, options = {}) {
       };
     }) : undefined,
   }));
+  const previewOnlyUsers = !profileGate.complete ? usersWithWishlists.map((user) => ({
+    ...user,
+    reviews: user.reviews.map((review) => ({ ...review, fullText: "", bodyHtml: "" })),
+    excerpts: (user.excerpts ?? []).map((excerpt) => ({ ...excerpt, text: "", bodyHtml: "" })),
+    publisherNews: (user.publisherNews ?? []).map((news) => ({ ...news, body: "", bodyHtml: "" })),
+  })) : usersWithWishlists;
   const visibleOccasionRows = occasionRows.filter((row) => {
     if (currentUser?.isAdmin) return true;
     if (row.is_adult && adultStatus !== "adult") return false;
@@ -599,9 +613,9 @@ export async function loadBootstrap(userId, options = {}) {
       legalDocuments: legalGate.documents ?? [],
     },
     adultAccess: { status: adultStatus, restricted: restrictedAdultMaterials },
-    users: usersWithWishlists,
+    users: previewOnlyUsers,
     linkedProfile: linkedProfileRow ? { id: Number(linkedProfileRow.id), name: linkedProfileRow.display_name, type: linkedProfileRow.profile_type, avatarUrl: linkedProfileRow.avatar_path ?? undefined, profileCompleted: Boolean(linkedProfileRow.profile_completed) } : undefined,
-    books: catalogBooks,
+    books: profileGate.complete ? catalogBooks : catalogBooks.map((book) => ({ ...book, annotation: "", isbn: undefined, publisher: undefined, links: [], flipUrl: undefined })),
     blocks: blockRows.map((row) => ({ blockerId: Number(row.blocker_user_id), blockedId: Number(row.blocked_user_id), createdAt: new Date(row.created_at).toISOString() })),
     blockedByUserIds: blockRows.filter((row) => Number(row.blocked_user_id) === Number(userId)).map((row) => Number(row.blocker_user_id)),
     reports: reportRows.map((row) => ({ id: Number(row.id), reference: row.reference_code, reporterId: row.reporter_user_id ? Number(row.reporter_user_id) : undefined, reporterName: row.reporter_anonymized ? "Удалённый пользователь" : row.reporter_name, targetKind: row.target_kind, targetId: Number(row.target_id), targetUserId: row.target_user_id ? Number(row.target_user_id) : undefined, targetUserName: row.target_user_name ?? undefined, targetTitle: row.target_title, reason: row.reason, status: row.status, createdAt: new Date(row.created_at).toISOString(), dueAt: row.due_at ? new Date(row.due_at).toISOString() : undefined, motivatedResponse: row.motivated_response ?? undefined, responseAt: row.response_at ? new Date(row.response_at).toISOString() : undefined, appealedAt: row.appealed_at ? new Date(row.appealed_at).toISOString() : undefined, appealText: row.appeal_text ?? undefined, commentText: row.comment_text ?? undefined, materialKind: row.comment_material_kind ?? undefined, materialId: row.comment_material_id ? Number(row.comment_material_id) : undefined, conversationMessages: conversationByReport.get(Number(row.id)) })),
@@ -617,11 +631,11 @@ export async function loadBootstrap(userId, options = {}) {
     savedMaterialRefs,
     events: eventRows.filter((row) => (currentUser?.isAdmin || !hiddenUserIds.has(Number(row.creator_user_id))) && (currentUser?.isAdmin || !row.is_adult || Number(currentUser?.profile.age ?? -1) >= 18)).map((row) => ({
       id: Number(row.id), creatorId: Number(row.creator_user_id), creatorName: row.creator_name, title: row.title,
-      summary: row.summary, description: row.description, date: sqlDate(row.event_date),
+      summary: row.summary, description: profileGate.complete ? row.description : "", date: sqlDate(row.event_date),
       isAdult: Boolean(row.is_adult),
       time: String(row.event_time).slice(0, 5), city: row.city, country: row.city_country ?? undefined,
-      cityId: row.city_id ? Number(row.city_id) : undefined, address: row.address,
-      mapUrl: row.map_url ?? "", detailsUrl: row.details_url ?? "", status: row.status,
+      cityId: row.city_id ? Number(row.city_id) : undefined, address: profileGate.complete ? row.address : "",
+      mapUrl: profileGate.complete ? row.map_url ?? "" : "", detailsUrl: profileGate.complete ? row.details_url ?? "" : "", status: row.status,
       moderationNote: row.moderation_note ?? "",
       linkedBookId: row.book_id ? Number(row.book_id) : undefined,
       linkedBookIds: linkedBooksFor("event", row.id).map((book) => book.id),
@@ -636,17 +650,17 @@ export async function loadBootstrap(userId, options = {}) {
     })),
     occasions: visibleOccasionRows.filter((row) => currentUser?.isAdmin || !hiddenUserIds.has(Number(row.creator_user_id))).map((row) => ({
       id: Number(row.id), creatorId: Number(row.creator_user_id), type: row.occasion_type,
-      primaryText: row.primary_text, audienceText: row.audience_text,
+      primaryText: row.primary_text, audienceText: profileGate.complete ? row.audience_text : "",
       isAdult: Boolean(row.is_adult),
       targetGender: row.target_gender, targetCities: parseJson(row.target_cities),
       targetProfileType: row.target_profile_type,
-      meetingDate: sqlDate(row.meeting_date) || undefined,
-      meetingStartTime: row.meeting_start_time ? String(row.meeting_start_time).slice(0, 5) : undefined,
-      meetingEndTime: row.meeting_end_time ? String(row.meeting_end_time).slice(0, 5) : undefined,
-      meetingCity: row.meeting_city ?? undefined,
-      meetingCityId: row.meeting_city_id ? Number(row.meeting_city_id) : undefined,
-      meetingAddress: row.meeting_address ?? undefined,
-      meetingMapUrl: row.meeting_map_url ?? undefined,
+      meetingDate: profileGate.complete ? sqlDate(row.meeting_date) || undefined : undefined,
+      meetingStartTime: profileGate.complete && row.meeting_start_time ? String(row.meeting_start_time).slice(0, 5) : undefined,
+      meetingEndTime: profileGate.complete && row.meeting_end_time ? String(row.meeting_end_time).slice(0, 5) : undefined,
+      meetingCity: profileGate.complete ? row.meeting_city ?? undefined : undefined,
+      meetingCityId: profileGate.complete && row.meeting_city_id ? Number(row.meeting_city_id) : undefined,
+      meetingAddress: profileGate.complete ? row.meeting_address ?? undefined : undefined,
+      meetingMapUrl: profileGate.complete ? row.meeting_map_url ?? undefined : undefined,
       linkedBookId: row.book_id ? Number(row.book_id) : undefined,
       linkedBooks: linkedBooksFor("occasion", row.id),
       status: row.status,

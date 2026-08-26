@@ -116,6 +116,7 @@ export type LibraryBook = {
   links?: BookLink[];
   createdAtValue?: string;
 };
+export type CommunityBook = Pick<LibraryBook, "id" | "author" | "title" | "isbn" | "publisher" | "genres" | "annotation" | "coverUrl" | "coverTone" | "isAdult" | "createdAtValue"> & { featuredMonth?: number; featuredYear?: number };
 
 export type BookLink = { id: number; label: string; url: string; action?: "Купить" | "Читать" | "Слушать" };
 export type AuthorBook = Omit<LibraryBook, "rating" | "review"> & { rating?: undefined; review?: undefined; links: BookLink[] };
@@ -199,7 +200,7 @@ export type SafetyReport = {
   materialId?: number;
   conversationMessages?: Message[];
 };
-export type DemoUser = { id: number; username: string; usernameIsTemporary?: boolean; initials: string; color: string; avatarUrl?: string; joined: string; joinedAt?: string; online?: boolean; lastSeenAt?: string; isAdmin?: boolean; blockedByMe?: boolean; friendCount?: number; followerCount?: number; friendIds?: number[]; followerIds?: number[]; suspension?: UserSuspension; deletedAt?: string; deletionExpiresAt?: string; purged?: boolean; profile: UserProfileData; books: LibraryBook[]; reviews: UserReview[]; authorBooks?: AuthorBook[]; excerpts?: UserExcerpt[]; publisherNews?: PublisherNews[]; wishBooks?: WishBook[] };
+export type DemoUser = { id: number; username: string; usernameIsTemporary?: boolean; initials: string; color: string; avatarUrl?: string; joined: string; joinedAt?: string; online?: boolean; lastSeenAt?: string; isAdmin?: boolean; blockedByMe?: boolean; friendCount?: number; followerCount?: number; friendIds?: number[]; followerIds?: number[]; memberCount?: number; memberIds?: number[]; suspension?: UserSuspension; deletedAt?: string; deletionExpiresAt?: string; purged?: boolean; profile: UserProfileData; books: LibraryBook[]; communityBooks?: CommunityBook[]; reviews: UserReview[]; authorBooks?: AuthorBook[]; excerpts?: UserExcerpt[]; publisherNews?: PublisherNews[]; wishBooks?: WishBook[] };
 
 export type AdultMaterialKind = "book" | "review" | "excerpt" | "event" | "occasion";
 export type AdultAccess = { status: "adult" | "minor" | "missing"; restricted: Partial<Record<AdultMaterialKind, number[]>> };

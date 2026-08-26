@@ -44,6 +44,8 @@ Real-schema verification runs through the disposable Docker Compose MySQL 8.4.11
 | `messages` | recipient/body/system/time required; sender, read time and attachment kind/id nullable. | recipient cascade; sender `ON DELETE SET NULL`; only permitted pairs/admin support can read/write. | `001`, `012`; `ChatScreen.tsx`. |
 | `notifications` | recipient/type/title/body/time required; actor/material refs/group key nullable; unread defaults true. | recipient cascade; actor `SET NULL`; unique group key per recipient. | `001`; `/api/notifications/*`. |
 
+`035_community_book_month.sql` adds nullable `user_books.featured_month` and `featured_year` for community-only catalogue associations; the pair is either both null or a valid month/year. `036_privacy_friends_defaults.sql` makes birth-date and social visibility default to `friends` and normalizes existing profiles.
+
 ## Moderation, legal and operational records
 
 `reports` references reporter/target/reviewer; reporter was deliberately made nullable and `SET NULL` in `030` to preserve anonymized moderation evidence. `report_status_history` and `report_appeals` cascade with report; actor/appellant/reviewer are nullable and set null. `moderation_audit_log` keeps admin/report references nullable and set null. `security_event_log` and `security_incidents` retain nullable user/admin references; `finalized_profile_deletions` is a user tombstone with unique hash. See `017`, `030`, `031` and `server/modules/compliance.js`.

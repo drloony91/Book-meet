@@ -86,7 +86,7 @@ test("production SPA собрана", async () => {
 test("production branding uses active assets and keeps obsolete files out", async () => {
   const index = await readFile(path.join(root, "index.html"), "utf8");
   const layout = await readFile(path.join(root, "app", "components", "layout", "AppLayout.tsx"), "utf8");
-  for (const asset of ["public/book-meet-favicon-v2.png", "public/book-meet-header-logo-v3.png"]) await access(path.join(root, asset));
+  for (const asset of ["public/book-meet-favicon-v3.png", "public/book-meet-brand-v4.png"]) await access(path.join(root, asset));
   for (const asset of [
     "public/book-meet-favicon.png",
     "public/book-meet-header-logo.png",
@@ -96,8 +96,8 @@ test("production branding uses active assets and keeps obsolete files out", asyn
     "public/globe.svg",
     "public/window.svg",
   ]) await assert.rejects(access(path.join(root, asset)), { code: "ENOENT" });
-  assert.match(index, /book-meet-favicon-v2\.png/);
-  assert.match(layout, /book-meet-header-logo-v3\.png/);
+  assert.match(index, /book-meet-favicon-v3\.png/);
+  assert.match(layout, /book-meet-brand-v4\.png/);
 });
 
 test("MySQL-схема содержит все MVP-сущности", async () => {
@@ -249,22 +249,14 @@ test("book search and chat report icon keep shared production contracts", async 
   assert.doesNotMatch(chat, /chat-report-button/);
 });
 
-test("guest bootstrap публичен до requireUser и не содержит приватных социальных данных", async () => {
+test("unauthenticated users receive only the authentication screen", async () => {
   const api = await readFile(path.join(root, "server", "api.js"), "utf8");
   const demo = await readFile(path.join(root, "server", "demo-api.js"), "utf8");
-  const loader = await readFile(path.join(root, "server", "modules", "public-catalog.js"), "utf8");
-  const guest = await readFile(path.join(root, "app", "screens", "GuestExperience.tsx"), "utf8");
   const controller = await readFile(path.join(root, "app", "hooks", "useBookMeetController.tsx"), "utf8");
-  assert.ok(api.indexOf('router.get("/public/catalog"') < api.indexOf("router.use(asyncRoute(requireUser))"));
-  assert.ok(demo.indexOf('router.get("/public/catalog"') < demo.indexOf("router.use(requireUser)"));
-  assert.match(loader, /b\.is_adult = 0/);
-  assert.match(loader, /e\.status = 'published' AND e\.is_adult = 0/);
-  assert.match(loader, /p\.publisher_status = 'approved'/);
-  assert.doesNotMatch(loader, /messages|notifications|friend_requests|friendships|user_blocks|reports|publisher_legal|publisher_bin|email/);
-  assertLocalized(guest, "nav.login");
-  assert.match(guest, /onFindFriends=\{authenticate\}/);
-  assert.match(guest, /onCreateOccasion=\{authenticate\}/);
-  assert.match(controller, /loadPublicCatalog/);
+  assert.match(api, /router\.use\(asyncRoute\(requireUser\)\)/);
+  assert.match(demo, /router\.use\(requireUser\)/);
+  assert.match(controller, /if \(!currentUser\) return <LoginScreen/);
+  assert.doesNotMatch(controller, /loadPublicCatalog/);
   assert.match(controller, /bookmeet:returnTo/);
 });
 
@@ -628,7 +620,7 @@ test("полный каталог админки, издательские ма�
   assert.match(content, /export function PublisherNewsEditor/);
   assert.doesNotMatch(screens, /Каталог Book Meet/);
   assert.match(screens, /<EmptyContentState \/>/);
-  assert.match(auth, /book-meet-header-logo-v3\.png/);
+  assert.match(auth, /book-meet-brand-v4\.png/);
   assert.match(auth, /setMode\(nextMode\)/);
   assert.match(auth, /login-turning-back">\{invitation/);
   assert.match(auth, /className="mobile-auth-invitation"/);

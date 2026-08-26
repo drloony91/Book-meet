@@ -209,7 +209,7 @@ export function LoginScreen({ onLogin, onRegister, initialError = "" }: { onLogi
 
   const visibleMode = mode;
 
-  if (accountAction !== "none") return <main className="login-page"><section className="login-book account-action-book"><div className="login-book-spread"><article className="login-book-page"><div className="auth-form-page account-action-form"><img className="login-brand-logo" src="/book-meet-header-logo-v3.png" alt="Book Meet" />
+  if (accountAction !== "none") return <main className="login-page"><section className="login-book account-action-book"><div className="login-book-spread"><article className="login-book-page"><div className="auth-form-page account-action-form"><img className="login-brand-logo" src="/book-meet-brand-v4.png" alt="Book Meet" />
     {accountAction === "recovery" && <><h1>{t("auth.recover")}</h1><p>{t("auth.recoveryHint")}</p><form onSubmit={requestPasswordRecovery}><label>E-mail<input required type="email" autoComplete="email" value={email} onChange={(event) => setEmail(event.target.value)} placeholder="you@example.com" /></label>{actionNotice && <span className="login-error account-action-notice">{actionNotice}</span>}<button className="primary-button" type="submit" disabled={submitting}>{submitting ? t("auth.sending") : t("auth.sendLink")}</button></form></>}
     {accountAction === "reset" && <><h1>{t("auth.newPassword")}</h1><p>{t("auth.resetHint")}</p><form onSubmit={saveResetPassword}><label>{t("auth.newPassword")}<input required minLength={8} type="password" autoComplete="new-password" value={resetPassword} onChange={(event) => setResetPassword(event.target.value)} /></label><label>{t("auth.repeatPassword")}<input required minLength={8} type="password" autoComplete="new-password" value={resetConfirmation} onChange={(event) => setResetConfirmation(event.target.value)} /></label>{actionNotice && <span className="login-error account-action-notice">{actionNotice}</span>}<button className="primary-button" type="submit" disabled={submitting}>{submitting ? t("auth.saving") : t("auth.savePassword")}</button></form></>}
     {accountAction === "verification" && <><h1>{t("auth.emailVerification")}</h1><p>{actionNotice || t("auth.checkingLink")}</p></>}
@@ -218,7 +218,7 @@ export function LoginScreen({ onLogin, onRegister, initialError = "" }: { onLogi
 
   function authForm(formMode: "login" | "register") {
     return <div className="auth-form-page">
-      <img className="login-brand-logo" src="/book-meet-header-logo-v3.png" alt="Book Meet" />
+      <img className="login-brand-logo" src="/book-meet-brand-v4.png" alt="Book Meet" />
       <h1>{formMode === "login" ? t("auth.welcomeBack") : t("auth.welcome")}</h1>
       <p>{formMode === "login" ? t("auth.loginHint") : t("auth.registerHint")}</p>
       <form onSubmit={submit}>

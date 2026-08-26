@@ -15,7 +15,7 @@ test("mobile shell keeps the shared navigation contract and isolates desktop", a
     readFile(path.join(root, "app", "navigation", "routes.ts"), "utf8"),
     readFile(path.join(root, "app", "components", "notifications", "Notifications.tsx"), "utf8"),
     readFile(path.join(root, "public", "mobile-icons", "home.png")),
-    readFile(path.join(root, "public", "mobile-icons", "book-meet-logo.png")),
+    readFile(path.join(root, "public", "book-meet-brand-v4.png")),
   ]);
 
   assert.match(layout, /mobile-menu-toggle/);
@@ -29,7 +29,7 @@ test("mobile shell keeps the shared navigation contract and isolates desktop", a
   assert.match(layout, /mobile-icons\/home\.png/);
   assert.match(layout, /desktop-icons\/chat\.png/);
   assert.match(layout, /desktop-icons\/bell(?:-active)?\.png/);
-  assert.match(layout, /mobile-icons\/book-meet-logo\.png/);
+  assert.match(layout, /book-meet-brand-v4\.png/);
   assert.match(layout, /CompactLocaleButtons/);
   assert.doesNotMatch(layout, /mobile-navigation-drawer-header[\s\S]{0,160}>×</);
   assert.doesNotMatch(layout, /<span>\{t\("nav\.main"\)\}<\/span>/);

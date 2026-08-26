@@ -33,7 +33,7 @@ test("profile TZ keeps privacy, persistence, unified organization feed and respo
   assert.match(content, /disabled=\{!user\.profile\.canViewFriends\}/);
   assert.match(content, /disabled=\{!user\.profile\.canViewFollowers\}/);
   assert.match(controller, /profileFollowers=\{profileFollowerUsers\}/);
-  assert.match(controller, /friendCount=\{profileUser\.friendCount\}/);
+  assert.match(controller, /memberCount : profileUser\.friendCount/);
   assert.match(controller, /followerCount=\{profileUser\.followerCount\}/);
 
   for (const endpoint of ["/reviews", "/excerpts"]) {
@@ -66,10 +66,10 @@ test("profile TZ keeps privacy, persistence, unified organization feed and respo
 
   assert.match(css, /--desktop-header-height: 76px/);
   assert.match(css, /\.profile-overlay-top \{ inset: var\(--desktop-header-height\)/);
-  assert.match(css, /\.app-shell > \.mobile-shell-surface \{ height: calc\(100vh - var\(--desktop-header-height\)\); min-height: 0; overflow-y: auto/);
+  assert.match(css, /\.app-shell > \.mobile-shell-surface > \.my-profile-page \{ height: calc\(100vh - var\(--desktop-header-height\)\); min-height: 0; overflow-y: auto/);
   assert.match(css, /\.my-profile-main\.library-main \.library-title-row h1/);
   assert.match(profiles, /className="profile-bio-wide"><span>\{t\("profile\.aboutMe"\)\}/);
   assert.match(css, /\.mobile-profile-primary-actions/);
-  assert.match(indexHtml, /href="\/book-meet-favicon-v2\.png"/);
-  await access(path.join(root, "public", "book-meet-favicon-v2.png"));
+  assert.match(indexHtml, /href="\/book-meet-favicon-v3\.png"/);
+  await access(path.join(root, "public", "book-meet-favicon-v3.png"));
 });

@@ -15,7 +15,7 @@ function LegalDocumentDialog({ document, onClose }: { document: LegalDocument; o
   </div>;
 }
 
-export function ComplianceAccessGate({ gate, onAccepted, onOpenProfile }: { gate: AccessGate; onAccepted: () => Promise<void>; onOpenProfile: () => void }) {
+export function ComplianceAccessGate({ gate, registrationFlow = false, onAccepted, onOpenProfile, onDismiss }: { gate: AccessGate; registrationFlow?: boolean; onAccepted: () => Promise<void>; onOpenProfile: () => void; onDismiss?: () => void }) {
   const { t } = useI18n();
   const [agreement, setAgreement] = useState(false);
   const [personalData, setPersonalData] = useState(false);
@@ -55,8 +55,8 @@ export function ComplianceAccessGate({ gate, onAccepted, onOpenProfile }: { gate
         <button className="primary-button" type="button" disabled={busy || !agreement || !personalData} onClick={() => void accept()}>{busy ? t("common.loading") : t("legal.acceptContinue")}</button>
       </> : <>
         <h2>{t("access.profileRequiredTitle")}</h2>
-        <p>{t("access.profileRequiredHint")}</p>
-        <div className="form-actions"><button className="primary-button" type="button" onClick={openProfile}>{t("access.goProfile")}</button><button className="outline-button" type="button" onClick={openProfile}>{t("common.ok")}</button></div>
+        <p>{t("access.profileCompletionText")}</p>
+        <div className="form-actions">{registrationFlow ? <button className="primary-button" type="button" onClick={() => { setProfileDismissed(true); onDismiss?.(); }}>{t("access.dismiss")}</button> : <><button className="primary-button" type="button" onClick={openProfile}>{t("access.goProfile")}</button><button className="outline-button" type="button" onClick={() => { setProfileDismissed(true); onDismiss?.(); }}>{t("access.dismiss")}</button></>}</div>
       </>}
     </section>
     {opened && <LegalDocumentDialog document={opened} onClose={() => setOpened(null)} />}

@@ -39,3 +39,5 @@ This is a deterministic file-level inventory of migration names and `CREATE TABL
 | `032_desktop_identity_community_saves.sql` | `ALTER TABLE users`, `ALTER TABLE profiles`, `CREATE TABLE material_saves` |
 | `033_profile_birth_date_visibility.sql` | `ALTER TABLE profiles` |
 | `034_profile_social_visibility.sql` | `ALTER TABLE profiles` |
+| `035_community_book_month.sql` | `ALTER TABLE user_books` |
+| `036_privacy_friends_defaults.sql` | `ALTER TABLE profiles` |

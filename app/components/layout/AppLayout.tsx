@@ -84,13 +84,11 @@ export function BookMeetHeader({
         <span aria-hidden="true" />
       </button>
       <button className="brand brand-header-logo" type="button" onClick={onHome} aria-label={`Book Meet — ${t("common.home")}`}>
-        <img className="desktop-brand-mark" src="/desktop-brand/book-meet-mark.png" alt="" aria-hidden="true" />
-        <img className="mobile-brand-logo" src="/book-meet-header-logo-v3.png" alt="" aria-hidden="true" />
+        <img className="brand-logo-image" src="/book-meet-brand-v4.png" alt="" aria-hidden="true" />
       </button>
       <button className="mobile-search-button" type="button" onClick={onSearch} aria-label={t("common.search")} title={t("common.search")}>
         <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="10.8" cy="10.8" r="6.4" /><path d="m16 16 4.3 4.3" /></svg>
       </button>
-      <div className="desktop-brand-title" aria-hidden="true"><img src="/desktop-brand/book-meet-lettering.png" alt="" /></div>
       <nav className="topbar-menu topbar-menu-left" aria-label={t("nav.sectionsLeft")}>
         <button type="button" onClick={onBooks}>{t("nav.books")}</button>
         <button type="button" onClick={onPublishing}>{t("nav.publishing")}</button>
@@ -136,7 +134,7 @@ export function MobileNavigationDrawer({
   return <>
     <button className="mobile-navigation-overlay" type="button" aria-label={t("nav.closeMobileMenu")} onClick={onClose} />
     <aside className="mobile-navigation-drawer" aria-label={t("nav.mobileMenu")}>
-      <div className="mobile-navigation-drawer-header"><img src="/mobile-icons/book-meet-logo.png" alt="Book Meet" /></div>
+      <div className="mobile-navigation-drawer-header"><img src="/book-meet-brand-v4.png" alt="Book Meet" /></div>
       <div className="mobile-navigation-quick-row">
         {items.filter((item) => item.group === "personal").map((item) => <button type="button" key={item.view} className={isActive(item.view) ? "is-active" : ""} onClick={() => { onNavigate(item.view); onClose(); }} aria-label={item.label} title={item.label} aria-current={isActive(item.view) ? "page" : undefined}><img src={item.view === "liked" ? "/desktop-icons/heart.png" : "/desktop-icons/bookmark.png"} alt="" aria-hidden="true" /></button>)}
         <div className={`mobile-drawer-create ${drawerCreateOpen ? "is-open" : ""}`}><button type="button" aria-expanded={drawerCreateOpen} aria-label={t("content.createMaterial")} title={t("content.createMaterial")} onClick={() => setDrawerCreateOpen((value) => !value)}><img src="/desktop-icons/plus.png" alt="" aria-hidden="true" /></button><div className="mobile-drawer-create-menu" aria-hidden={!drawerCreateOpen}>{createOptions.map((option) => <button type="button" key={option.label} onClick={() => { option.onClick(); setDrawerCreateOpen(false); onClose(); }}>{option.label}</button>)}</div></div>
@@ -266,7 +264,7 @@ export function WorkspaceScreen({
   ];
   const libraryItems = navigationItems.filter((item) => item.group === "library");
   const publisher = profileType === "Издатель" || profileType === "Сообщество";
-  const readerOrBlogger = profileType === "Читатель" || profileType === "Блогер";
+  const readerOrBlogger = ["Читатель", "Писатель", "Блогер"].includes(profileType ?? "");
   const chooseCreate = (action?: () => void) => { setDesktopCreateOpen(false); action?.(); };
   const navActive = (target: RoutableMainView) => target === "home" ? ["home", "publications"].includes(activeView ?? "") : target === activeView;
   const navigate = (target: RoutableMainView) => onNavigate?.(target);

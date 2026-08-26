@@ -55,7 +55,7 @@ test("mobile profiles use routed full-page states without replacing desktop prof
   assert.match(publicProfile, /public-profile-back-mobile/);
   assert.match(controller, /profileFollowers=\{profileFollowerUsers\}/);
   assert.doesNotMatch(controller, /profileFollowing=\{profileFollowingUsers\}/);
-  assert.match(controller, /friendCount=\{profileUser\.friendCount\}/);
+  assert.match(controller, /friendCount=\{profileUser\.profile\.type === "Сообщество" \? profileUser\.memberCount : profileUser\.friendCount\}/);
   assert.match(controller, /followerCount=\{profileUser\.followerCount\}/);
   assert.match(domain, /friendCount\?: number; followerCount\?: number/);
   assert.match(serverData, /AS friend_count/);

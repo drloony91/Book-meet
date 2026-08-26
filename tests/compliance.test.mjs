@@ -35,7 +35,7 @@ test("audit metadata is deterministic and never stores the raw network value", (
 
 test("profile access uses actual required fields and exempts organization birth dates", async () => {
   const personal = { query: async () => [[{ role: "user", profile_type: "Читатель", display_name: "", city: "", city_id: null, birth_date: null }]] };
-  assert.deepEqual(await profileAccessState(personal, 1), { complete: false, missing: ["name", "city", "birthDate"] });
+  assert.deepEqual(await profileAccessState(personal, 1), { complete: false, missing: ["name", "username", "city", "birthDate", "gender"] });
 
   const publisher = { query: async () => [[{ role: "user", profile_type: "Издатель", display_name: "Издательство", city: "Астана", city_id: 1, birth_date: null }]] };
   assert.deepEqual(await profileAccessState(publisher, 2), { complete: true, missing: [] });

@@ -61,6 +61,9 @@ Production Express routes only; demo-api routes are intentionally excluded. The 
 | `GET` | `/api/comments` |
 | `POST` | `/api/comments` |
 | `DELETE` | `/api/comments/:id` |
+| `POST` | `/api/community-books` |
+| `DELETE` | `/api/community-books/:id` |
+| `PATCH` | `/api/community-books/:id` |
 | `POST` | `/api/events` |
 | `DELETE` | `/api/events/:id` |
 | `PATCH` | `/api/events/:id` |
@@ -109,6 +112,7 @@ Production Express routes only; demo-api routes are intentionally excluded. The 
 | `POST` | `/api/social/friends/:targetId/reject` |
 | `POST` | `/api/social/messages` |
 | `PATCH` | `/api/social/messages/:targetId/read` |
+| `DELETE` | `/api/users/me/avatar` |
 | `PATCH` | `/api/users/me/home-view` |
 | `DELETE` | `/api/users/me/profile` |
 | `PATCH` | `/api/users/me/profile-complete` |

@@ -131,17 +131,20 @@ export async function legalAccessState(connection, userId, locale = "ru", enviro
 
 export async function profileAccessState(connection, userId) {
   const [[row]] = await connection.query(
-    `SELECT u.role, p.profile_type, p.display_name, p.city, p.city_id, p.birth_date
+    `SELECT u.role, u.username, u.username_is_temporary, p.profile_type, p.display_name, p.city, p.city_id, p.birth_date, p.gender
        FROM users u JOIN profiles p ON p.user_id = u.id
       WHERE u.id = ? LIMIT 1`,
     [userId],
   );
   if (!row) return { complete: false, missing: ["profile"] };
   if (row.role === "admin") return { complete: true, missing: [] };
+  if (["Издатель", "Сообщество"].includes(row.profile_type)) return { complete: true, missing: [] };
   const missing = [];
   if (!String(row.display_name ?? "").trim() || row.display_name === "Удалённый пользователь") missing.push("name");
+  if (Boolean(row.username_is_temporary) || !/^[a-z0-9][a-z0-9._-]{2,29}$/i.test(String(row.username ?? ""))) missing.push("username");
   if (!String(row.city ?? "").trim() && !row.city_id) missing.push("city");
-  if (!["Издатель", "Сообщество"].includes(row.profile_type) && ageFromBirthDate(row.birth_date) === null) missing.push("birthDate");
+  if (ageFromBirthDate(row.birth_date) === null) missing.push("birthDate");
+  if (!["Мужской", "Женский"].includes(row.gender)) missing.push("gender");
   return { complete: missing.length === 0, missing };
 }
 

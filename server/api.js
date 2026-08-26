@@ -81,7 +81,7 @@ async function purgeDeletedProfile(connection, userId) {
   await connection.query("UPDATE report_appeals SET appellant_user_id = NULL WHERE appellant_user_id = ?", [userId]);
   await connection.query(
     `UPDATE profiles SET display_name = 'Удалённый пользователь', city = '', city_id = NULL, gender = 'Не указан', birth_date = NULL,
-            show_birth_date_to_friends = 0, birth_date_visibility = 'nobody', profile_tab_order = NULL, hidden_profile_tabs = NULL, bio = '', author_influences = '', writing_themes = '', weekend = '', joy = '', talk = '',
+            show_birth_date_to_friends = 1, birth_date_visibility = 'friends', followers_visibility = 'friends', friends_visibility = 'friends', wishlist_visibility = 'friends', profile_tab_order = NULL, hidden_profile_tabs = NULL, bio = '', author_influences = '', writing_themes = '', weekend = '', joy = '', talk = '',
             stranger_message = '', favorite_genres = '[]', disliked_genres = '[]', publisher_website = NULL, publisher_sales_links = NULL,
             publisher_legal_name = NULL, publisher_bin = NULL, publisher_account = NULL, publisher_bik = NULL, publisher_bank = NULL,
             publisher_legal_address = NULL, publisher_postal_address = NULL, publisher_moderation_note = NULL, community_type = NULL, community_rules = NULL WHERE user_id = ?`,
@@ -941,6 +941,8 @@ async function materialInfo(connection, kind, id) {
 }
 
 async function readableMaterialInfo(connection, userId, kind, id) {
+  const gate = await profileAccessState(connection, userId);
+  if (!gate.complete) throw Object.assign(new Error("Для открытия материала заполните обязательные поля профиля"), { statusCode: 428, code: "PROFILE_COMPLETION_REQUIRED", missing: gate.missing });
   const material = await materialInfo(connection, kind, id);
   if (!material) throw Object.assign(new Error("Материал не найден"), { statusCode: 404 });
   await assertAdultMaterialReadable(connection, userId, kind, id);
@@ -1753,6 +1755,20 @@ router.delete("/users/me/profile", asyncRoute(async (request, response) => {
   response.json({ ok: true, retentionDays: 15 });
 }));
 
+// The database is cleared before the old file is touched, so a failed unlink
+// can never leave a profile pointing to an asset it no longer owns.
+router.delete("/users/me/avatar", asyncRoute(async (request, response) => {
+  const userId = request.bookMeetUser.id;
+  const previousPath = await withTransaction(async (connection) => {
+    const [[account]] = await connection.query("SELECT avatar_path FROM users WHERE id = ? FOR UPDATE", [userId]);
+    if (!account) throw Object.assign(new Error("Пользователь не найден"), { statusCode: 404 });
+    await connection.query("UPDATE users SET avatar_path = NULL WHERE id = ?", [userId]);
+    return account.avatar_path;
+  });
+  await removeAvatarFile(previousPath);
+  response.json({ ok: true, avatarUrl: null });
+}));
+
 router.use(asyncRoute(async (request, response, next) => {
   const alwaysAllowed = request.path === "/users/me/state"
     || request.path === "/users/me/profile-complete"
@@ -2220,6 +2236,10 @@ router.patch("/admin/publishers/:id", asyncRoute(async (request, response) => {
 router.put("/users/me/state", asyncRoute(async (request, response) => {
   const userId = request.bookMeetUser.id;
   const { profile, avatarUrl, reviews = [], excerpts = [], publisherNews = [] } = request.body ?? {};
+  const existingGate = await profileAccessState(getPool(), userId);
+  if (!existingGate.complete && ((Array.isArray(reviews) && reviews.length) || (Array.isArray(excerpts) && excerpts.length) || (Array.isArray(publisherNews) && publisherNews.length))) {
+    return response.status(428).json({ code: "PROFILE_COMPLETION_REQUIRED", error: "Сначала заполните обязательные поля профиля", missing: existingGate.missing });
+  }
   const locale = requestLocale(request);
   const requestedUsernameValue = profile?.username ?? request.body?.username;
   const hasRequestedUsername = requestedUsernameValue !== undefined;
@@ -2334,8 +2354,8 @@ router.put("/users/me/state", asyncRoute(async (request, response) => {
         profile.name.trim(), city?.name ?? "", city?.id ?? null, requestedType,
         isOrganization ? "Не указан" : ["Мужской", "Женский", "Не указан"].includes(profile.gender) ? profile.gender : "Не указан",
         birthDate || null,
-        isOrganization ? 0 : (profile.birthDateVisibility ?? (profile.showBirthDateToFriends ? "friends" : "nobody")) === "friends" ? 1 : 0,
-        isOrganization ? "nobody" : ["nobody", "friends", "everyone"].includes(profile.birthDateVisibility) ? profile.birthDateVisibility : profile.showBirthDateToFriends ? "friends" : "nobody",
+        isOrganization ? 0 : (profile.birthDateVisibility ?? (profile.showBirthDateToFriends === false ? "nobody" : "friends")) === "friends" ? 1 : 0,
+        isOrganization ? "nobody" : ["nobody", "friends", "everyone"].includes(profile.birthDateVisibility) ? profile.birthDateVisibility : profile.showBirthDateToFriends === false ? "nobody" : "friends",
         socialVisibility(profile.followersVisibility), socialVisibility(profile.friendsVisibility), socialVisibility(profile.wishlistVisibility),
         JSON.stringify(tabOrder), JSON.stringify(hiddenProfileTabs), "feed",
         profile.bio ?? "", requestedType === "Писатель" ? profile.authorInfluences ?? "" : "", requestedType === "Писатель" ? profile.writingThemes ?? "" : "",
@@ -2386,7 +2406,7 @@ router.put("/users/me/state", asyncRoute(async (request, response) => {
       if (newsIds.length) await connection.query(`DELETE FROM publisher_news WHERE user_id = ? AND id NOT IN (${newsIds.map(() => "?").join(",")})`, [userId, ...newsIds]);
       else if (publisherStatus === "approved") await connection.query("DELETE FROM publisher_news WHERE user_id = ?", [userId]);
     }
-    if (requestedType === "Читатель" || requestedType === "Блогер") {
+    if (["Читатель", "Писатель", "Блогер"].includes(requestedType)) {
       const reviewIds = [];
       for (const review of reviews) {
       if (!review.bookTitle?.trim() || !review.bookAuthor?.trim() || !review.rating || !review.preview?.trim() || !String(review.bodyHtml ?? review.fullText ?? "").trim()) continue;
@@ -2759,6 +2779,61 @@ router.post("/books", asyncRoute(async (request, response) => {
   response.status(201).json(result);
 }));
 
+function communityFeaturedDate(payload) {
+  const month = payload.featuredMonth == null || payload.featuredMonth === "" ? null : Number(payload.featuredMonth);
+  const year = payload.featuredYear == null || payload.featuredYear === "" ? null : Number(payload.featuredYear);
+  if (month === null && year === null) return { month: null, year: null };
+  if (!Number.isInteger(month) || month < 1 || month > 12 || !Number.isInteger(year) || year < 2000 || year > 2100) {
+    throw Object.assign(new Error("Укажите корректные месяц и год подборки"), { statusCode: 400 });
+  }
+  return { month, year };
+}
+
+async function assertCommunityOwner(connection, userId) {
+  const [[profile]] = await connection.query("SELECT profile_type FROM profiles WHERE user_id = ? FOR UPDATE", [userId]);
+  if (profile?.profile_type !== "Сообщество") throw Object.assign(new Error("Раздел книг доступен только сообществу"), { statusCode: 403 });
+}
+
+router.post("/community-books", asyncRoute(async (request, response) => {
+  const userId = request.bookMeetUser.id;
+  const bookId = Number(request.body?.bookId);
+  if (!bookId) return response.status(400).json({ error: "Выберите книгу из каталога" });
+  const featured = communityFeaturedDate(request.body ?? {});
+  await withTransaction(async (connection) => {
+    await assertCommunityOwner(connection, userId);
+    const [[book]] = await connection.query("SELECT id FROM books WHERE id = ?", [bookId]);
+    if (!book) throw Object.assign(new Error("Выбранная книга не найдена в каталоге"), { statusCode: 404 });
+    await connection.query(
+      `INSERT INTO user_books (user_id, book_id, rating, short_review, reading_status, reading_comment, is_author, featured_month, featured_year)
+       VALUES (?, ?, NULL, NULL, 'read', '', 0, ?, ?)
+       ON DUPLICATE KEY UPDATE is_author = 0, featured_month = VALUES(featured_month), featured_year = VALUES(featured_year)`,
+      [userId, bookId, featured.month, featured.year],
+    );
+  });
+  response.status(201).json({ bookId, featuredMonth: featured.month, featuredYear: featured.year });
+}));
+
+router.patch("/community-books/:id", asyncRoute(async (request, response) => {
+  const userId = request.bookMeetUser.id; const bookId = Number(request.params.id);
+  if (!bookId) return response.status(400).json({ error: "Некорректная книга" });
+  const featured = communityFeaturedDate(request.body ?? {});
+  await withTransaction(async (connection) => {
+    await assertCommunityOwner(connection, userId);
+    const [updated] = await connection.query("UPDATE user_books SET featured_month = ?, featured_year = ?, is_author = 0 WHERE user_id = ? AND book_id = ?", [featured.month, featured.year, userId, bookId]);
+    if (!updated.affectedRows) throw Object.assign(new Error("Книга не добавлена в сообщество"), { statusCode: 404 });
+  });
+  response.json({ bookId, featuredMonth: featured.month, featuredYear: featured.year });
+}));
+
+router.delete("/community-books/:id", asyncRoute(async (request, response) => {
+  const userId = request.bookMeetUser.id; const bookId = Number(request.params.id);
+  await withTransaction(async (connection) => {
+    await assertCommunityOwner(connection, userId);
+    await connection.query("DELETE FROM user_books WHERE user_id = ? AND book_id = ? AND is_author = 0", [userId, bookId]);
+  });
+  response.json({ ok: true });
+}));
+
 router.delete("/books/:id", asyncRoute(async (request, response) => {
   const userId = request.bookMeetUser.id;
   const bookId = Number(request.params.id);
@@ -2809,6 +2884,10 @@ async function saveOwnedReadingMaterial(request, response, kind, id = null) {
   const bodyHtml = validateRichHtml(payload.bodyHtml ?? payload.fullText ?? payload.body ?? "");
   if (!bodyHtml) return response.status(400).json({ error: "Заполните текст материала" });
   const result = await withTransaction(async (connection) => {
+    const [[owner]] = await connection.query("SELECT profile_type FROM profiles WHERE user_id = ? FOR UPDATE", [userId]);
+    if (!["Читатель", "Писатель", "Блогер"].includes(owner?.profile_type)) {
+      throw Object.assign(new Error("Рецензии и публикации доступны только личным профилям"), { statusCode: 403 });
+    }
     if (kind === "review") {
       const bookId = Number(payload.bookId);
       const rating = Number(payload.rating);
@@ -3011,7 +3090,7 @@ router.post("/wishlist", asyncRoute(async (request, response) => {
   const flipProduct = await fetchFlipProduct(marketplace.url.toString());
   const item = await withTransaction(async (connection) => {
     const [[profile]] = await connection.query("SELECT profile_type FROM profiles WHERE user_id = ?", [userId]);
-    if (profile?.profile_type !== "Читатель" && profile?.profile_type !== "Блогер") throw Object.assign(new Error("Список «Хочу почитать!» доступен профилям читателей и блогеров"), { statusCode: 403 });
+    if (!["Читатель", "Писатель", "Блогер"].includes(profile?.profile_type)) throw Object.assign(new Error("Список «Хочу почитать!» доступен личным профилям"), { statusCode: 403 });
     let catalogBookId = Number(payload.catalogBookId || 0) || null;
     let book = null;
     if (catalogBookId) {
@@ -3515,7 +3594,7 @@ router.post("/social/friend-requests", asyncRoute(async (request, response) => {
       if (created.affectedRows) {
         const systemText = "Вы стали участником открытого сообщества и можете начать переписку";
         await connection.query("INSERT INTO messages (sender_user_id, recipient_user_id, body, is_system) VALUES (?, ?, ?, 1), (?, ?, ?, 1)", [userId, targetId, systemText, targetId, userId, systemText]);
-        await connection.query("INSERT INTO notifications (user_id, actor_user_id, notification_type, title, body) VALUES (?, ?, 'friendship_started', ?, ?), (?, ?, 'friendship_started', ?, ?)", [targetId, userId, "Новый участник", `${source.display_name} присоединился(ась) к открытому сообществу.`, userId, targetId, "Вы вступили в сообщество", systemText]);
+        await connection.query("INSERT INTO notifications (user_id, actor_user_id, notification_type, title, body) VALUES (?, ?, 'friendship_started', ?, ?), (?, ?, 'friendship_started', ?, ?)", [targetId, userId, "Новый участник", `${source.display_name} присоединился(ась) к открытому сообществу.`, userId, targetId, "Вы вступили в сообщество", `Вы вступили в сообщество ${target.display_name}`]);
       }
       return;
     }
@@ -3548,7 +3627,7 @@ router.post("/social/friends/:targetId/accept", asyncRoute(async (request, respo
   const userId = request.bookMeetUser.id;
   const targetId = Number(request.params.targetId);
   await withTransaction(async (connection) => {
-    const [profiles] = await connection.query("SELECT user_id, profile_type FROM profiles WHERE user_id IN (?, ?) ORDER BY user_id FOR UPDATE", [userId, targetId]);
+    const [profiles] = await connection.query("SELECT user_id, profile_type, display_name FROM profiles WHERE user_id IN (?, ?) ORDER BY user_id FOR UPDATE", [userId, targetId]);
     const currentProfile = profiles.find((item) => Number(item.user_id) === userId);
     const sourceProfile = profiles.find((item) => Number(item.user_id) === targetId);
     const membership = currentProfile?.profile_type === "Сообщество";
@@ -3568,7 +3647,9 @@ router.post("/social/friends/:targetId/accept", asyncRoute(async (request, respo
     const systemText = membership ? "Заявка принята. Теперь вы участник сообщества и можете начать переписку" : "Теперь вы друзья и можете начать переписку";
     await connection.query("INSERT INTO messages (sender_user_id, recipient_user_id, body, is_system) VALUES (?, ?, ?, 1), (?, ?, ?, 1)", [targetId, userId, systemText, userId, targetId, systemText]);
     const title = membership ? "Заявка принята" : "Теперь вы друзья";
-    await connection.query("INSERT INTO notifications (user_id, actor_user_id, notification_type, title, body) VALUES (?, ?, 'friendship_started', ?, ?), (?, ?, 'friendship_started', ?, ?)", [userId, targetId, title, systemText, targetId, userId, title, systemText]);
+    const currentText = membership ? `${sourceProfile.display_name} вступил(а) в сообщество.` : `Теперь вы друзья с ${sourceProfile.display_name}`;
+    const sourceText = membership ? `Вы вступили в сообщество ${currentProfile.display_name}` : `Теперь вы друзья с ${currentProfile.display_name}`;
+    await connection.query("INSERT INTO notifications (user_id, actor_user_id, notification_type, title, body) VALUES (?, ?, 'friendship_started', ?, ?), (?, ?, 'friendship_started', ?, ?)", [userId, targetId, title, currentText, targetId, userId, title, sourceText]);
   });
   response.json({ ok: true });
 }));

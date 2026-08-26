@@ -39,10 +39,13 @@ const demoRequiredLegalDocuments = demoLegalDocuments.filter((document) => docum
 
 function demoProfileAccess(user) {
   if (user?.isAdmin) return { complete: true, missing: [] };
+  if (["Издатель", "Сообщество"].includes(user?.profile?.type)) return { complete: true, missing: [] };
   const missing = [];
   if (!String(user?.profile?.name ?? "").trim()) missing.push("name");
+  if (user?.usernameIsTemporary || !/^[a-z0-9][a-z0-9._-]{2,29}$/i.test(String(user?.username ?? ""))) missing.push("username");
   if (!String(user?.profile?.city ?? "").trim() && !user?.profile?.cityId) missing.push("city");
-  if (!["Издатель", "Сообщество"].includes(user?.profile?.type) && !/^\d{4}-\d{2}-\d{2}$/.test(String(user?.profile?.birthDate ?? ""))) missing.push("birthDate");
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(String(user?.profile?.birthDate ?? ""))) missing.push("birthDate");
+  if (!["Мужской", "Женский"].includes(user?.profile?.gender)) missing.push("gender");
   return { complete: missing.length === 0, missing };
 }
 
@@ -328,7 +331,9 @@ function bootstrap(userId) {
     const canViewFollowers = canView(user.profile.followersVisibility ?? "friends");
     const canViewFriends = canView(user.profile.friendsVisibility ?? "friends");
     return { ...user, friendCount: user.deletedAt || user.purged || !canViewFriends ? undefined : friendCountByUser.get(user.id) ?? 0, followerCount: user.deletedAt || user.purged || !canViewFollowers ? undefined : followerCountByUser.get(user.id) ?? 0, friendIds: canViewFriends ? state.friendships.filter((entry) => entry.userA === user.id || entry.userB === user.id).map((entry) => entry.userA === user.id ? entry.userB : entry.userA) : undefined, followerIds: canViewFollowers ? state.follows.filter((entry) => entry.targetId === user.id).map((entry) => entry.followerId) : undefined };
-  }).filter((user) => !["Издатель", "Сообщество"].includes(user.profile.type)
+  }).filter((user) => user.id === userId
+    || ["Издатель", "Сообщество"].includes(user.profile.type)
+    || demoProfileAccess(user).complete).filter((user) => !["Издатель", "Сообщество"].includes(user.profile.type)
     || user.profile.publisherStatus === "approved"
     || user.id === userId
     || viewer?.isAdmin).filter((user) => viewer?.isAdmin || user.id === userId || !blockedByUserIds.includes(user.id)).map((user) => {
@@ -347,9 +352,11 @@ function bootstrap(userId) {
       publisherPostalAddress: undefined, publisherModerationNote: undefined,
     };
     if (user.id === userId || viewer?.isAdmin) Object.assign(profile, { canViewFollowers: true, canViewFriends: true, canViewWishlist: true });
-    return { ...user, books: (user.books ?? []).filter((item) => adultStatus === "adult" || !item.isAdult), authorBooks: (user.authorBooks ?? []).filter((item) => adultStatus === "adult" || !item.isAdult), reviews: (user.reviews ?? []).filter((item) => adultStatus === "adult" || !item.isAdult), excerpts: (user.excerpts ?? []).filter((item) => adultStatus === "adult" || !item.isAdult), blockedByMe: relatedBlocks.some((block) => block.blockerId === userId && block.blockedId === user.id), profile, wishBooks: canViewWishlist ? (user.wishBooks ?? []).map((item) => privateVisible ? { ...item, productUrl: user.id === userId ? item.productUrl : undefined, privateVisible: true } : { id: item.id, ownerId: item.ownerId, catalogBookId: item.catalogBookId, author: item.author, title: item.title, genres: item.genres, annotation: item.annotation, coverUrl: item.coverUrl, coverTone: item.coverTone, marketplace: item.marketplace, reservedByUserId: item.reservedByUserId, privateVisible: false }) : undefined };
+    const memberIds = user.profile.type === "Сообщество" ? state.communityMemberships.filter((entry) => entry.communityId === user.id).map((entry) => entry.memberId) : undefined;
+    return { ...user, books: user.profile.type === "Сообщество" ? [] : (user.books ?? []).filter((item) => adultStatus === "adult" || !item.isAdult), authorBooks: (user.authorBooks ?? []).filter((item) => adultStatus === "adult" || !item.isAdult), communityBooks: user.profile.type === "Сообщество" ? (user.communityBooks ?? []).filter((item) => adultStatus === "adult" || !item.isAdult) : undefined, memberIds, memberCount: memberIds?.length, reviews: (user.reviews ?? []).filter((item) => adultStatus === "adult" || !item.isAdult), excerpts: (user.excerpts ?? []).filter((item) => adultStatus === "adult" || !item.isAdult), blockedByMe: relatedBlocks.some((block) => block.blockerId === userId && block.blockedId === user.id), profile, wishBooks: canViewWishlist ? (user.wishBooks ?? []).map((item) => privateVisible ? { ...item, productUrl: user.id === userId ? item.productUrl : undefined, privateVisible: true } : { id: item.id, ownerId: item.ownerId, catalogBookId: item.catalogBookId, author: item.author, title: item.title, genres: item.genres, annotation: item.annotation, coverUrl: item.coverUrl, coverTone: item.coverTone, marketplace: item.marketplace, reservedByUserId: item.reservedByUserId, privateVisible: false }) : undefined };
   });
   const link = state.linkedProfiles.find((item) => item.personalUserId === userId || item.communityUserId === userId);
+  const previewOnlyUsers = !profileGate.complete ? visibleUsers.map((entry) => ({ ...entry, reviews: (entry.reviews ?? []).map((review) => ({ ...review, fullText: "", bodyHtml: "" })), excerpts: (entry.excerpts ?? []).map((excerpt) => ({ ...excerpt, text: "", bodyHtml: "" })), publisherNews: (entry.publisherNews ?? []).map((news) => ({ ...news, body: "", bodyHtml: "" })) })) : visibleUsers;
   const linked = link ? users.find((item) => item.id === (link.personalUserId === userId ? link.communityUserId : link.personalUserId)) : undefined;
   const { linkedProfiles: _linkedProfiles, saves: saveEntries, ...publicState } = state;
   const saves = {};
@@ -366,7 +373,10 @@ function bootstrap(userId) {
     const [kind, id] = key.split(/-(?=\d+$)/);
     return { kind, id: Number(id), createdAt: new Date().toISOString() };
   });
-  return structuredClone({ activeUserId: userId, profileCompleted: profileGate.complete, accessGate: { profileComplete: profileGate.complete, missingProfileFields: profileGate.missing, legalConfigured: legalGate.configured, pendingLegalDocuments: legalGate.pending, legalDocuments: legalGate.documents }, adultAccess: { status: adultStatus, restricted }, users: visibleUsers, ...publicState, saves, savedMaterialRefs, likedMaterialRefs, linkedProfile: linked ? { id: linked.id, name: linked.profile.name, type: linked.profile.type, avatarUrl: linked.avatarUrl, profileCompleted: demoProfileAccess(linked).complete } : undefined, books: state.catalogBooks.filter((item) => adultStatus === "adult" || !item.isAdult), blocks: relatedBlocks, blockedByUserIds, reports: viewer?.isAdmin ? state.reports : [], events: state.events.filter((item) => (viewer?.isAdmin || adultStatus === "adult" || !item.isAdult) && (viewer?.isAdmin || item.status === "published" || item.creatorId === userId)), occasions: state.occasions.filter((item) => (viewer?.isAdmin || adultStatus === "adult" || !item.isAdult) && (viewer?.isAdmin || item.creatorId === userId || item.status === "published" && (item.targetGender === "Все" || item.targetGender === viewer?.profile.gender) && (item.targetProfileType === "Все" || item.targetProfileType === viewer?.profile.type))) });
+  const visibleBooks = state.catalogBooks.filter((item) => adultStatus === "adult" || !item.isAdult).map((item) => profileGate.complete ? item : { ...item, annotation: "", isbn: undefined, publisher: undefined, links: [], flipUrl: undefined });
+  const visibleEvents = state.events.filter((item) => (viewer?.isAdmin || adultStatus === "adult" || !item.isAdult) && (viewer?.isAdmin || item.status === "published" || item.creatorId === userId)).map((item) => profileGate.complete ? item : { ...item, description: "", address: "", mapUrl: "", detailsUrl: "" });
+  const visibleOccasions = state.occasions.filter((item) => (viewer?.isAdmin || adultStatus === "adult" || !item.isAdult) && (viewer?.isAdmin || item.creatorId === userId || item.status === "published" && (item.targetGender === "Все" || item.targetGender === viewer?.profile.gender) && (item.targetProfileType === "Все" || item.targetProfileType === viewer?.profile.type))).map((item) => profileGate.complete ? item : { ...item, audienceText: "", meetingDate: undefined, meetingStartTime: undefined, meetingEndTime: undefined, meetingCity: undefined, meetingCityId: undefined, meetingAddress: undefined, meetingMapUrl: undefined });
+  return structuredClone({ activeUserId: userId, profileCompleted: profileGate.complete, accessGate: { profileComplete: profileGate.complete, missingProfileFields: profileGate.missing, legalConfigured: legalGate.configured, pendingLegalDocuments: legalGate.pending, legalDocuments: legalGate.documents }, adultAccess: { status: adultStatus, restricted }, users: previewOnlyUsers, ...publicState, saves, savedMaterialRefs, likedMaterialRefs, linkedProfile: linked ? { id: linked.id, name: linked.profile.name, type: linked.profile.type, avatarUrl: linked.avatarUrl, profileCompleted: demoProfileAccess(linked).complete } : undefined, books: visibleBooks, blocks: relatedBlocks, blockedByUserIds, reports: viewer?.isAdmin ? state.reports : [], events: visibleEvents, occasions: visibleOccasions });
 }
 
 function conversationKey(first, second) {
@@ -458,7 +468,7 @@ router.post("/auth/register", async (request, response) => {
   if (users.some((user) => user.email?.toLocaleLowerCase("en") === email)) return response.status(409).json({ error: "Профиль с таким e-mail уже существует" });
   const displayName = email.split("@")[0];
   if (users.some((user) => user.username === username)) return response.status(409).json({ code: "USERNAME_TAKEN", error: authText(locale, "usernameTaken") });
-  const user = { id: nextId++, email, emailVerifiedAt: undefined, passwordLoginEnabled: true, profileCompleted: false, username, usernameIsTemporary: false, initials: displayName.slice(0, 2).toLocaleUpperCase("ru"), color: "blue", joined: "сегодня", joinedAt: new Date().toISOString(), profile: { name: displayName, city: "", type: "Читатель", gender: "Не указан", bio: "", authorInfluences: "", writingThemes: "", weekend: "", joy: "", talk: "", strangerMessage: "", favoriteGenres: [], dislikedGenres: [] }, books: [], authorBooks: [], reviews: [], excerpts: [], wishBooks: [] };
+  const user = { id: nextId++, email, emailVerifiedAt: undefined, passwordLoginEnabled: true, profileCompleted: false, username, usernameIsTemporary: false, initials: displayName.slice(0, 2).toLocaleUpperCase("ru"), color: "blue", joined: "сегодня", joinedAt: new Date().toISOString(), profile: { name: displayName, city: "", type: "Читатель", gender: "Не указан", birthDateVisibility: "friends", showBirthDateToFriends: true, followersVisibility: "friends", friendsVisibility: "friends", wishlistVisibility: "friends", bio: "", authorInfluences: "", writingThemes: "", weekend: "", joy: "", talk: "", strangerMessage: "", favoriteGenres: [], dislikedGenres: [] }, books: [], authorBooks: [], reviews: [], excerpts: [], wishBooks: [] };
   const verificationToken = createOpaqueActionToken();
   users.push(user); passwords.set(user.id, password); demoLegalAcceptances.set(user.id, new Set(legalConsentRequired() ? demoRequiredLegalDocuments.map((document) => document.id) : [])); await replaceDemoActionToken(user.id, "email_verify", verificationToken, EMAIL_VERIFICATION_TTL_MINUTES); const token = randomBytes(24).toString("hex"); sessions.set(token, user.id); response.setHeader("Set-Cookie", `book_meet_demo=${token}; Path=/; HttpOnly; SameSite=Lax`); response.status(201).json(bootstrap(user.id));
 });
@@ -559,7 +569,7 @@ router.post("/auth/deleted-profile/new", (request, response) => {
   oldUser.email = `deleted-${oldUser.id}@invalid.local`;
   oldUser.profile = { ...oldUser.profile, name: "Удалённый пользователь", city: "", cityId: undefined, bio: "", birthDate: undefined, age: undefined };
   const displayName = String(email).split("@")[0];
-  const user = { id: nextId++, email, profileCompleted: false, username: displayName, initials: displayName.slice(0, 2).toLocaleUpperCase("ru"), color: "blue", joined: "сегодня", joinedAt: new Date().toISOString(), profile: { name: displayName, city: "", type: "Читатель", gender: "Не указан", bio: "", authorInfluences: "", writingThemes: "", weekend: "", joy: "", talk: "", strangerMessage: "", favoriteGenres: [], dislikedGenres: [] }, books: [], authorBooks: [], reviews: [], excerpts: [], wishBooks: [] };
+  const user = { id: nextId++, email, profileCompleted: false, username: displayName, initials: displayName.slice(0, 2).toLocaleUpperCase("ru"), color: "blue", joined: "сегодня", joinedAt: new Date().toISOString(), profile: { name: displayName, city: "", type: "Читатель", gender: "Не указан", birthDateVisibility: "friends", showBirthDateToFriends: true, followersVisibility: "friends", friendsVisibility: "friends", wishlistVisibility: "friends", bio: "", authorInfluences: "", writingThemes: "", weekend: "", joy: "", talk: "", strangerMessage: "", favoriteGenres: [], dislikedGenres: [] }, books: [], authorBooks: [], reviews: [], excerpts: [], wishBooks: [] };
   users.push(user);
   passwords.set(user.id, password);
   const token = randomBytes(24).toString("hex");
@@ -606,7 +616,7 @@ router.post("/linked-profiles/create", async (request, response) => {
   const name = String(request.body?.name ?? "Новое сообщество").trim().slice(0, 120) || "Новое сообщество";
   if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) || password.length < 8) return response.status(400).json({ error: "Укажите e-mail и пароль не короче 8 символов" });
   if (users.some((item) => item.email?.toLocaleLowerCase("en") === email)) return response.status(409).json({ error: "Этот e-mail уже используется" });
-  const community = { id: nextId++, email, passwordLoginEnabled: true, profileCompleted: false, username: name, initials: name.slice(0, 2).toLocaleUpperCase("ru"), color: "blue", joined: "сегодня", joinedAt: new Date().toISOString(), profile: { name, city: "", type: "Сообщество", gender: "Не указан", publisherStatus: "draft", bio: "", authorInfluences: "", writingThemes: "", weekend: "", joy: "", talk: "", strangerMessage: "", favoriteGenres: [], dislikedGenres: [] }, books: [], authorBooks: [], reviews: [], excerpts: [], wishBooks: [] };
+  const community = { id: nextId++, email, passwordLoginEnabled: true, profileCompleted: false, username: name, initials: name.slice(0, 2).toLocaleUpperCase("ru"), color: "blue", joined: "сегодня", joinedAt: new Date().toISOString(), profile: { name, city: "", type: "Сообщество", gender: "Не указан", birthDateVisibility: "friends", showBirthDateToFriends: true, followersVisibility: "friends", friendsVisibility: "friends", wishlistVisibility: "friends", publisherStatus: "draft", bio: "", authorInfluences: "", writingThemes: "", weekend: "", joy: "", talk: "", strangerMessage: "", favoriteGenres: [], dislikedGenres: [] }, books: [], authorBooks: [], reviews: [], excerpts: [], wishBooks: [] };
   users.push(community);
   try { demoLinkPair(request.demoUserId, community.id); } catch (error) { users.pop(); return response.status(error.statusCode ?? 400).json({ error: error.message }); }
   passwords.set(community.id, password); state.linkedProfiles.push({ personalUserId: request.demoUserId, communityUserId: community.id });
@@ -906,9 +916,18 @@ router.post("/auth/totp/disable", (request, response) => {
   response.json({ disabled: true });
 });
 
+router.delete("/users/me/avatar", (request, response) => {
+  const user = users.find((item) => item.id === request.demoUserId);
+  if (!user) return response.status(404).json({ error: "Пользователь не найден" });
+  user.avatarUrl = undefined;
+  response.json({ ok: true, avatarUrl: null });
+});
+
 router.put("/users/me/state", (request, response) => {
   const user = users.find((item) => item.id === request.demoUserId);
   if (!user) return response.status(404).json({ error: "Пользователь не найден" });
+  const existingGate = demoProfileAccess(user);
+  if (!existingGate.complete && ((Array.isArray(request.body?.reviews) && request.body.reviews.length) || (Array.isArray(request.body?.excerpts) && request.body.excerpts.length) || (Array.isArray(request.body?.publisherNews) && request.body.publisherNews.length))) return response.status(428).json({ code: "PROFILE_COMPLETION_REQUIRED", error: "Сначала заполните обязательные поля профиля", missing: existingGate.missing });
   const profile = request.body?.profile;
   if (!profile) return response.status(400).json({ error: "Профиль не передан" });
   const locale = requestLocale(request);
@@ -965,7 +984,7 @@ router.put("/users/me/state", (request, response) => {
   }
   if (profile) user.profile = structuredClone({ ...profile, homeView: "feed" });
   if (request.body?.avatarUrl !== undefined) user.avatarUrl = request.body.avatarUrl || undefined;
-  if ((profile.type === "Читатель" || profile.type === "Блогер") && Array.isArray(request.body?.reviews)) user.reviews = structuredClone(request.body.reviews);
+  if (["Читатель", "Писатель", "Блогер"].includes(profile.type) && Array.isArray(request.body?.reviews)) user.reviews = structuredClone(request.body.reviews);
   if (["Читатель", "Писатель", "Блогер"].includes(profile.type) && Array.isArray(request.body?.excerpts)) {
     const excerpts = request.body.excerpts.map((item) => ({ ...item, previewText: String(item?.previewText ?? item?.text ?? "").trim(), text: String(item?.previewText ?? item?.text ?? "").trim() }));
     const invalidPublication = excerpts.some((item) => {
@@ -1078,6 +1097,7 @@ function saveDemoReadingMaterial(request, response, kind, id = 0) {
   const user = users.find((item) => item.id === request.demoUserId);
   const payload = request.body ?? {};
   if (!user) return response.status(404).json({ error: "Пользователь не найден" });
+  if (!["Читатель", "Писатель", "Блогер"].includes(user.profile.type)) return response.status(403).json({ error: "Рецензии и публикации доступны только личным профилям" });
   const collection = kind === "review" ? user.reviews : (user.excerpts ??= []);
   const existing = id ? collection.find((item) => item.id === id) : null;
   if (id && !existing) return response.status(404).json({ error: "Материал не найден" });
@@ -1098,6 +1118,39 @@ router.post("/reviews", (request, response) => saveDemoReadingMaterial(request, 
 router.patch("/reviews/:id", (request, response) => saveDemoReadingMaterial(request, response, "review", Number(request.params.id)));
 router.post("/excerpts", (request, response) => saveDemoReadingMaterial(request, response, "excerpt"));
 router.patch("/excerpts/:id", (request, response) => saveDemoReadingMaterial(request, response, "excerpt", Number(request.params.id)));
+
+function demoCommunityFeaturedDate(payload) {
+  const month = payload.featuredMonth == null || payload.featuredMonth === "" ? undefined : Number(payload.featuredMonth);
+  const year = payload.featuredYear == null || payload.featuredYear === "" ? undefined : Number(payload.featuredYear);
+  if (month === undefined && year === undefined) return { month: undefined, year: undefined };
+  if (!Number.isInteger(month) || month < 1 || month > 12 || !Number.isInteger(year) || year < 2000 || year > 2100) throw new Error("Укажите корректные месяц и год подборки");
+  return { month, year };
+}
+router.post("/community-books", (request, response) => {
+  const user = users.find((item) => item.id === request.demoUserId); const bookId = Number(request.body?.bookId);
+  if (user?.profile.type !== "Сообщество") return response.status(403).json({ error: "Раздел книг доступен только сообществу" });
+  const catalog = state.catalogBooks.find((book) => book.id === bookId);
+  if (!catalog) return response.status(404).json({ error: "Выбранная книга не найдена в каталоге" });
+  try {
+    const featured = demoCommunityFeaturedDate(request.body ?? {}); user.communityBooks ??= [];
+    const value = { ...catalog, featuredMonth: featured.month, featuredYear: featured.year };
+    const index = user.communityBooks.findIndex((book) => book.id === bookId);
+    if (index < 0) user.communityBooks.unshift(value); else user.communityBooks[index] = value;
+    response.status(201).json({ bookId, featuredMonth: featured.month, featuredYear: featured.year });
+  } catch (error) { response.status(400).json({ error: error.message }); }
+});
+router.patch("/community-books/:id", (request, response) => {
+  const user = users.find((item) => item.id === request.demoUserId); const bookId = Number(request.params.id);
+  if (user?.profile.type !== "Сообщество") return response.status(403).json({ error: "Раздел книг доступен только сообществу" });
+  const book = user.communityBooks?.find((entry) => entry.id === bookId);
+  if (!book) return response.status(404).json({ error: "Книга не добавлена в сообщество" });
+  try { const featured = demoCommunityFeaturedDate(request.body ?? {}); Object.assign(book, { featuredMonth: featured.month, featuredYear: featured.year }); response.json({ bookId, featuredMonth: featured.month, featuredYear: featured.year }); } catch (error) { response.status(400).json({ error: error.message }); }
+});
+router.delete("/community-books/:id", (request, response) => {
+  const user = users.find((item) => item.id === request.demoUserId); const bookId = Number(request.params.id);
+  if (user?.profile.type !== "Сообщество") return response.status(403).json({ error: "Раздел книг доступен только сообществу" });
+  user.communityBooks = (user.communityBooks ?? []).filter((book) => book.id !== bookId); response.json({ ok: true });
+});
 
 router.patch("/books/:id", (request, response) => {
   const user = users.find((item) => item.id === request.demoUserId); const id = Number(request.params.id); const payload = request.body ?? {};
@@ -1236,7 +1289,7 @@ router.post("/books/preview", async (request, response) => {
 
 router.post("/wishlist", async (request, response) => {
   const owner = users.find((user) => user.id === request.demoUserId);
-  if (owner?.profile.type !== "Читатель" && owner?.profile.type !== "Блогер") return response.status(403).json({ error: "Список «Хочу почитать!» доступен профилям читателей и блогеров" });
+  if (!["Читатель", "Писатель", "Блогер"].includes(owner?.profile.type)) return response.status(403).json({ error: "Список «Хочу почитать!» доступен личным профилям" });
   let product;
   try { product = await demoBookProduct(request.body?.productUrl, true); }
   catch (error) { return response.status(400).json({ error: error.message }); }
@@ -1415,7 +1468,7 @@ router.post("/social/friend-requests", (request, response) => {
     const key = conversationKey(request.demoUserId, targetId);
     (state.messages[key] ??= []).push({ id: nextId++, system: true, text: systemText, time: "сейчас" });
     notification(targetId, request.demoUserId, "friendship_started", "Новый участник", `${source?.profile.name} присоединился(ась) к открытому сообществу.`);
-    notification(request.demoUserId, targetId, "friendship_started", "Вы вступили в сообщество", systemText);
+    notification(request.demoUserId, targetId, "friendship_started", "Вы вступили в сообщество", `Вы вступили в сообщество ${target.profile.name}`);
     return response.status(201).json({ ok: true });
   }
   if (state.friendRequests.some((item) => item.status === "pending" && item.fromId === request.demoUserId && item.toId === targetId)) return response.status(409).json({ error: membership ? "Заявка на вступление уже отправлена" : "Предложение уже отправлено" });
@@ -1454,6 +1507,13 @@ router.post("/social/friends/:targetId/accept", (request, response) => {
   const key = conversationKey(targetId, request.demoUserId);
   const community = isCommunity;
   (state.messages[key] ??= []).push({ id: nextId++, system: true, text: community ? "Заявка принята. Теперь вы участник сообщества и можете начать переписку" : "Теперь вы друзья и можете начать переписку", time: "сейчас" });
+  if (community) {
+    notification(targetId, request.demoUserId, "friendship_started", "Заявка принята", `Вы вступили в сообщество ${acceptor?.profile.name}`);
+    notification(request.demoUserId, targetId, "friendship_started", "Заявка принята", `${requester?.profile.name} вступил(а) в сообщество.`);
+  } else {
+    notification(request.demoUserId, targetId, "friendship_started", "Теперь вы друзья", `Теперь вы друзья с ${requester?.profile.name}`);
+    notification(targetId, request.demoUserId, "friendship_started", "Теперь вы друзья", `Теперь вы друзья с ${acceptor?.profile.name}`);
+  }
   response.json({ ok: true });
 });
 

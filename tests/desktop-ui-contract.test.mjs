@@ -6,7 +6,7 @@ import path from "node:path";
 const root = path.resolve(import.meta.dirname, "..");
 
 test("desktop routes, username and privacy controls have stable contracts", async () => {
-  const [routes, layout, auth, profile, content, css, controller, messages, brandMark, brandLettering] = await Promise.all([
+  const [routes, layout, auth, profile, content, css, controller, messages, brandImage] = await Promise.all([
     readFile(path.join(root, "app", "navigation", "routes.ts"), "utf8"),
     readFile(path.join(root, "app", "components", "layout", "AppLayout.tsx"), "utf8"),
     readFile(path.join(root, "app", "screens", "AuthScreens.tsx"), "utf8"),
@@ -15,8 +15,7 @@ test("desktop routes, username and privacy controls have stable contracts", asyn
     readFile(path.join(root, "app", "globals.css"), "utf8"),
     readFile(path.join(root, "app", "hooks", "useBookMeetController.tsx"), "utf8"),
     readFile(path.join(root, "app", "i18n", "messages.ts"), "utf8"),
-    readFile(path.join(root, "public", "desktop-brand", "book-meet-mark.png")),
-    readFile(path.join(root, "public", "desktop-brand", "book-meet-lettering.png")),
+    readFile(path.join(root, "public", "book-meet-brand-v4.png")),
   ]);
   assert.match(routes, /liked: "\/liked"/);
   assert.match(routes, /saved: "\/saved"/);
@@ -60,10 +59,8 @@ test("desktop routes, username and privacy controls have stable contracts", asyn
   assert.match(content, /profile\.publisherNews/);
   assert.match(layout, /bell-active\.png/);
   assert.match(layout, /desktop-quick-create-menu/);
-  assert.match(layout, /desktop-brand\/book-meet-mark\.png/);
-  assert.match(layout, /desktop-brand\/book-meet-lettering\.png/);
-  assert.ok(brandMark.length > 0);
-  assert.ok(brandLettering.length > 0);
+  assert.match(layout, /book-meet-brand-v4\.png/);
+  assert.ok(brandImage.length > 0);
   assert.match(controller, /toggleSave/);
   assert.match(controller, /savedMaterialRefs/);
   assert.equal((css.match(/Final desktop layout cascade/g) ?? []).length, 0);
@@ -73,8 +70,9 @@ test("desktop routes, username and privacy controls have stable contracts", asyn
   assert.match(css, /prefers-reduced-motion/);
   assert.match(css, /mobile-chat-button\.mobile-chat-button-hidden/);
   assert.match(css, /\.desktop-navigation \{ top: 0; height: 100%; overflow: visible; \}/);
-  assert.match(css, /\.desktop-brand-title \{ position: absolute; grid-column: auto; left: calc\(50% \+ 110px\);/);
-  assert.match(css, /\.app-shell > \.mobile-shell-surface \{ height: calc\(100vh - var\(--desktop-header-height\)\); min-height: 0; overflow-y: auto; scrollbar-gutter: stable;/);
+  assert.match(css, /\.brand-logo-image/);
+  assert.match(css, /\.app-shell > \.mobile-shell-surface \{ height: 100vh; min-height: 0; overflow: hidden; \}/);
+  assert.match(css, /\.app-shell > \.mobile-shell-surface > \.my-profile-page \{ height: calc\(100vh - var\(--desktop-header-height\)\); min-height: 0; overflow-y: auto; scrollbar-gutter: stable;/);
   assert.match(css, /\.my-profile-page \{ width: 100%; \}/);
   assert.match(css, /\.my-profile-card \{ width: min\(1260px, 100%\); max-width: none;/);
   assert.match(css, /\.directory-heading \{ width: min\(760px, 100%\); min-height: 50px; margin: 42px auto 20px; padding: 0; border: 0;/);

@@ -81,10 +81,9 @@ test("AGENTS points to the Codex index without removing project instructions", a
 test("CI and package scripts use pnpm verify as the canonical check", async () => {
   const ci = await text(".github/workflows/ci.yml");
   const packageJson = JSON.parse(await text("package.json"));
-  const nodeVersion = await text(".node-version");
   assert.match(ci, /run:\s*pnpm verify/);
   assert.match(ci, /node-version:\s*22\.13\.0/);
-  assert.equal(nodeVersion.trim(), "22.13.0");
+  assert.equal(packageJson.engines.node, ">=22.13.0");
   assert.equal(packageJson.packageManager, "pnpm@11.9.0");
   assert.equal(packageJson.scripts.setup, "pnpm install --frozen-lockfile");
   assert.match(packageJson.scripts.check, /check-architecture\.mjs/);

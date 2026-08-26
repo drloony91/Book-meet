@@ -16,18 +16,15 @@ test.afterEach(async ({ browserDiagnostics }, testInfo) => {
   await browserDiagnostics.assertNoErrors();
 });
 
-test("guest home exposes public catalog and events and serves a direct SPA route", async ({ page, allowExpectedHttpError }, testInfo) => {
+test("guest is redirected to authentication from home and direct SPA routes", async ({ page, allowExpectedHttpError }) => {
   allowExpectedHttpError({ path: /^\/api\/bootstrap(?:\/|$)/, status: 401 });
   await page.goto("/");
-  if (testInfo.project.name === "desktop") await expect(page.getByRole("button", { name: /Вход\/Регистрация/ })).toBeVisible();
-  await expect(page.getByText("Тёплый городской роман о памяти, случайных встречах и внимании к деталям.", { exact: true }).first()).toBeVisible();
-  await expect(page.getByText("Встреча с авторами издательства «Тест»", { exact: true }).first()).toBeVisible();
+  await expect(page.getByRole("button", { name: /^Войти$/ })).toBeVisible();
   await page.goto("/events");
-  await expect(page).toHaveURL(/\/events$/);
-  await expect(page.locator("main")).toBeVisible();
+  await expect(page.getByRole("button", { name: /^Войти$/ })).toBeVisible();
   await page.goto("/books");
-  await expect(page.getByPlaceholder("Название книги или автор")).toBeVisible();
-  await expect(page.locator(".all-books-grid .library-book").first()).toBeVisible();
+  await expect(page.getByRole("button", { name: /^Войти$/ })).toBeVisible();
+  await expect(page.locator(".all-books-grid")).toHaveCount(0);
 });
 
 test("login opens the authenticated shell and logout returns to guest", async ({ page, allowExpectedHttpError }, testInfo) => {
@@ -36,8 +33,7 @@ test("login opens the authenticated shell and logout returns to guest", async ({
   // Demo has Google disabled; keep the optional third-party loader deterministic
   // so the strict network fixture reports real application failures only.
   await page.route("https://accounts.google.com/gsi/client", (route) => route.fulfill({ status: 200, contentType: "application/javascript", body: "" }));
-  if (testInfo.project.name === "mobile") await page.locator(".material-preview-card").first().click();
-  else await page.getByRole("button", { name: /Вход\/Регистрация/ }).click();
+  await expect(page.getByRole("button", { name: /^Войти$/ })).toBeVisible();
   await page.getByLabel("E-mail").fill("dr.loony91@gmail.com");
   await page.getByLabel(/Пароль/).fill("testtest1");
   await page.getByRole("button", { name: /^Войти$/ }).click();
@@ -46,8 +42,8 @@ test("login opens the authenticated shell and logout returns to guest", async ({
   if (testInfo.project.name === "mobile") await page.goto("/profile");
   else await page.locator("button.user-button").click();
   await page.locator(".admin-profile-top-actions").getByRole("button", { name: /^Выйти$/ }).click();
-  if (testInfo.project.name === "desktop") await expect(page.getByRole("button", { name: /Вход\/Регистрация/ })).toBeVisible();
-  else await expect(page.locator("html")).not.toHaveAttribute("data-book-meet-user-id", "1");
+  await expect(page.getByRole("button", { name: /^Войти$/ })).toBeVisible();
+  await expect(page.locator("html")).not.toHaveAttribute("data-book-meet-user-id", "1");
 });
 
 test("profile settings persist through the demo API", async ({ page }, testInfo) => {

@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { CustomSelect } from "../components/common/CustomSelect";
 import { CityFilter } from "../components/content/ContentComponents";
 import { userBookMatches } from "../lib/domain";
@@ -11,7 +11,11 @@ export function UsersDirectoryPage({ currentUser, users, onOpenUser }: { current
   const [query, setQuery] = useState("");
   const [city, setCity] = useState("");
   const [profileType, setProfileType] = useState<"all" | "Читатель" | "Писатель" | "Блогер">("all");
-  const publicUsers = useMemo(() => users.filter((user) => !user.isAdmin && !user.deletedAt && !user.purged), [users]);
+  const [page, setPage] = useState(1);
+  const pageSize = 12;
+  const publicUsers = useMemo(() => users.filter((user) => !user.isAdmin && !user.deletedAt && !user.purged)
+    .filter((user) => ["Читатель", "Писатель", "Блогер"].includes(user.profile.type))
+    .filter((user) => Boolean(user.profile.name?.trim()) && Boolean(user.profile.city?.trim() || user.profile.cityId) && Boolean(user.profile.birthDate) && ["Мужской", "Женский"].includes(user.profile.gender) && !user.usernameIsTemporary), [users]);
   const sortedUsers = useMemo(
     () => publicUsers
       .filter((user) => user.id !== currentUser.id)
@@ -25,6 +29,9 @@ export function UsersDirectoryPage({ currentUser, users, onOpenUser }: { current
     [city, currentUser, profileType, publicUsers, query, sort],
   );
   const cityUsers = publicUsers.filter((user) => user.id !== currentUser.id && user.profile.city.trim().toLocaleLowerCase("ru") === currentUser.profile.city.trim().toLocaleLowerCase("ru")).length;
+  useEffect(() => { setPage(1); }, [city, profileType, query, sort]);
+  const totalPages = Math.max(1, Math.ceil(sortedUsers.length / pageSize));
+  const visibleUsers = sortedUsers.slice((Math.min(page, totalPages) - 1) * pageSize, Math.min(page, totalPages) * pageSize);
 
   return <main className="content-scroll directory-page">
     <div className="directory-heading">
@@ -36,11 +43,11 @@ export function UsersDirectoryPage({ currentUser, users, onOpenUser }: { current
         <label className="directory-control-field"><span>{t("common.sort")}</span><CustomSelect ariaLabel={t("common.sort")} value={sort} onChange={setSort} options={[{ value: "matches", label: t("directory.bookMatches") }, { value: "registration", label: t("directory.registration") }]} /></label>
       </div>
     </div>
-    <div className="users-directory-grid">{sortedUsers.map(({ user, matches }) => <article className="directory-user-card material-clickable-card" role="button" tabIndex={0} key={user.id} onClick={() => onOpenUser(user.id)} onKeyDown={(event) => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); onOpenUser(user.id); } }}>
+    <div className="users-directory-grid">{visibleUsers.map(({ user, matches }) => <article className="directory-user-card material-clickable-card" role="button" tabIndex={0} key={user.id} onClick={() => onOpenUser(user.id)} onKeyDown={(event) => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); onOpenUser(user.id); } }}>
       <span className={`avatar avatar-lg avatar-${user.color} ${user.avatarUrl ? "has-photo" : ""}`} style={user.avatarUrl ? { backgroundImage: `url(${user.avatarUrl})` } : undefined}>{!user.avatarUrl && user.initials}{user.online && <span className="online-dot" />}</span>
       <div><span>{domainLabel(user.profile.type)}{user.profile.city ? <span data-i18n-skip> · {user.profile.city}</span> : ""}</span><h2 data-i18n-skip>{user.profile.name}</h2><p data-i18n-skip={Boolean(user.profile.bio)}>{user.profile.bio || t("directory.userBioEmpty")}</p></div>
       <div className="user-match-summary"><strong>{matches.total}</strong><span>{t("directory.matches")}</span></div>
-    </article>)}</div>
+    </article>)}</div>{totalPages > 1 && <nav className="directory-pagination" aria-label="Страницы"><button type="button" disabled={page <= 1} onClick={() => setPage((value) => Math.max(1, value - 1))}>←</button><span>{page} / {totalPages}</span><button type="button" disabled={page >= totalPages} onClick={() => setPage((value) => Math.min(totalPages, value + 1))}>→</button></nav>}
   </main>;
 }
 
