@@ -15,7 +15,7 @@ export function UsersDirectoryPage({ currentUser, users, onOpenUser }: { current
   const pageSize = 12;
   const publicUsers = useMemo(() => users.filter((user) => !user.isAdmin && !user.deletedAt && !user.purged)
     .filter((user) => ["Читатель", "Писатель", "Блогер"].includes(user.profile.type))
-    .filter((user) => Boolean(user.profile.name?.trim()) && Boolean(user.profile.city?.trim() || user.profile.cityId) && Boolean(user.profile.birthDate) && ["Мужской", "Женский"].includes(user.profile.gender) && !user.usernameIsTemporary), [users]);
+    .filter((user) => user.profileCompleted ?? (Boolean(user.profile.name?.trim()) && Boolean(user.profile.city?.trim() || user.profile.cityId) && Boolean(user.profile.birthDate) && ["Мужской", "Женский"].includes(user.profile.gender) && !user.usernameIsTemporary)), [users]);
   const sortedUsers = useMemo(
     () => publicUsers
       .filter((user) => user.id !== currentUser.id)

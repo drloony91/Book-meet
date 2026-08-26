@@ -64,7 +64,7 @@ export async function loadUsers(connection = getPool(), viewerId = null) {
   const [allFollowRows] = await connection.query("SELECT follower_user_id, target_user_id FROM follows");
   const [allCommunityMembershipRows] = await connection.query("SELECT community_user_id, member_user_id FROM community_memberships");
   const [bookRows] = await connection.query(
-    `SELECT ub.user_id, ub.rating, ub.short_review, ub.read_month, ub.read_year, ub.reading_status, ub.top_rank, ub.last_read_chapter, ub.reading_comment, ub.featured_month, ub.featured_year, ub.is_author,
+    `SELECT ub.user_id, ub.rating, ub.short_review, ub.read_month, ub.read_year, ub.reading_status, ub.top_rank, ub.last_read_chapter, ub.reading_comment, ub.featured_month, ub.featured_year, ub.publication_month, ub.publication_year, ub.is_author,
              b.id, b.creator_user_id, b.author, b.title, b.isbn, b.publisher, b.genres, b.annotation, b.is_adult, b.cover_path, b.cover_tone, b.flip_url, b.created_at AS book_created_at
        FROM user_books ub
        JOIN books b ON b.id = ub.book_id
@@ -150,10 +150,6 @@ export async function loadUsers(connection = getPool(), viewerId = null) {
       })),
       createdAtValue: book.book_created_at ? new Date(book.book_created_at).toISOString() : undefined,
     }));
-    const communityBooks = row.profile_type === "Сообщество" ? library.map((book) => {
-      const association = userBooks.find((entry) => Number(entry.id) === Number(book.id));
-      return { ...book, featuredMonth: association?.featured_month ? Number(association.featured_month) : undefined, featuredYear: association?.featured_year ? Number(association.featured_year) : undefined };
-    }) : undefined;
     const authorBooks = userBooks.filter((book) => book.is_author).map((book) => ({
       id: Number(book.id),
       creatorUserId: book.creator_user_id ? Number(book.creator_user_id) : undefined,
@@ -174,19 +170,32 @@ export async function loadUsers(connection = getPool(), viewerId = null) {
       links: linkRows.filter((link) => Number(link.book_id) === Number(book.id)).filter((link, index, all) => all.findIndex((item) => item.url === link.url) === index).map((link) => ({
         id: Number(link.id), label: link.label, url: link.url, action: link.action,
       })),
+      featuredMonth: book.featured_month ? Number(book.featured_month) : undefined,
+      featuredYear: book.featured_year ? Number(book.featured_year) : undefined,
+      publicationMonth: book.publication_month ? Number(book.publication_month) : undefined,
+      publicationYear: book.publication_year ? Number(book.publication_year) : undefined,
       createdAtValue: book.book_created_at ? new Date(book.book_created_at).toISOString() : undefined,
     }));
+    const communityBooks = row.profile_type === "Сообщество" ? [...library, ...authorBooks].map((book) => {
+      const association = userBooks.find((entry) => Number(entry.id) === Number(book.id));
+      return { ...book, rating: Number("rating" in book ? book.rating ?? 0 : 0), review: "review" in book ? book.review ?? "" : "", featuredMonth: association?.featured_month ? Number(association.featured_month) : undefined, featuredYear: association?.featured_year ? Number(association.featured_year) : undefined };
+    }) : undefined;
     const deletedView = Boolean(row.deleted_at || row.purged_at);
     // Memberships never grant friendship-scoped visibility.
     const isOwner = Number(row.id) === Number(viewerId);
+    const isCommunity = row.profile_type === "Сообщество";
+    const isPublisher = row.profile_type === "Издатель";
+    const isPersonal = ["Читатель", "Писатель", "Блогер"].includes(row.profile_type);
     const canView = (visibility) => viewerIsAdmin || isOwner || visibility === "everyone" || visibility === "friends" && isViewerFriend(row.id);
-    const canViewFollowers = !deletedView && canView(row.followers_visibility ?? "friends");
-    const canViewFriends = !deletedView && canView(row.friends_visibility ?? "friends");
-    const canViewWishlist = !deletedView && canView(row.wishlist_visibility ?? "friends");
+    const canViewFollowers = !deletedView && (isCommunity || canView(row.followers_visibility ?? "friends"));
+    const canViewFriends = !deletedView && (isCommunity || canView(row.friends_visibility ?? "friends"));
+    const canViewWishlist = !deletedView && isPersonal && canView(row.wishlist_visibility ?? "friends");
+    const profileCompleted = row.role === "admin" || !isPersonal || Boolean(String(row.display_name ?? "").trim() && !row.username_is_temporary && /^[a-z0-9][a-z0-9._-]{2,29}$/i.test(String(row.username ?? "")) && (String(row.city ?? "").trim() || row.city_id) && ageFromBirthDate(row.birth_date) !== null && ["Мужской", "Женский"].includes(row.gender));
     return {
       id: Number(row.id),
       username: deletedView ? "deleted-user" : row.username,
       usernameIsTemporary: !deletedView && Boolean(row.username_is_temporary),
+      profileCompleted,
       initials: deletedView ? "—" : row.initials,
       color: row.color,
       avatarUrl: row.deleted_at || row.purged_at ? undefined : row.avatar_path ?? undefined,
@@ -221,9 +230,9 @@ export async function loadUsers(connection = getPool(), viewerId = null) {
         age: !deletedView && (Number(row.id) === Number(viewerId) || viewerIsAdmin) ? ageFromBirthDate(row.birth_date) ?? undefined : undefined,
         ageGroup: deletedView || ageFromBirthDate(row.birth_date) === null ? "missing" : ageFromBirthDate(row.birth_date) < 18 ? "minor" : "adult",
         birthDateVisibility: deletedView ? undefined : Number(row.id) === Number(viewerId) || viewerIsAdmin ? row.birth_date_visibility ?? "friends" : undefined,
-        followersVisibility: deletedView || !(isOwner || viewerIsAdmin) ? undefined : row.followers_visibility ?? "friends",
-        friendsVisibility: deletedView || !(isOwner || viewerIsAdmin) ? undefined : row.friends_visibility ?? "friends",
-        wishlistVisibility: deletedView || !(isOwner || viewerIsAdmin) ? undefined : row.wishlist_visibility ?? "friends",
+        followersVisibility: deletedView || isCommunity || !(isOwner || viewerIsAdmin) ? undefined : row.followers_visibility ?? "friends",
+        friendsVisibility: deletedView || isCommunity || !(isOwner || viewerIsAdmin) ? undefined : row.friends_visibility ?? "friends",
+        wishlistVisibility: deletedView || isPublisher || isCommunity || !(isOwner || viewerIsAdmin) ? undefined : row.wishlist_visibility ?? "friends",
         canViewFollowers,
         canViewFriends,
         canViewWishlist,

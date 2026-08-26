@@ -84,8 +84,10 @@ export function BookMeetHeader({
         <span aria-hidden="true" />
       </button>
       <button className="brand brand-header-logo" type="button" onClick={onHome} aria-label={`Book Meet — ${t("common.home")}`}>
-        <img className="brand-logo-image" src="/book-meet-brand-v4.png" alt="" aria-hidden="true" />
+        <img className="brand-logo-image mobile-brand-logo" src="/book-meet-brand-v4.png" alt="" aria-hidden="true" />
+        <img className="desktop-brand-mark" src="/book-meet-favicon-v3.png" alt="" aria-hidden="true" />
       </button>
+      <button className="desktop-brand-title" type="button" onClick={onHome} aria-label={`Book Meet — ${t("common.home")}`}><img src="/book-meet-brand-v4.png" alt="" aria-hidden="true" /></button>
       <button className="mobile-search-button" type="button" onClick={onSearch} aria-label={t("common.search")} title={t("common.search")}>
         <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="10.8" cy="10.8" r="6.4" /><path d="m16 16 4.3 4.3" /></svg>
       </button>

@@ -328,9 +328,10 @@ function bootstrap(userId) {
   const visibleUsers = users.map((user) => {
     const friend = state.friendships.some((entry) => [entry.userA, entry.userB].includes(user.id) && [entry.userA, entry.userB].includes(userId));
     const canView = (visibility) => user.id === userId || viewer?.isAdmin || visibility === "everyone" || visibility === "friends" && friend;
-    const canViewFollowers = canView(user.profile.followersVisibility ?? "friends");
-    const canViewFriends = canView(user.profile.friendsVisibility ?? "friends");
-    return { ...user, friendCount: user.deletedAt || user.purged || !canViewFriends ? undefined : friendCountByUser.get(user.id) ?? 0, followerCount: user.deletedAt || user.purged || !canViewFollowers ? undefined : followerCountByUser.get(user.id) ?? 0, friendIds: canViewFriends ? state.friendships.filter((entry) => entry.userA === user.id || entry.userB === user.id).map((entry) => entry.userA === user.id ? entry.userB : entry.userA) : undefined, followerIds: canViewFollowers ? state.follows.filter((entry) => entry.targetId === user.id).map((entry) => entry.followerId) : undefined };
+    const community = user.profile.type === "Сообщество";
+    const canViewFollowers = community || canView(user.profile.followersVisibility ?? "friends");
+    const canViewFriends = community || canView(user.profile.friendsVisibility ?? "friends");
+    return { ...user, profileCompleted: demoProfileAccess(user).complete, friendCount: user.deletedAt || user.purged || !canViewFriends ? undefined : friendCountByUser.get(user.id) ?? 0, followerCount: user.deletedAt || user.purged || !canViewFollowers ? undefined : followerCountByUser.get(user.id) ?? 0, friendIds: canViewFriends ? state.friendships.filter((entry) => entry.userA === user.id || entry.userB === user.id).map((entry) => entry.userA === user.id ? entry.userB : entry.userA) : undefined, followerIds: canViewFollowers ? state.follows.filter((entry) => entry.targetId === user.id).map((entry) => entry.followerId) : undefined };
   }).filter((user) => user.id === userId
     || ["Издатель", "Сообщество"].includes(user.profile.type)
     || demoProfileAccess(user).complete).filter((user) => !["Издатель", "Сообщество"].includes(user.profile.type)
@@ -339,8 +340,9 @@ function bootstrap(userId) {
     || viewer?.isAdmin).filter((user) => viewer?.isAdmin || user.id === userId || !blockedByUserIds.includes(user.id)).map((user) => {
     const friend = state.friendships.some((entry) => [entry.userA, entry.userB].includes(user.id) && [entry.userA, entry.userB].includes(userId));
     const privateVisible = user.id === userId || friend;
-    const canViewWishlist = user.id === userId || viewer?.isAdmin || user.profile.wishlistVisibility === "everyone" || (user.profile.wishlistVisibility ?? "friends") === "friends" && friend;
-    const profile = user.id === userId || viewer?.isAdmin ? user.profile : {
+    const personal = ["Читатель", "Писатель", "Блогер"].includes(user.profile.type);
+    const canViewWishlist = personal && (user.id === userId || viewer?.isAdmin || user.profile.wishlistVisibility === "everyone" || (user.profile.wishlistVisibility ?? "friends") === "friends" && friend);
+    const profile = user.id === userId || viewer?.isAdmin ? { ...user.profile } : {
       ...user.profile,
       birthDate: (user.profile.birthDateVisibility ?? (user.profile.showBirthDateToFriends ? "friends" : "nobody")) === "everyone" || (user.profile.birthDateVisibility ?? (user.profile.showBirthDateToFriends ? "friends" : "nobody")) === "friends" && friend ? user.profile.birthDate : undefined,
       birthDateVisibility: undefined,
@@ -351,7 +353,9 @@ function bootstrap(userId) {
       publisherBik: undefined, publisherBank: undefined, publisherLegalAddress: undefined,
       publisherPostalAddress: undefined, publisherModerationNote: undefined,
     };
-    if (user.id === userId || viewer?.isAdmin) Object.assign(profile, { canViewFollowers: true, canViewFriends: true, canViewWishlist: true });
+    if (user.id === userId || viewer?.isAdmin) Object.assign(profile, { canViewFollowers: true, canViewFriends: true, canViewWishlist });
+    if (user.profile.type === "Сообщество") Object.assign(profile, { followersVisibility: undefined, friendsVisibility: undefined, wishlistVisibility: undefined, canViewFollowers: true, canViewFriends: true, canViewWishlist: false });
+    if (user.profile.type === "Издатель") Object.assign(profile, { wishlistVisibility: undefined, canViewWishlist: false });
     const memberIds = user.profile.type === "Сообщество" ? state.communityMemberships.filter((entry) => entry.communityId === user.id).map((entry) => entry.memberId) : undefined;
     return { ...user, books: user.profile.type === "Сообщество" ? [] : (user.books ?? []).filter((item) => adultStatus === "adult" || !item.isAdult), authorBooks: (user.authorBooks ?? []).filter((item) => adultStatus === "adult" || !item.isAdult), communityBooks: user.profile.type === "Сообщество" ? (user.communityBooks ?? []).filter((item) => adultStatus === "adult" || !item.isAdult) : undefined, memberIds, memberCount: memberIds?.length, reviews: (user.reviews ?? []).filter((item) => adultStatus === "adult" || !item.isAdult), excerpts: (user.excerpts ?? []).filter((item) => adultStatus === "adult" || !item.isAdult), blockedByMe: relatedBlocks.some((block) => block.blockerId === userId && block.blockedId === user.id), profile, wishBooks: canViewWishlist ? (user.wishBooks ?? []).map((item) => privateVisible ? { ...item, productUrl: user.id === userId ? item.productUrl : undefined, privateVisible: true } : { id: item.id, ownerId: item.ownerId, catalogBookId: item.catalogBookId, author: item.author, title: item.title, genres: item.genres, annotation: item.annotation, coverUrl: item.coverUrl, coverTone: item.coverTone, marketplace: item.marketplace, reservedByUserId: item.reservedByUserId, privateVisible: false }) : undefined };
   });
@@ -952,7 +956,7 @@ router.put("/users/me/state", (request, response) => {
     if (hasRelationship) return response.status(409).json({ error: "Перед сменой типа профиля завершите дружбу, участие в сообществах и ожидающие заявки" });
   }
   const publisher = ["Издатель", "Сообщество"].includes(profile?.type);
-  if (!String(profile?.name ?? "").trim() || !Number(profile?.cityId)) return response.status(400).json({ error: "Заполните обязательные поля" });
+  if (!String(profile?.name ?? "").trim() || !publisher && !Number(profile?.cityId)) return response.status(400).json({ error: "Заполните обязательные поля" });
   if (!publisher && !/^\d{4}-\d{2}-\d{2}$/.test(String(profile?.birthDate ?? ""))) return response.status(400).json({ error: "Укажите корректную дату рождения" });
   if (!publisher) {
     const birth = new Date(`${profile.birthDate}T00:00:00Z`);
@@ -963,13 +967,9 @@ router.put("/users/me/state", (request, response) => {
     profile.age = age;
   }
   if (publisher) {
-    const required = profile.type === "Сообщество"
-      ? [profile.communityType, profile.bio, profile.communityRules]
-      : [profile.publisherWebsite, profile.bio, profile.publisherLegalName, profile.publisherBin, profile.publisherAccount, profile.publisherBik, profile.publisherBank, profile.publisherLegalAddress, profile.publisherPostalAddress];
-    if (required.some((value) => !String(value ?? "").trim())) return response.status(400).json({ error: `Заполните обязательные поля ${profile.type === "Сообщество" ? "сообщества" : "издательства"}` });
     const currentApproved = user.profile.type === profile.type && user.profile.publisherStatus === "approved";
     profile.publisherStatus = currentApproved ? "approved" : "pending";
-    if (profile.type === "Издатель") profile.publisherBin = String(profile.publisherBin).replace(/\D/g, "").slice(0, 12);
+    if (profile.type === "Издатель") profile.publisherBin = String(profile.publisherBin ?? "").replace(/\D/g, "").slice(0, 12);
     else Object.assign(profile, { communityType: String(profile.communityType).trim().slice(0, 255), communityRules: String(profile.communityRules).trim(), communityIsClosed: Boolean(profile.communityIsClosed), publisherWebsite: "", publisherSalesLinks: [], publisherLegalName: "", publisherBin: "", publisherAccount: "", publisherBik: "", publisherBank: "", publisherLegalAddress: "", publisherPostalAddress: "" });
   } else {
     profile.publisherStatus = "not_required";
@@ -978,6 +978,8 @@ router.put("/users/me/state", (request, response) => {
   for (const key of ["followersVisibility", "friendsVisibility", "wishlistVisibility"]) {
     if (!["nobody", "friends", "everyone"].includes(profile[key])) profile[key] = "friends";
   }
+  if (profile.type === "Сообщество") Object.assign(profile, { followersVisibility: "everyone", friendsVisibility: "everyone", wishlistVisibility: "nobody" });
+  if (profile.type === "Издатель") profile.wishlistVisibility = "nobody";
   if (switchingToPublisher) {
     state.friendRequests = state.friendRequests.filter((item) => !((item.fromId === user.id || item.toId === user.id) && !(item.fromId === user.id && users.find((entry) => entry.id === item.toId)?.profile.type === "Сообщество")));
     state.notifications = state.notifications.filter((item) => !(item.type === "friend_request" && (item.userId === user.id || item.actorId === user.id) && users.find((entry) => entry.id === item.userId)?.profile.type !== "Сообщество"));
@@ -1046,7 +1048,7 @@ router.post("/books", (request, response) => {
   const user = users.find((item) => item.id === request.demoUserId);
   const payload = structuredClone(request.body ?? {});
   const readerUsesExistingCanonical = Number(payload.useExistingId || 0) > 0 && !payload.isAuthor;
-  if (payload.isAuthor && user.profile.type !== "Писатель" && !["Издатель", "Сообщество"].includes(user.profile.type)) return response.status(403).json({ error: "Добавлять книги могут только писатели и подтверждённые организации" });
+  if (payload.isAuthor && user.profile.type !== "Писатель" && !["Издатель", "Сообщество"].includes(user.profile.type)) return response.status(403).json({ error: "Добавлять книги могут только писатели и организации" });
   if (!payload.isAuthor && ["Издатель", "Сообщество"].includes(user.profile.type)) return response.status(403).json({ error: "Книги организации добавляются в специальной вкладке профиля" });
   const rating = Number(payload.rating);
   if (!payload.isAuthor && (payload.readingStatus ?? "read") === "read" && (!Number.isInteger(rating * 2) || rating < 0.5 || rating > 5)) return response.status(400).json({ error: "Оценка должна быть от 0,5 до 5 с шагом 0,5" });
@@ -1078,18 +1080,25 @@ router.post("/books", (request, response) => {
   const canonical = allBooks.find((item) => item.id === id);
   if (readerUsesExistingCanonical && !canonical) return response.status(404).json({ error: "Выбранная книга не найдена" });
   const ownerFields = { rating, review: String(payload.shortReview ?? payload.review ?? ""), readMonth: payload.readMonth, readYear: payload.readYear, readingStatus: payload.readingStatus ?? "read", lastReadChapter: payload.lastReadChapter, readingComment: payload.readingComment, topRank };
+  let organizationDates = {};
+  try {
+    if (payload.isAuthor && user.profile.type === "Сообщество") { const date = demoOrganizationMonthYear(payload, "featured", "книги месяца"); organizationDates = { featuredMonth: date.month, featuredYear: date.year }; }
+    if (payload.isAuthor && user.profile.type === "Издатель") { const date = demoOrganizationMonthYear(payload, "publication", "даты издания", 1900); organizationDates = { publicationMonth: date.month, publicationYear: date.year }; }
+  } catch (error) { return response.status(400).json({ error: error.message }); }
   const book = canonical
     ? readerUsesExistingCanonical
       ? { ...canonical, ...ownerFields, id, catalogBookId: id }
       : { ...canonical, ...payload, id, catalogBookId: id, topRank, author: canonical.author, title: canonical.title, isbn: canonical.isbn || payload.isbn, publisher: canonical.publisher || payload.publisher, annotation: canonical.annotation, coverUrl: canonical.coverUrl || payload.coverUrl, links: [...(canonical.links ?? []), ...(payload.links ?? [])].filter((link, index, list) => list.findIndex((item) => item.url === link.url) === index) }
     : { ...payload, id, catalogBookId: id, topRank, links: payload.links ?? [] };
-  const target = payload.isAuthor ? (user.authorBooks ??= []) : user.books;
+  Object.assign(book, organizationDates);
+  if (payload.isAuthor && user.profile.type === "Сообщество") Object.assign(book, { rating: 0, review: "" });
+  const target = payload.isAuthor ? user.profile.type === "Сообщество" ? (user.communityBooks ??= []) : (user.authorBooks ??= []) : user.books;
   const index = target.findIndex((item) => item.id === id);
   if (index >= 0) target[index] = book; else target.unshift(book);
   const catalogIndex = state.catalogBooks.findIndex((item) => item.id === id);
   if (catalogIndex >= 0) {
-    if (!readerUsesExistingCanonical) state.catalogBooks[catalogIndex] = { ...state.catalogBooks[catalogIndex], ...book, rating: 0, review: "", readingStatus: undefined, topRank: undefined };
-  } else state.catalogBooks.push({ ...book, rating: 0, review: "", readingStatus: undefined, topRank: undefined });
+    if (!readerUsesExistingCanonical) state.catalogBooks[catalogIndex] = { ...state.catalogBooks[catalogIndex], ...book, rating: 0, review: "", readingStatus: undefined, topRank: undefined, featuredMonth: undefined, featuredYear: undefined, publicationMonth: undefined, publicationYear: undefined };
+  } else state.catalogBooks.push({ ...book, rating: 0, review: "", readingStatus: undefined, topRank: undefined, featuredMonth: undefined, featuredYear: undefined, publicationMonth: undefined, publicationYear: undefined });
   response.json({ ok: true, bookId: id, topRank });
 });
 
@@ -1119,13 +1128,14 @@ router.patch("/reviews/:id", (request, response) => saveDemoReadingMaterial(requ
 router.post("/excerpts", (request, response) => saveDemoReadingMaterial(request, response, "excerpt"));
 router.patch("/excerpts/:id", (request, response) => saveDemoReadingMaterial(request, response, "excerpt", Number(request.params.id)));
 
-function demoCommunityFeaturedDate(payload) {
-  const month = payload.featuredMonth == null || payload.featuredMonth === "" ? undefined : Number(payload.featuredMonth);
-  const year = payload.featuredYear == null || payload.featuredYear === "" ? undefined : Number(payload.featuredYear);
+function demoOrganizationMonthYear(payload, prefix, label, minYear = 2000) {
+  const month = payload[`${prefix}Month`] == null || payload[`${prefix}Month`] === "" ? undefined : Number(payload[`${prefix}Month`]);
+  const year = payload[`${prefix}Year`] == null || payload[`${prefix}Year`] === "" ? undefined : Number(payload[`${prefix}Year`]);
   if (month === undefined && year === undefined) return { month: undefined, year: undefined };
-  if (!Number.isInteger(month) || month < 1 || month > 12 || !Number.isInteger(year) || year < 2000 || year > 2100) throw new Error("Укажите корректные месяц и год подборки");
+  if (!Number.isInteger(month) || month < 1 || month > 12 || !Number.isInteger(year) || year < minYear || year > 2100) throw new Error(`Укажите корректные месяц и год ${label}`);
   return { month, year };
 }
+function demoCommunityFeaturedDate(payload) { return demoOrganizationMonthYear(payload, "featured", "подборки"); }
 router.post("/community-books", (request, response) => {
   const user = users.find((item) => item.id === request.demoUserId); const bookId = Number(request.body?.bookId);
   if (user?.profile.type !== "Сообщество") return response.status(403).json({ error: "Раздел книг доступен только сообществу" });
@@ -1166,6 +1176,17 @@ router.patch("/books/:id", (request, response) => {
   if (top3Requested && !topRank) return response.status(409).json({ error: "В TOP3 уже добавлены три книги. Сначала снимите отметку с одной из них.", code: "TOP3_LIMIT" });
   Object.assign(book, { rating, review: String(payload.shortReview ?? payload.review ?? book.review), readingStatus, readMonth: readingStatus === "read" ? payload.readMonth : undefined, readYear: readingStatus === "read" ? payload.readYear : undefined, lastReadChapter: readingStatus === "reading" ? payload.lastReadChapter : undefined, readingComment: readingStatus === "reading" ? payload.readingComment : "", topRank });
   response.json({ bookId: id, topRank });
+});
+router.delete("/books/:id", (request, response) => {
+  const user = users.find((item) => item.id === request.demoUserId); const id = Number(request.params.id);
+  if (!user || !id) return response.status(404).json({ error: "Книга не найдена в вашем профиле" });
+  const before = (user.books?.length ?? 0) + (user.authorBooks?.length ?? 0) + (user.communityBooks?.length ?? 0);
+  user.books = (user.books ?? []).filter((item) => item.id !== id);
+  user.authorBooks = (user.authorBooks ?? []).filter((item) => item.id !== id);
+  user.communityBooks = (user.communityBooks ?? []).filter((item) => item.id !== id);
+  const after = user.books.length + user.authorBooks.length + user.communityBooks.length;
+  if (before === after) return response.status(404).json({ error: "Книга не найдена в вашем профиле" });
+  response.json({ ok: true });
 });
 
 function demoMarketplace(value) {

@@ -1040,7 +1040,8 @@ export function useBookMeetController() {
     const previous = users.find((user) => user.id === updatedUser.id);
     setUsers((current) => current.map((user) => user.id === updatedUser.id ? updatedUser : user));
     const saveTask = profileSaveQueue.current.catch(() => undefined).then(async () => {
-      const response = await apiFetch("/api/users/me/state", { method: "PUT", credentials: "same-origin", headers: { "content-type": "application/json" }, body: JSON.stringify({ profile: updatedUser.profile, username: updatedUser.username, avatarUrl: updatedUser.avatarUrl, reviews: updatedUser.reviews, excerpts: updatedUser.excerpts ?? [], publisherNews: updatedUser.publisherNews ?? [] }) });
+      const organizationKeepsUsername = ["Издатель", "Сообщество"].includes(updatedUser.profile.type) && previous?.username === updatedUser.username;
+      const response = await apiFetch("/api/users/me/state", { method: "PUT", credentials: "same-origin", headers: { "content-type": "application/json" }, body: JSON.stringify({ profile: updatedUser.profile, username: organizationKeepsUsername ? undefined : updatedUser.username, avatarUrl: updatedUser.avatarUrl, reviews: updatedUser.reviews, excerpts: updatedUser.excerpts ?? [], publisherNews: updatedUser.publisherNews ?? [] }) });
       if (!response.ok) {
         const data = await response.json().catch(() => ({})) as { error?: string };
         throw new Error(localizedApiError(data.error, t("profile.saveMaterialsError")));

@@ -2248,7 +2248,7 @@ router.put("/users/me/state", asyncRoute(async (request, response) => {
   if (usernameError) return response.status(400).json({ code: usernameError, error: authText(locale, usernameError === "USERNAME_RESERVED" ? "usernameReserved" : "usernameInvalid") });
   const requestedType = profile?.type === "Писатель" ? "Писатель" : profile?.type === "Блогер" ? "Блогер" : profile?.type === "Издатель" ? "Издатель" : profile?.type === "Сообщество" ? "Сообщество" : "Читатель";
   const isOrganization = ["Издатель", "Сообщество"].includes(requestedType);
-  if (!String(profile?.name ?? "").trim() || !Number(profile?.cityId)) return response.status(400).json({ error: "Заполните обязательные поля" });
+  if (!String(profile?.name ?? "").trim() || !isOrganization && !Number(profile?.cityId)) return response.status(400).json({ error: "Заполните обязательные поля" });
   const birthDate = isOrganization ? null : String(profile?.birthDate ?? "").trim();
   const birthAge = birthDate ? ageFromBirthDate(birthDate) : null;
   if (!isOrganization && (birthAge === null || birthAge < 0 || birthAge > 120)) {
@@ -2262,7 +2262,9 @@ router.put("/users/me/state", asyncRoute(async (request, response) => {
     : [];
   const socialVisibility = (value) => ["nobody", "friends", "everyone"].includes(value) ? value : "friends";
   await withTransaction(async (connection) => {
-    const city = await knownCity(connection, profile.city, profile.cityId);
+    const city = isOrganization && !String(profile.city ?? "").trim() && !profile.cityId
+      ? null
+      : await knownCity(connection, profile.city, profile.cityId);
     const [[currentProfile]] = await connection.query(
       `SELECT profile_type, publisher_status, publisher_legal_name, publisher_bin, publisher_account,
               publisher_bik, publisher_bank, publisher_legal_address, publisher_postal_address
@@ -2295,19 +2297,9 @@ router.put("/users/me/state", asyncRoute(async (request, response) => {
       legalAddress: String(profile.publisherLegalAddress ?? "").trim() || String(currentProfile?.publisher_legal_address ?? "").trim(),
       postalAddress: String(profile.publisherPostalAddress ?? "").trim() || String(currentProfile?.publisher_postal_address ?? "").trim(),
     };
-    if (isPublisher) {
-      const requiredPublisherFields = [
-        profile.publisherWebsite, profile.bio, publisherLegal.name, publisherLegal.bin,
-        publisherLegal.account, publisherLegal.bik, publisherLegal.bank,
-        publisherLegal.legalAddress, publisherLegal.postalAddress,
-      ];
-      if (requiredPublisherFields.some((value) => !String(value ?? "").trim())) {
-        throw Object.assign(new Error(`Заполните обязательные поля ${requestedType === "Сообщество" ? "сообщества" : "издательства"}`), { statusCode: 400 });
-      }
-    }
-    if (isCommunity && [profile.communityType, profile.bio, profile.communityRules].some((value) => !String(value ?? "").trim())) {
-      throw Object.assign(new Error("Заполните обязательные поля сообщества"), { statusCode: 400 });
-    }
+    const followersVisibility = isCommunity ? "everyone" : socialVisibility(profile.followersVisibility);
+    const friendsVisibility = isCommunity ? "everyone" : socialVisibility(profile.friendsVisibility);
+    const wishlistVisibility = isOrganization ? "nobody" : socialVisibility(profile.wishlistVisibility);
     if (isPublisher && currentProfile?.profile_type !== "Издатель") {
       await connection.query(
         `DELETE notification FROM notifications notification
@@ -2356,7 +2348,7 @@ router.put("/users/me/state", asyncRoute(async (request, response) => {
         birthDate || null,
         isOrganization ? 0 : (profile.birthDateVisibility ?? (profile.showBirthDateToFriends === false ? "nobody" : "friends")) === "friends" ? 1 : 0,
         isOrganization ? "nobody" : ["nobody", "friends", "everyone"].includes(profile.birthDateVisibility) ? profile.birthDateVisibility : profile.showBirthDateToFriends === false ? "nobody" : "friends",
-        socialVisibility(profile.followersVisibility), socialVisibility(profile.friendsVisibility), socialVisibility(profile.wishlistVisibility),
+        followersVisibility, friendsVisibility, wishlistVisibility,
         JSON.stringify(tabOrder), JSON.stringify(hiddenProfileTabs), "feed",
         profile.bio ?? "", requestedType === "Писатель" ? profile.authorInfluences ?? "" : "", requestedType === "Писатель" ? profile.writingThemes ?? "" : "",
         isOrganization ? "" : profile.weekend ?? "", isOrganization ? "" : profile.joy ?? "",
@@ -2371,8 +2363,8 @@ router.put("/users/me/state", asyncRoute(async (request, response) => {
         isPublisher ? publisherLegal.bank : null,
         isPublisher ? publisherLegal.legalAddress : null,
         isPublisher ? publisherLegal.postalAddress : null,
-        isCommunity ? String(profile.communityType).trim().slice(0, 255) : null,
-        isCommunity ? String(profile.communityRules).trim() : null,
+        isCommunity ? String(profile.communityType ?? "").trim().slice(0, 255) : null,
+        isCommunity ? String(profile.communityRules ?? "").trim() : null,
         isCommunity && profile.communityIsClosed ? 1 : 0,
         publisherStatus, userId,
       ],
@@ -2654,6 +2646,8 @@ router.post("/books", asyncRoute(async (request, response) => {
   const top3Requested = payload.top3 === true || Number(payload.topRank) > 0;
   const readMonth = Number(payload.readMonth) || null;
   const readYear = Number(payload.readYear) || null;
+  const featuredDate = organizationMonthYear(payload, "featured", "книги месяца");
+  const publicationDate = organizationMonthYear(payload, "publication", "даты издания", 1900);
   const lastReadChapter = readingStatus === "reading" && Number(payload.lastReadChapter) > 0 ? Math.floor(Number(payload.lastReadChapter)) : null;
   const readingComment = readingStatus === "reading" ? String(payload.readingComment ?? "").trim().slice(0, 3000) : null;
   if (!payload.isAuthor && ((readMonth && (readMonth < 1 || readMonth > 12)) || (readYear && (readYear < 1900 || readYear > new Date().getFullYear())))) {
@@ -2667,11 +2661,13 @@ router.post("/books", asyncRoute(async (request, response) => {
   const result = await withTransaction(async (connection) => {
     await assertAdultMaterialAllowed(connection, userId, Boolean(payload.isAdult));
     const access = await publisherAccess(connection, userId);
+    let organizationDates = { featuredMonth: null, featuredYear: null, publicationMonth: null, publicationYear: null };
     if (payload.isAuthor) {
       const [[profile]] = await connection.query("SELECT profile_type, publisher_status FROM profiles WHERE user_id = ?", [userId]);
-      const canPublishBook = profile?.profile_type === "Писатель"
-        || ["Издатель", "Сообщество"].includes(profile?.profile_type) && profile?.publisher_status === "approved";
-      if (!canPublishBook) throw Object.assign(new Error("Добавлять книги могут только писатели и подтверждённые организации"), { statusCode: 403 });
+      const canPublishBook = ["Писатель", "Издатель", "Сообщество"].includes(profile?.profile_type);
+      if (!canPublishBook) throw Object.assign(new Error("Добавлять книги могут только писатели и организации"), { statusCode: 403 });
+      if (profile.profile_type === "Сообщество") organizationDates = { ...organizationDates, featuredMonth: featuredDate.month, featuredYear: featuredDate.year };
+      if (profile.profile_type === "Издатель") organizationDates = { ...organizationDates, publicationMonth: publicationDate.month, publicationYear: publicationDate.year };
     } else if (access.isPublisher) {
       throw Object.assign(new Error("Книги организации добавляются в специальной вкладке профиля"), { statusCode: 403 });
     }
@@ -2730,10 +2726,10 @@ router.post("/books", asyncRoute(async (request, response) => {
       throw Object.assign(new Error("В TOP3 можно добавлять только прочитанные книги из своей библиотеки"), { statusCode: 400 });
     }
     await connection.query(
-      `INSERT INTO user_books (user_id, book_id, rating, short_review, read_month, read_year, reading_status, last_read_chapter, reading_comment, is_author)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-       ON DUPLICATE KEY UPDATE rating = VALUES(rating), short_review = VALUES(short_review), read_month = VALUES(read_month), read_year = VALUES(read_year), reading_status = VALUES(reading_status), last_read_chapter = VALUES(last_read_chapter), reading_comment = VALUES(reading_comment), is_author = VALUES(is_author)`,
-      [userId, bookId, payload.isAuthor || readingStatus !== "read" ? null : rating, payload.isAuthor || readingStatus !== "read" ? null : String(payload.shortReview ?? "").trim(), payload.isAuthor || readingStatus !== "read" ? null : readMonth, payload.isAuthor || readingStatus !== "read" ? null : readYear, payload.isAuthor ? "read" : readingStatus, payload.isAuthor ? null : lastReadChapter, payload.isAuthor ? null : readingComment, payload.isAuthor ? 1 : 0],
+      `INSERT INTO user_books (user_id, book_id, rating, short_review, read_month, read_year, reading_status, last_read_chapter, reading_comment, is_author, featured_month, featured_year, publication_month, publication_year)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+       ON DUPLICATE KEY UPDATE rating = VALUES(rating), short_review = VALUES(short_review), read_month = VALUES(read_month), read_year = VALUES(read_year), reading_status = VALUES(reading_status), last_read_chapter = VALUES(last_read_chapter), reading_comment = VALUES(reading_comment), is_author = VALUES(is_author), featured_month = VALUES(featured_month), featured_year = VALUES(featured_year), publication_month = VALUES(publication_month), publication_year = VALUES(publication_year)`,
+      [userId, bookId, payload.isAuthor || readingStatus !== "read" ? null : rating, payload.isAuthor || readingStatus !== "read" ? null : String(payload.shortReview ?? "").trim(), payload.isAuthor || readingStatus !== "read" ? null : readMonth, payload.isAuthor || readingStatus !== "read" ? null : readYear, payload.isAuthor ? "read" : readingStatus, payload.isAuthor ? null : lastReadChapter, payload.isAuthor ? null : readingComment, payload.isAuthor ? 1 : 0, organizationDates.featuredMonth, organizationDates.featuredYear, organizationDates.publicationMonth, organizationDates.publicationYear],
     );
     let topRank = existingUserBook?.top_rank ? Number(existingUserBook.top_rank) : null;
     if (payload.isAuthor || readingStatus !== "read" || top3Specified && !top3Requested) {
@@ -2779,14 +2775,18 @@ router.post("/books", asyncRoute(async (request, response) => {
   response.status(201).json(result);
 }));
 
-function communityFeaturedDate(payload) {
-  const month = payload.featuredMonth == null || payload.featuredMonth === "" ? null : Number(payload.featuredMonth);
-  const year = payload.featuredYear == null || payload.featuredYear === "" ? null : Number(payload.featuredYear);
+function organizationMonthYear(payload, prefix, label, minYear = 2000) {
+  const month = payload[`${prefix}Month`] == null || payload[`${prefix}Month`] === "" ? null : Number(payload[`${prefix}Month`]);
+  const year = payload[`${prefix}Year`] == null || payload[`${prefix}Year`] === "" ? null : Number(payload[`${prefix}Year`]);
   if (month === null && year === null) return { month: null, year: null };
-  if (!Number.isInteger(month) || month < 1 || month > 12 || !Number.isInteger(year) || year < 2000 || year > 2100) {
-    throw Object.assign(new Error("Укажите корректные месяц и год подборки"), { statusCode: 400 });
+  if (!Number.isInteger(month) || month < 1 || month > 12 || !Number.isInteger(year) || year < minYear || year > 2100) {
+    throw Object.assign(new Error(`Укажите корректные месяц и год ${label}`), { statusCode: 400 });
   }
   return { month, year };
+}
+
+function communityFeaturedDate(payload) {
+  return organizationMonthYear(payload, "featured", "подборки");
 }
 
 async function assertCommunityOwner(connection, userId) {

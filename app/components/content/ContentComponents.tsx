@@ -728,8 +728,9 @@ export function UserProfileModal({ user, viewer, users, catalog, profileFriends 
             {tabVisible("friends") && isCommunity && <button className={activeTab === "members" ? "active" : ""} type="button" onClick={() => setActiveTab("members")}>{t("profile.communityMembers")} <span>{profileFriends.length}</span></button>}
           </nav>
           {activeTab === "main" && <><PublicProfileDetails user={user} /><section className="profile-material-stream public-profile-materials"><label className="profile-material-search"><span aria-hidden="true">⌕</span><input type="search" maxLength={120} value={materialQueryDraft} onChange={(event) => setMaterialQueryDraft(event.target.value)} placeholder={t("profile.searchMaterials")} aria-label={t("profile.searchMaterials")} /></label><div className="profile-material-list">{publicProfileMaterials.slice(0, shownMaterials).map((entry, index) => entry.type === "reading" ? <MaterialPreviewCard key={`profile-reading-${entry.item.kind}-${entry.id}`} item={entry.item} index={index} owner={user} liked={Boolean(likes[`${entry.item.kind}-${entry.id}`]?.includes(viewer.id))} likesCount={likes[`${entry.item.kind}-${entry.id}`]?.length ?? 0} onToggleLike={() => onToggleLike(entry.item)} onOpen={() => setOpenedReview(entry.item)} onOpenComments={() => setOpenedReview(entry.item)} onOpenUser={onOpenUser} /> : entry.type === "news" ? <PublisherNewsCard key={`profile-news-${entry.id}`} item={entry.item} owner={user} onOpen={() => setOpenedPublisherNews(entry.item)} onOpenUser={onOpenUser} /> : entry.type === "event" ? <EventCard key={`profile-event-${entry.id}`} item={entry.item} own={false} owner={user} onOpen={() => setOpenedPublisherEvent(entry.item)} onOpenUser={onOpenUser} /> : <OccasionCard key={`profile-occasion-${entry.id}`} item={entry.item} own={false} owner={user} onOpen={() => setOpenedOccasion(entry.item)} onOpenUser={onOpenUser} />)}</div>{!publicProfileMaterials.length && <p className="profile-tab-placeholder">{materialQuery ? t("common.nothingFound") : t("profile.noMaterials")}</p>}{shownMaterials < publicProfileMaterials.length && <div ref={materialSentinelRef} className="profile-material-sentinel" />}{publicProfileMaterials.length > 0 && shownMaterials >= publicProfileMaterials.length && <p className="feed-end">{t("feed.end")}</p>}</section></>}
-          {activeTab === "author-books" && isCommunity && <CommunityBooksTab books={user.communityBooks ?? []} catalog={catalog as LibraryBook[]} users={users} editable={false} onChange={() => undefined} />}
-          {activeTab === "author-books" && !isCommunity && <div className="public-books-grid">{(user.authorBooks ?? []).map((book) => <button type="button" className="public-book-card" key={book.id} onClick={() => setOpenedAuthorBook(book)}><div className={`library-book-cover library-cover-${book.coverTone}`} style={book.coverUrl ? { backgroundImage: `url(${book.coverUrl})` } : undefined}>{!book.coverUrl && <><em>{book.author}</em><strong>{book.title}</strong><span>Book Meet</span></>}</div><h3>{book.title}</h3><p>{book.author}</p></button>)}</div>}
+          {activeTab === "author-books" && isCommunity && <CommunityBooksTab books={user.communityBooks ?? []} catalog={catalog as LibraryBook[]} users={users} editable={false} organizationType="community" onChange={() => undefined} />}
+          {activeTab === "author-books" && user.profile.type === "Издатель" && <CommunityBooksTab books={user.authorBooks ?? []} catalog={catalog} users={users} editable={false} organizationType="publisher" onChange={() => undefined} />}
+          {activeTab === "author-books" && user.profile.type === "Писатель" && <div className="public-books-grid">{(user.authorBooks ?? []).map((book) => <button type="button" className="public-book-card" key={book.id} onClick={() => setOpenedAuthorBook(book)}><div className={`library-book-cover library-cover-${book.coverTone}`} style={book.coverUrl ? { backgroundImage: `url(${book.coverUrl})` } : undefined}>{!book.coverUrl && <><em>{book.author}</em><strong>{book.title}</strong><span>Book Meet</span></>}</div><h3>{book.title}</h3><p>{book.author}</p></button>)}</div>}
           {activeTab === "excerpts" && <div className="public-reviews-list">{(user.excerpts ?? []).map((excerpt) => <button type="button" key={excerpt.id} onClick={() => setOpenedReview({ id: excerpt.id, kind: "excerpt", title: excerpt.bookTitle || t("content.publications"), author: user.profile.name, text: excerpt.text, preview: excerpt.previewText, bodyHtml: excerpt.bodyHtml, linkedBookId: excerpt.bookId, linkedBookIds: excerpt.bookIds, ownerId: user.id, createdAt: excerpt.createdAt })}><span data-i18n-skip>{excerpt.createdAt}</span><h3 data-i18n-skip={Boolean(excerpt.bookTitle)}>{excerpt.bookTitle || t("content.publications")}</h3><p data-i18n-skip>{excerpt.previewText || excerpt.text.slice(0, 500)}</p><b>{t("common.open")} →</b></button>)}</div>}
           {activeTab === "library" && <div className="public-library-view"><div className="library-status-filter public-library-status-filter" role="group" aria-label={t("library.statusFilter")}><button className={libraryStatus === "want" ? "active" : ""} type="button" onClick={() => setLibraryStatus("want")}>{t("content.want")}</button><button className={libraryStatus === "reading" ? "active" : ""} type="button" onClick={() => setLibraryStatus("reading")}>{t("content.reading")}</button><button className={libraryStatus === "read" ? "active" : ""} type="button" onClick={() => setLibraryStatus("read")}>{t("content.readDone")}</button></div><div className="public-books-grid">{publicLibraryBooks.map((book) => <button type="button" data-i18n-skip className={`public-book-card ${book.topRank ? "top3-book" : ""}`} key={book.id} onClick={() => setOpenedAuthorBook(book)}>{book.topRank && <span className="top3-crown" aria-label={`TOP3, ${book.topRank}`}>♛<b>{book.topRank}</b></span>}<div className={`library-book-cover library-cover-${book.coverTone}`} style={book.coverUrl ? { backgroundImage: `url(${book.coverUrl})` } : undefined}>{!book.coverUrl && <><em>{book.author}</em><strong>{book.title}</strong><span>Book Meet</span></>}</div><h3>{book.title}</h3><p>{book.author}</p>{libraryStatus === "read" && <span>★ {book.rating}</span>}</button>)}</div>{!publicLibraryBooks.length && <div className="profile-tab-placeholder">{t("library.sectionEmpty")}</div>}</div>}
           {activeTab === "wishlist" && user.profile.canViewWishlist && <WishlistTab books={profileWishBooks} setBooks={setProfileWishBooks} owner={{ ...user, wishBooks: profileWishBooks }} viewer={viewer} users={users} readOnly />}
@@ -1054,7 +1055,7 @@ export function booksWord(count: number) {
   return translate(currentLocale(), "book.wordMany");
 }
 
-export function BookEditor({ book, catalog, top3Count = 0, onClose, onSave }: { book: LibraryBook | null; catalog: (LibraryBook | AuthorBook)[]; top3Count?: number; onClose: () => void; onSave: (book: LibraryBook) => void | Promise<void> }) {
+export function BookEditor({ book, catalog, top3Count = 0, mode = "library", onClose, onSave }: { book: LibraryBook | null; catalog: (LibraryBook | AuthorBook)[]; top3Count?: number; mode?: "library" | "community" | "publisher"; onClose: () => void; onSave: (book: LibraryBook) => void | Promise<void> }) {
   const { t } = useI18n();
   const [form, setForm] = useState<LibraryBook>(() => book ? { ...book, links: book.links?.length ? book.links : [{ id: Date.now(), label: "Flip", url: "", action: "Купить" }] } : { id: Date.now(), author: "", title: "", genres: [], annotation: "", pages: "", durationHours: "", durationMinutes: "", format: "Бумажная", rating: 0, review: "", readingStatus: "read", coverTone: coverTones[Math.floor(Math.random() * coverTones.length)], links: [{ id: Date.now(), label: "Flip", url: "", action: "Купить" }] });
   const [autofillUrl, setAutofillUrl] = useState(book?.flipUrl ?? "");
@@ -1064,6 +1065,7 @@ export function BookEditor({ book, catalog, top3Count = 0, onClose, onSave }: { 
   const [linksError, setLinksError] = useState(false);
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState("");
+  const organizationMode = mode !== "library";
   const selectedCatalogBook = catalog.find((item) => item.id === selectedCatalogId);
   const coverLocked = Boolean(selectedCatalogBook?.coverUrl);
   const fieldLocked = (canonicalValue: unknown, currentValue: unknown) => selectedCatalogBook ? Boolean(canonicalValue) : sourceFieldsLocked && Boolean(currentValue);
@@ -1076,8 +1078,8 @@ export function BookEditor({ book, catalog, top3Count = 0, onClose, onSave }: { 
   }, [onClose]);
 
   useEffect(() => {
-    if (form.readingStatus !== "read" && form.topRank) setForm((current) => ({ ...current, topRank: undefined }));
-  }, [form.readingStatus, form.topRank]);
+    if (!organizationMode && form.readingStatus !== "read" && form.topRank) setForm((current) => ({ ...current, topRank: undefined }));
+  }, [form.readingStatus, form.topRank, organizationMode]);
 
   function uploadCover(event: React.ChangeEvent<HTMLInputElement>) {
     if (coverLocked) return;
@@ -1094,11 +1096,11 @@ export function BookEditor({ book, catalog, top3Count = 0, onClose, onSave }: { 
       setLinksError(true);
       return;
     }
-    if ((form.readingStatus ?? "read") === "read" && form.rating === 0) {
+    if (!organizationMode && (form.readingStatus ?? "read") === "read" && form.rating === 0) {
       setRatingError(true);
       return;
     }
-    if (form.topRank && !book?.topRank && top3Count >= 3) {
+    if (!organizationMode && form.topRank && !book?.topRank && top3Count >= 3) {
       window.alert(t("library.top3Full"));
       return;
     }
@@ -1112,7 +1114,7 @@ export function BookEditor({ book, catalog, top3Count = 0, onClose, onSave }: { 
     <div className="modal-backdrop workflow-page-backdrop" role="presentation" onMouseDown={onClose}>
       <section className="book-editor" role="dialog" aria-modal="true" aria-labelledby="book-editor-title" onMouseDown={(event) => event.stopPropagation()}>
         <ResponsiveModalCloseButton onClose={onClose} />
-        <div className="book-editor-heading"><span className="section-subtitle">{t("profile.library")}</span><h2 id="book-editor-title">{book ? t("book.edit") : t("content.addBook")}</h2><p>{t("form.requiredHint")}</p></div>
+        <div className="book-editor-heading"><span className="section-subtitle">{t(mode === "community" ? "profile.communityBooks" : mode === "publisher" ? "profile.publisherBooks" : "profile.library")}</span><h2 id="book-editor-title">{book ? t("book.edit") : t("content.addBook")}</h2><p>{t("form.requiredHint")}</p></div>
         <form className="book-form" onSubmit={submit}>
           <div className="cover-upload-column">
             <div className={`editable-book-cover library-cover-${form.coverTone}`} style={form.coverUrl ? { backgroundImage: `url(${form.coverUrl})` } : undefined}>
@@ -1121,7 +1123,7 @@ export function BookEditor({ book, catalog, top3Count = 0, onClose, onSave }: { 
             <label className={`cover-upload-button ${coverLocked ? "is-disabled" : ""}`}>{coverLocked ? t("book.coverSaved") : t("book.uploadCover")}<input type="file" accept="image/*" disabled={coverLocked} onChange={uploadCover} /></label>
           </div>
           <div className="book-fields">
-            <div className="book-reading-status library-editor-status" role="group" aria-label={t("library.bookStatus")}><button className={(form.readingStatus ?? "read") === "want" ? "active" : ""} type="button" onClick={() => { setForm((current) => ({ ...current, readingStatus: "want", rating: 0, review: "", readMonth: undefined, readYear: undefined, lastReadChapter: undefined, readingComment: "" })); setRatingError(false); }}>{t("content.want")}</button><button className={form.readingStatus === "reading" ? "active" : ""} type="button" onClick={() => { setForm((current) => ({ ...current, readingStatus: "reading", rating: 0, review: "", readMonth: undefined, readYear: undefined })); setRatingError(false); }}>{t("content.reading")}</button><button className={(form.readingStatus ?? "read") === "read" ? "active" : ""} type="button" onClick={() => setForm((current) => ({ ...current, readingStatus: "read", lastReadChapter: undefined, readingComment: "" }))}>{t("content.readDone")}</button></div>
+            {!organizationMode && <div className="book-reading-status library-editor-status" role="group" aria-label={t("library.bookStatus")}><button className={(form.readingStatus ?? "read") === "want" ? "active" : ""} type="button" onClick={() => { setForm((current) => ({ ...current, readingStatus: "want", rating: 0, review: "", readMonth: undefined, readYear: undefined, lastReadChapter: undefined, readingComment: "" })); setRatingError(false); }}>{t("content.want")}</button><button className={form.readingStatus === "reading" ? "active" : ""} type="button" onClick={() => { setForm((current) => ({ ...current, readingStatus: "reading", rating: 0, review: "", readMonth: undefined, readYear: undefined })); setRatingError(false); }}>{t("content.reading")}</button><button className={(form.readingStatus ?? "read") === "read" ? "active" : ""} type="button" onClick={() => setForm((current) => ({ ...current, readingStatus: "read", lastReadChapter: undefined, readingComment: "" }))}>{t("content.readDone")}</button></div>}
             <BookAutofillField hidePlaceholder value={autofillUrl} onChange={(value) => { setAutofillUrl(value); if (!value.trim()) setSourceFieldsLocked(false); }} onProduct={(product) => {
               const match = catalog.find((item) => item.id === product.catalogBookId)
                 ?? catalog.find((item) => product.isbn && item.isbn?.replace(/\D/g, "") === product.isbn.replace(/\D/g, ""))
@@ -1144,8 +1146,9 @@ export function BookEditor({ book, catalog, top3Count = 0, onClose, onSave }: { 
               <GenrePicker label={t("content.genre")} value={form.genres} onChange={(genres) => setForm({ ...form, genres })} />
               <label>{t("content.annotation")}<textarea rows={3} readOnly={fieldLocked(selectedCatalogBook?.annotation, form.annotation)} value={form.annotation} onChange={(event) => setForm({ ...form, annotation: event.target.value })} /></label>
             </div>
-            {form.readingStatus === "reading" && <div className="library-reading-progress"><label>{t("library.chaptersRead")}<input min={1} step={1} type="number" inputMode="numeric" value={form.lastReadChapter ?? ""} onChange={(event) => setForm({ ...form, lastReadChapter: event.target.value ? Math.max(1, Math.floor(Number(event.target.value))) : undefined })} /></label><label>{t("material.comment")}<textarea rows={4} placeholder={t("library.readingImpressions")} value={form.readingComment ?? ""} onChange={(event) => setForm({ ...form, readingComment: event.target.value })} /></label></div>}
-            {(form.readingStatus ?? "read") === "read" && <div className="library-reading-details">
+            {organizationMode && <fieldset className="reading-date-field organization-book-date-field"><legend>{t(mode === "community" ? "book.communityMonth" : "book.publicationDate")}</legend><label>{t("library.month")}<CustomSelect ariaLabel={t("library.readMonth")} value={(mode === "community" ? form.featuredMonth : form.publicationMonth) ?? 0} onChange={(month) => setForm(mode === "community" ? { ...form, featuredMonth: month || undefined } : { ...form, publicationMonth: month || undefined })} options={[{ value: 0, label: t("domain.unspecified") }, ...readingMonths.map((month, index) => ({ value: index + 1, label: t(month) }))]} /></label><label>{t("library.year")}<CustomSelect ariaLabel={t("library.readYear")} value={(mode === "community" ? form.featuredYear : form.publicationYear) ?? 0} onChange={(year) => setForm(mode === "community" ? { ...form, featuredYear: year || undefined } : { ...form, publicationYear: year || undefined })} options={[{ value: 0, label: t("domain.unspecified") }, ...Array.from({ length: new Date().getFullYear() + 3 - 1900 }, (_, index) => new Date().getFullYear() + 2 - index).map((year) => ({ value: year, label: String(year) }))]} /></label></fieldset>}
+            {!organizationMode && form.readingStatus === "reading" && <div className="library-reading-progress"><label>{t("library.chaptersRead")}<input min={1} step={1} type="number" inputMode="numeric" value={form.lastReadChapter ?? ""} onChange={(event) => setForm({ ...form, lastReadChapter: event.target.value ? Math.max(1, Math.floor(Number(event.target.value))) : undefined })} /></label><label>{t("material.comment")}<textarea rows={4} placeholder={t("library.readingImpressions")} value={form.readingComment ?? ""} onChange={(event) => setForm({ ...form, readingComment: event.target.value })} /></label></div>}
+            {!organizationMode && (form.readingStatus ?? "read") === "read" && <div className="library-reading-details">
               <div className="book-rating-field top3-rating-row"><span>{t("content.rating")} *</span><RatingStars allowHalf value={form.rating} onChange={(rating) => { setForm({ ...form, rating }); setRatingError(false); }} /><label className="top3-checkbox"><input type="checkbox" checked={Boolean(form.topRank)} onChange={(event) => setForm({ ...form, topRank: event.target.checked ? form.topRank ?? 1 : undefined })} />{t("content.top3")}</label>{ratingError && <small>{t("library.ratingRequired")}</small>}</div>
               <label>{t("library.shortReview")} *<textarea required rows={4} value={form.review} onChange={(event) => setForm({ ...form, review: event.target.value })} /></label>
               <fieldset className="reading-date-field">
@@ -1483,49 +1486,71 @@ export function WriterBookEditor({ book, author, allowFreeAuthor = false, onClos
   </div>;
 }
 
-export function CommunityBooksTab({ books, catalog, users, editable, onChange }: { books: CommunityBook[]; catalog: (LibraryBook | AuthorBook)[]; users: DemoUser[]; editable: boolean; onChange: (books: CommunityBook[]) => void }) {
-  const { formatDate } = useI18n();
-  const [bookId, setBookId] = useState("");
-  const [featuredMonth, setFeaturedMonth] = useState("");
-  const [featuredYear, setFeaturedYear] = useState("");
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState("");
+type OrganizationBook = CommunityBook | AuthorBook;
+type OrganizationBooksTabProps = {
+  books: OrganizationBook[];
+  catalog: (LibraryBook | AuthorBook)[];
+  users: DemoUser[];
+  editable: boolean;
+  organizationType?: "community" | "publisher";
+  onChange: (books: OrganizationBook[]) => void;
+};
+
+export function CommunityBooksTab({ books, catalog, users, editable, organizationType = "community", onChange }: OrganizationBooksTabProps) {
+  const { t, formatDate } = useI18n();
+  const [editing, setEditing] = useState<OrganizationBook | null | undefined>(undefined);
   const [viewingBook, setViewingBook] = useState<LibraryBook | AuthorBook | null>(null);
+  const [error, setError] = useState("");
+  const monthField = organizationType === "community" ? "featuredMonth" : "publicationMonth";
+  const yearField = organizationType === "community" ? "featuredYear" : "publicationYear";
+  const publishChange = (next: OrganizationBook[]) => onChange(next);
+  const editorBook = (book: OrganizationBook): LibraryBook => ({ ...book, rating: Number(book.rating ?? 0), review: String(book.review ?? ""), readingStatus: "read", links: book.links ?? catalog.find((item) => item.id === book.id)?.links ?? [] });
   const assignedGroups = useMemo(() => {
-    const groups = new Map<string, CommunityBook[]>();
-    books.filter((book) => book.featuredMonth && book.featuredYear)
-      .sort((a, b) => (b.featuredYear! - a.featuredYear!) || (b.featuredMonth! - a.featuredMonth!))
+    const groups = new Map<string, OrganizationBook[]>();
+    books.filter((book) => book[monthField] && book[yearField])
+      .sort((a, b) => (Number(b[yearField]) - Number(a[yearField])) || (Number(b[monthField]) - Number(a[monthField])))
       .forEach((book) => {
-        const key = `${book.featuredYear}-${book.featuredMonth}`;
+        const key = `${book[yearField]}-${book[monthField]}`;
         groups.set(key, [...(groups.get(key) ?? []), book]);
       });
     return [...groups.entries()];
-  }, [books]);
-  const unassigned = useMemo(() => books.filter((book) => !book.featuredMonth || !book.featuredYear), [books]);
-  async function add() {
-    if (!bookId) { setError("Выберите книгу из каталога"); return; }
-    setBusy(true); setError("");
-    const response = await apiFetch("/api/community-books", { method: "POST", credentials: "same-origin", headers: { "content-type": "application/json" }, body: JSON.stringify({ bookId: Number(bookId), featuredMonth: featuredMonth || null, featuredYear: featuredYear || null }) });
-    const data = await response.json().catch(() => ({})) as { error?: string };
-    setBusy(false);
-    if (!response.ok) { setError(data.error ?? "Не удалось добавить книгу"); return; }
-    const selected = catalog.find((book) => book.id === Number(bookId));
-    if (selected) onChange([{ id: selected.id, author: selected.author, title: selected.title, isbn: selected.isbn, publisher: selected.publisher, genres: selected.genres, annotation: selected.annotation, coverUrl: selected.coverUrl, coverTone: selected.coverTone, isAdult: selected.isAdult, createdAtValue: selected.createdAtValue, featuredMonth: featuredMonth ? Number(featuredMonth) : undefined, featuredYear: featuredYear ? Number(featuredYear) : undefined }, ...books.filter((book) => book.id !== selected.id)]);
-    setBookId(""); setFeaturedMonth(""); setFeaturedYear("");
+  }, [books, monthField, yearField]);
+  const unassigned = useMemo(() => books.filter((book) => !book[monthField] || !book[yearField]), [books, monthField, yearField]);
+
+  async function save(book: LibraryBook) {
+    const originalId = editing?.id;
+    const canonicalId = book.catalogBookId ?? (catalog.some((item) => item.id === book.id) || books.some((item) => item.id === book.id) ? book.id : undefined);
+    const payload = { ...book, isAuthor: true, useExistingId: canonicalId, rating: undefined, review: undefined, shortReview: undefined, readingStatus: undefined, topRank: undefined };
+    let response = await apiFetch("/api/books", { method: "POST", credentials: "same-origin", headers: { "content-type": "application/json" }, body: JSON.stringify(payload) });
+    if (response.status === 409) {
+      const conflict = await response.json().catch(() => ({})) as { error?: string; match?: { id: number; title: string; author: string } };
+      if (!conflict.match || !window.confirm(t("book.matchConfirm", { author: conflict.match.author, title: conflict.match.title }))) throw new Error(conflict.error || t("book.catalogSaveError"));
+      response = await apiFetch("/api/books", { method: "POST", credentials: "same-origin", headers: { "content-type": "application/json" }, body: JSON.stringify({ ...payload, useExistingId: conflict.match.id }) });
+    }
+    const data = await response.json().catch(() => ({})) as { bookId?: number; error?: string };
+    if (!response.ok || !data.bookId) throw new Error(data.error || t("book.catalogSaveError"));
+    const normalized = { ...book, id: data.bookId, catalogBookId: data.bookId, readingStatus: "read" as const };
+    const savedBook: OrganizationBook = organizationType === "community" ? normalized : (() => { const { rating: _rating, review: _review, ...publisherBook } = normalized; return { ...publisherBook, links: publisherBook.links ?? [] } as AuthorBook; })();
+    publishChange([savedBook, ...books.filter((item) => item.id !== originalId && item.id !== savedBook.id)]);
+    setEditing(undefined);
+    setError("");
   }
+
   async function remove(id: number) {
-    setBusy(true); const response = await apiFetch(`/api/community-books/${id}`, { method: "DELETE", credentials: "same-origin" }); setBusy(false);
-    if (!response.ok) { setError("Не удалось удалить книгу"); return; } onChange(books.filter((book) => book.id !== id));
+    const response = await apiFetch(`/api/books/${id}`, { method: "DELETE", credentials: "same-origin" });
+    const data = await response.json().catch(() => ({})) as { error?: string };
+    if (!response.ok) { setError(data.error || t("book.deleteError")); return; }
+    publishChange(books.filter((book) => book.id !== id));
+    setViewingBook(null);
   }
-  const monthLabel = (book: CommunityBook) => {
-    const month = formatDate(new Date(Date.UTC(2000, (book.featuredMonth ?? 1) - 1, 1)), { month: "long", timeZone: "UTC" });
-    return `${month.slice(0, 1).toLocaleUpperCase()}${month.slice(1)} ${book.featuredYear}`;
+
+  const monthLabel = (book: OrganizationBook) => {
+    const month = formatDate(new Date(Date.UTC(2000, Number(book[monthField] ?? 1) - 1, 1)), { month: "long", timeZone: "UTC" });
+    return `${month.slice(0, 1).toLocaleUpperCase()}${month.slice(1)} ${book[yearField]}`;
   };
-  const card = (book: CommunityBook) => {
-    const catalogBook = catalog.find((item) => item.id === book.id);
-    return <article className="library-book community-book-card material-clickable-card" role="button" tabIndex={catalogBook ? 0 : -1} key={book.id} onClick={() => catalogBook && setViewingBook(catalogBook)} onKeyDown={(event) => { if (catalogBook && (event.key === "Enter" || event.key === " ")) { event.preventDefault(); setViewingBook(catalogBook); } }}><div className={`library-book-cover library-cover-${book.coverTone}`} style={book.coverUrl ? { backgroundImage: `url(${book.coverUrl})` } : undefined}>{!book.coverUrl && <><em>{book.author}</em><strong>{book.title}</strong></>}</div><div className="library-book-copy"><h3>{book.title}</h3><p>{book.author}</p>{editable && <button type="button" className="text-link-button" disabled={busy} onClick={(event) => { event.stopPropagation(); void remove(book.id); }}>Удалить</button>}</div></article>;
-  };
-  return <section className="community-books-tab"><div className="community-book-grid">{unassigned.map(card)}</div>{assignedGroups.length > 0 && <div className="community-featured-groups">{assignedGroups.map(([key, group]) => <section key={key} className={`community-featured-group ${group.length >= 3 ? "is-wide" : "is-compact"}`}><h2>{monthLabel(group[0])}</h2><div className="community-book-grid">{group.map(card)}</div></section>)}</div>}{!books.length && <div className="profile-tab-placeholder">Книги сообщества пока не добавлены</div>}{editable && <div className="community-books-editor"><CustomSelect ariaLabel="Книга" value={bookId} onChange={setBookId} options={[{ value: "", label: "Выберите книгу из каталога" }, ...catalog.map((book) => ({ value: String(book.id), label: `${book.author} — ${book.title}` }))]} /><fieldset className="community-book-month-fields"><legend>Книга месяца</legend><label>Месяц<input type="number" min="1" max="12" placeholder="Месяц" value={featuredMonth} onChange={(event) => setFeaturedMonth(event.target.value)} /></label><label>Год<input type="number" min="2000" max="2100" placeholder="Год" value={featuredYear} onChange={(event) => setFeaturedYear(event.target.value)} /></label></fieldset><button className="primary-button" type="button" disabled={busy} onClick={() => void add()}>Добавить книгу</button>{error && <p className="form-error">{error}</p>}</div>}{viewingBook && <UnifiedBookModal book={viewingBook} users={users} catalog={catalog} onClose={() => setViewingBook(null)} />}</section>;
+  const openBook = (book: OrganizationBook) => setViewingBook(catalog.find((item) => item.id === book.id) ?? editorBook(book));
+  const card = (book: OrganizationBook) => <article className="library-book community-book-card material-clickable-card" role="button" tabIndex={0} key={book.id} onClick={() => openBook(book)} onKeyDown={(event) => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); openBook(book); } }}><div className={`library-book-cover library-cover-${book.coverTone}`} style={book.coverUrl ? { backgroundImage: `url(${book.coverUrl})` } : undefined}>{!book.coverUrl && <><em>{book.author}</em><strong>{book.title}</strong></>}</div><div className="library-book-copy"><h3>{book.title}</h3><p>{book.author}</p></div></article>;
+  return <section className="community-books-tab"><div className="profile-title-row library-title-row"><div><h1>{t(organizationType === "community" ? "profile.communityBooks" : "profile.publisherBooks")}</h1></div>{editable && <button className="primary-button creation-action-button" type="button" onClick={() => setEditing(null)}>＋ {t("content.addBook")}</button>}</div><div className="community-book-grid">{unassigned.map(card)}</div>{assignedGroups.length > 0 && <div className="community-featured-groups">{assignedGroups.map(([key, group]) => <section key={key} className={`community-featured-group ${group.length >= 3 ? "is-wide" : "is-compact"}`}><h2>{monthLabel(group[0])}</h2><div className="community-book-grid">{group.map(card)}</div></section>)}</div>}{!books.length && <div className="profile-tab-placeholder">{organizationType === "community" ? "Книги сообщества пока не добавлены" : "Книги издательства пока не добавлены"}</div>}{error && <p className="form-error">{error}</p>}{editing !== undefined && <BookEditor book={editing ? editorBook(editing) : null} catalog={catalog} mode={organizationType} onClose={() => setEditing(undefined)} onSave={save} />}{viewingBook && <UnifiedBookModal book={viewingBook} users={users} catalog={catalog} onClose={() => setViewingBook(null)} onEdit={editable ? () => { const source = books.find((book) => book.id === viewingBook.id); if (source) setEditing(source); setViewingBook(null); } : undefined} onDelete={editable ? () => void remove(viewingBook.id) : undefined} />}</section>;
 }
 
 export function AuthorBooksTab({ books, setBooks, userId, author, users, publisherMode = false, communityMode = false, canCreate = true }: { books: AuthorBook[]; setBooks: React.Dispatch<React.SetStateAction<AuthorBook[]>>; userId: number; author: string; users: DemoUser[]; publisherMode?: boolean; communityMode?: boolean; canCreate?: boolean }) {

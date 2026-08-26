@@ -3743,7 +3743,11 @@ select {
     display: block;
     grid-column: 2;
     justify-self: center;
+    border: 0;
+    padding: 0;
     color: #111;
+    background: transparent;
+    cursor: pointer;
     font: 700 clamp(19px, 1.65vw, 27px)/1 Georgia, serif;
     letter-spacing: -.03em;
   }
@@ -3890,6 +3894,7 @@ select {
   .directory-heading > h1,
   .creation-action-button { display: none !important; }
   .my-profile-main.library-main .library-import-actions > .creation-action-button { display: inline-flex !important; }
+  .my-profile-main .community-books-tab .creation-action-button { display: inline-flex !important; }
   .directory-heading { width: min(920px, 100%); margin: 0 auto 22px; }
   .directory-heading, .directory-heading > .directory-controls,
   .organization-directory-filters { justify-content: center; }
@@ -3953,9 +3958,10 @@ select {
   .app-shell > .mobile-shell-surface { height: 100vh; min-height: 0; overflow: hidden; }
   .app-shell > .mobile-shell-surface > .my-profile-page { height: calc(100vh - var(--desktop-header-height)); min-height: 0; overflow-y: auto; scrollbar-gutter: stable; box-sizing: border-box; }
 
-  .brand-header-logo { position: absolute; left: 110px; justify-self: auto; transform: translateX(-50%); }
-  .desktop-brand-mark { width: 58px; height: 58px; }
-  .desktop-brand-title { position: absolute; grid-column: auto; left: calc(50% + 110px); width: min(330px, 28vw); height: 54px; transform: translateX(-50%); }
+  .brand-header-logo { position: absolute; left: 110px; width: 76px; height: 66px; justify-content: center; justify-self: auto; overflow: visible; transform: translateX(-50%); }
+  .brand-header-logo .mobile-brand-logo { display: none !important; }
+  .desktop-brand-mark { width: 68px; height: 60px; object-fit: contain; }
+  .desktop-brand-title { position: absolute; grid-column: auto; left: calc(50% + 110px); width: min(360px, 31vw); height: 58px; transform: translateX(-50%); }
   .desktop-brand-title img { display: block; width: 100%; height: 100%; object-fit: contain; }
   .topbar-account-actions { gap: 8px; }
   .topbar-account-actions .user-copy { display: none; }

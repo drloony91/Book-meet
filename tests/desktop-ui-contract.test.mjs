@@ -36,7 +36,9 @@ test("desktop routes, username and privacy controls have stable contracts", asyn
   assert.match(profile, /profile-material-stream/);
   assert.match(profile, /profile-main-nav/);
   assert.doesNotMatch(profile, /openTab\("settings"\)|activeTab === "settings"/);
-  assert.match(profile, /profile\.type !== "Издатель" && <section className="profile-edit-settings-section profile-privacy-settings"/);
+  assert.match(profile, /profile\.type !== "Сообщество" && \[/);
+  assert.match(profile, /profile\.type === "Сообщество" && <label className="profile-checkbox"/);
+  assert.match(profile, /\["Читатель", "Писатель", "Блогер"\]\.includes\(profile\.type\) \? \[\(\["wishlistVisibility"/);
   assert.doesNotMatch(profile, /profile-menu-order-list/);
   assert.match(profile, /eventTimestamp\(item\) >= Date\.now\(\)/);
   assert.match(profile, /t\("common\.back"\)/);
@@ -59,7 +61,9 @@ test("desktop routes, username and privacy controls have stable contracts", asyn
   assert.match(content, /profile\.publisherNews/);
   assert.match(layout, /bell-active\.png/);
   assert.match(layout, /desktop-quick-create-menu/);
-  assert.match(layout, /book-meet-brand-v4\.png/);
+  assert.match(layout, /mobile-brand-logo[^>]*src="\/book-meet-brand-v4\.png"/);
+  assert.match(layout, /desktop-brand-mark[^>]*src="\/book-meet-favicon-v3\.png"/);
+  assert.match(layout, /desktop-brand-title/);
   assert.ok(brandImage.length > 0);
   assert.match(controller, /toggleSave/);
   assert.match(controller, /savedMaterialRefs/);
@@ -71,6 +75,7 @@ test("desktop routes, username and privacy controls have stable contracts", asyn
   assert.match(css, /mobile-chat-button\.mobile-chat-button-hidden/);
   assert.match(css, /\.desktop-navigation \{ top: 0; height: 100%; overflow: visible; \}/);
   assert.match(css, /\.brand-logo-image/);
+  assert.match(css, /left: calc\(50% \+ 110px\)/);
   assert.match(css, /\.app-shell > \.mobile-shell-surface \{ height: 100vh; min-height: 0; overflow: hidden; \}/);
   assert.match(css, /\.app-shell > \.mobile-shell-surface > \.my-profile-page \{ height: calc\(100vh - var\(--desktop-header-height\)\); min-height: 0; overflow-y: auto; scrollbar-gutter: stable;/);
   assert.match(css, /\.my-profile-page \{ width: 100%; \}/);
@@ -80,6 +85,7 @@ test("desktop routes, username and privacy controls have stable contracts", asyn
   assert.match(css, /publication-preview-card/);
   assert.match(css, /profile-main-nav/);
   assert.match(css, /\.my-profile-main\.library-main \.library-import-actions > \.creation-action-button \{ display: inline-flex !important; \}/);
+  assert.match(css, /\.my-profile-main \.community-books-tab \.creation-action-button \{ display: inline-flex !important; \}/);
   assert.match(messages, /"content\.createOccasion": "Познакомиться"/);
   assert.match(messages, /"directory\.everyone": "Все"/);
   assert.match(messages, /"profile\.publisherNews": \["Новости издательства"/);
