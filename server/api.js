@@ -552,15 +552,19 @@ function normalizeIsbn(value) {
   return normalized.length === 10 || normalized.length === 13 ? normalized : "";
 }
 
-function marketplaceFromUrl(value) {
-  const url = new URL(cleanUrl(value));
+export function marketplaceFromUrl(value) {
+  const normalizedUrl = cleanUrl(value);
+  if (!normalizedUrl) throw Object.assign(new Error("Укажите ссылку Flip.kz"), { statusCode: 400, code: "INVALID_URL" });
+  const url = new URL(normalizedUrl);
   const host = url.hostname.toLowerCase().replace(/^www\./, "");
   if (host === "flip.kz" || host.endsWith(".flip.kz")) return { name: "Flip", url };
   throw Object.assign(new Error("Поддерживаются только ссылки Flip.kz"), { statusCode: 400 });
 }
 
-function bookSourceFromUrl(value) {
-  const url = new URL(cleanUrl(value));
+export function bookSourceFromUrl(value) {
+  const normalizedUrl = cleanUrl(value);
+  if (!normalizedUrl) throw Object.assign(new Error("Укажите ссылку на книгу"), { statusCode: 400, code: "INVALID_URL" });
+  const url = new URL(normalizedUrl);
   const host = url.hostname.toLowerCase().replace(/^www\./, "");
   if (host === "flip.kz" || host.endsWith(".flip.kz")) return { name: "Flip", url, suggestedAction: "Купить" };
   if (host === "meloman.kz" || host.endsWith(".meloman.kz") || host === "marwin.kz" || host.endsWith(".marwin.kz")) return { name: "Marwin/Меломан", url, suggestedAction: "Купить" };
@@ -696,7 +700,7 @@ function bookProductFromHtml(html, source) {
   };
 }
 
-async function fetchBookProduct(productUrl, flipOnly = false) {
+export async function fetchBookProduct(productUrl, flipOnly = false) {
   const source = flipOnly ? { ...marketplaceFromUrl(productUrl), suggestedAction: "Купить" } : bookSourceFromUrl(productUrl);
   let currentUrl = source.url;
   const controller = new AbortController();
@@ -882,7 +886,7 @@ async function requireApprovedPublisher(connection, userId) {
   return access;
 }
 
-function publisherSalesLinks(value) {
+export function publisherSalesLinks(value) {
   if (!Array.isArray(value)) return [];
   return value.slice(0, 5).map((item, index) => ({
     id: Number(item?.id) || Date.now() + index,

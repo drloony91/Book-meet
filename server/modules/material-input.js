@@ -7,8 +7,15 @@ export const CYRILLIC_CITY_PATTERN = /^[А-ЯЁа-яёІіҢңҒғҮүҰұҚқӨ
 
 export function cleanUrl(value) {
   if (!value) return "";
-  const url = new URL(String(value));
-  if (!["http:", "https:"].includes(url.protocol)) throw new Error("Разрешены только HTTP/HTTPS ссылки");
+  let url;
+  try {
+    url = new URL(String(value).trim());
+  } catch {
+    throw Object.assign(new Error("Введите корректную HTTP/HTTPS ссылку"), { statusCode: 400, code: "INVALID_URL" });
+  }
+  if (!["http:", "https:"].includes(url.protocol)) {
+    throw Object.assign(new Error("Разрешены только HTTP/HTTPS ссылки"), { statusCode: 400, code: "INVALID_URL" });
+  }
   return url.toString();
 }
 
