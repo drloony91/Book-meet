@@ -19,7 +19,7 @@ Browser
 
 `server/index.js`:
 
-- проверяет production invariants (`DEMO_MODE`, `AUDIT_HASH_SECRET`), canonical/legacy origin и `PORT`;
+- проверяет production invariants (`DEMO_MODE`, `AUDIT_HASH_SECRET`), configured `APP_ORIGIN` и `PORT`;
 - ставит JSON/urlencoded limits, security headers (CSP, HSTS в production, `nosniff`, frame/referrer/permissions policies), Origin guard и `apiRateLimit`;
 - публикует `/uploads`, монтирует `/api`, затем Vite middleware в development или `dist/client` + SPA fallback в production/demo;
 - запускает Telegram outbox dispatcher и graceful shutdown.

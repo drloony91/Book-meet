@@ -8,7 +8,7 @@ pnpm verify
 git diff --check
 ```
 
-`pnpm run setup` installs the locked dependency graph with pnpm 11.9.0. `pnpm run check` runs the type-check, safe static architecture and migration checks, and generated-doc freshness. `pnpm verify` runs `pnpm run check && pnpm test`; `pnpm test` first runs `vite build`, then the Node test inventory from `package.json`, including security, architecture, bootstrap, compliance, desktop/mobile contracts, search, spreadsheet lazy loading and `tests/codex-docs-contract.test.mjs`.
+`packageManager` pins pnpm 11.9.0 and CI installs that exact version before `pnpm run setup`; the repository intentionally has no `.node-version`. CI uses Node 22.13.0 while `engines.node` accepts Node 22.13.0 or newer. Record the exact Node/pnpm versions for every staging or release run instead of assuming the local shell matches CI. `pnpm run setup` installs the locked dependency graph. `pnpm run check` runs the type-check, safe static architecture and migration checks, and generated-doc freshness. `pnpm verify` runs `pnpm run check && pnpm test`; `pnpm test` first runs `vite build`, then the Node test inventory from `package.json`, including security, architecture, bootstrap, compliance, desktop/mobile contracts, search, spreadsheet lazy loading and `tests/codex-docs-contract.test.mjs`.
 
 The architecture check rejects global `fetch(` in active browser source outside `app/services/api.ts`; JSON boundary tests cover record/array validation without network access.
 
@@ -84,13 +84,19 @@ The fixture fails on page errors, console errors and non-React unexpected warnin
 | Client behavior/routing/CSS | focused contract or regression test, `pnpm lint`, `pnpm test`, `pnpm build`, browser smoke at affected desktop/mobile breakpoints |
 | API/auth/privacy/moderation | focused security/architecture/compliance test, full `pnpm test`, type-check/build, inspect server authorization and transaction boundaries |
 | SQL/migration/data ownership | migration contract plus real MySQL apply on a disposable/prepared database; inspect nullable/FK/cascade and rollback/retry implications |
-| External integration/deployment | local contracts plus configured staging/production smoke: `/api/health`, assets, direct SPA paths, integration-specific action; never put secrets in tests/docs |
+| External integration/deployment | local contracts plus configured staging/production smoke: `/api/health`, assets, direct SPA paths, login/logout and logs; never put secrets in tests/docs |
+
+## Staging smoke contract
+
+The permanent staging target is `https://staging.bookmeet.club`, isolated from `https://bookmeet.club`. A staging run must use Node `22.13.0` (or a recorded version satisfying `engines.node`), `pnpm@11.9.0`, `pnpm install --frozen-lockfile`, a clean staging MariaDB database/user, and `../book-meet-staging-uploads`. Apply the complete migration chain, run `pnpm db:migrate:status`, repeat `pnpm db:migrate` and status to prove a no-op, then seed only the explicitly configured staging admin.
+
+With Basic Auth or an equivalent access restriction in place, check staging HTTPS, `/api/health`, `/`, `/books`, a direct SPA route, fresh assets, login/logout, upload persistence and application/Plesk logs. At the Plesk/nginx boundary verify HSTS, CSP, `X-Content-Type-Options: nosniff`, framing protection and `X-Robots-Tag: noindex, nofollow, noarchive`. Google, SMTP and Telegram remain disabled until a separate explicit safety decision; no staging smoke may send to ordinary users. The runbook is a procedure, not evidence that staging currently exists or has passed.
 
 ## Explicit gaps
 
 - `pnpm verify` does **not** provision or connect to a disposable real MySQL/MariaDB instance. `server/demo-api.js` is an in-memory adapter and cannot prove SQL schema, transaction atomicity, DDL migration recovery, indexes or production seed behavior. `pnpm verify:db` covers these only when Docker Desktop/Compose is actually available and succeeds.
 - The Playwright browser suite is intentionally separate from `pnpm test` and `pnpm verify` because it requires an installed browser and a longer build/server run. Static mobile/desktop contracts do not replace browser QA; use the browser gates above for navigation, responsive CSS, chat, modal and upload changes.
-- Production checks are not run by CI. Before a Plesk release, separately verify `/api/health`, fresh JS/CSS, direct routes, HTTPS/legacy redirect, migration/seed and relevant authenticated behavior.
+- Production checks are not run by CI. Before a Plesk release, separately verify `/api/health`, fresh JS/CSS, direct routes, HTTPS, migration/seed and relevant authenticated behavior. Staging checks must be completed against its isolated domain, database, uploads and credentials before any production decision.
 - `pnpm audit --audit-level high` is a separate dependency check; it is not silently folded into `pnpm verify`.
 
 ## Demo smoke (optional)
@@ -100,7 +106,7 @@ With safe local settings, `pnpm demo` can prove process startup, `/api/health`, 
 ## Definition of done for future Codex tasks
 
 - Start from `AGENTS.md` and `INDEX.md`; use active paths and reference implementations from `CONVENTIONS.md`.
-- Use Node `22.13.0`, `pnpm@11.9.0` and the frozen lockfile; update `.env.example` only with safe non-secret values.
+- Use a Node version accepted by `engines.node` (CI baseline `22.13.0`), exact `pnpm@11.9.0` and the frozen lockfile; update `.env.example` only with safe non-secret values.
 - Run `pnpm check` while iterating and `pnpm verify` before handoff; run dependency audit and `git diff --check` explicitly.
 - Keep browser HTTP behind `apiFetch`, client/server imports within enforced boundaries, migrations append-only/contiguous, and generated maps fresh.
 - Add or update explicit types/runtime validation at any changed untrusted data boundary; preserve server authorization and frontend/backend response expectations.

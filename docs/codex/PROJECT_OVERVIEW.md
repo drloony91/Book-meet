@@ -1,6 +1,6 @@
 # Project overview
 
-Book Meet — web MVP социальной книжной платформы для читателей, авторов/блогеров, издателей и сообществ. Канонический production origin задаётся `APP_ORIGIN` (текущий публичный домен — `https://bookmeet.club`); legacy origin перенаправляется сервером. Telegram-бот, Workers и D1 не являются частью runtime приложения.
+Book Meet — web MVP социальной книжной платформы для читателей, авторов/блогеров, издателей и сообществ. Канонический production origin задаётся `APP_ORIGIN` (текущий публичный домен — `https://bookmeet.club`); retired legacy hosts не входят в runtime. Telegram-бот, Workers и D1 не являются частью runtime приложения.
 
 ## Runtime
 
@@ -13,7 +13,9 @@ Book Meet — web MVP социальной книжной платформы д�
 | Schema lifecycle | последовательные SQL-файлы 001–033, runner | `mysql/migrations/`, `scripts/migrate.js` |
 | Assets | Vite build в `dist/client`, user images в `UPLOAD_DIR` и `/uploads` | `vite.config.ts`, `server/index.js`, `server/modules/image-storage.js` |
 
-Canonical development toolchain: `.node-version` = Node `22.13.0`, `packageManager` = `pnpm@11.9.0`; clean setup is `pnpm run setup`. Exact route/schema inventories are generated under `docs/codex/generated/` and checked by `pnpm check`.
+Canonical development toolchain: `engines.node` accepts Node `>=22.13.0`, `packageManager` pins `pnpm@11.9.0`; clean setup is `pnpm run setup`. Exact route/schema inventories are generated under `docs/codex/generated/` and checked by `pnpm check`.
+
+Deployment topology is permanent and isolated: production (`bookmeet.club`), staging (`staging.bookmeet.club` with its own MariaDB database/user, admin credentials, secrets and `../book-meet-staging-uploads`), local/demo (`DEMO_MODE=1`, in-memory) and local disposable MySQL (`127.0.0.1:3307`, test-only `book_meet_test`).
 
 ## Product surface
 

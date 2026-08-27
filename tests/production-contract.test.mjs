@@ -19,17 +19,62 @@ const readFrontendSource = async () => (await Promise.all([
   ["app", "components", "content", "ContentComponents.tsx"],
 ].map((segments) => readFile(path.join(root, ...segments), "utf8")))).join("\n");
 
-test("legacy production domain redirects to the canonical origin without losing the path", async () => {
+test("production canonical origin does not depend on the retired legacy domain", async () => {
   const server = await readFile(path.join(root, "server", "index.js"), "utf8");
   const environment = await readFile(path.join(root, ".env.example"), "utf8");
   const deployRunbook = await readFile(path.join(root, "PLESK_DEPLOY.md"), "utf8");
-  assert.match(server, /configuredOrigin\(process\.env\.LEGACY_ORIGIN\)/);
-  assert.match(server, /request\.hostname\.toLowerCase\(\) !== legacyHostname/);
-  assert.match(server, /response\.redirect\(301, `\$\{canonicalOrigin\}\$\{requestPath\}`\)/);
+  assert.doesNotMatch(server, /LEGACY_ORIGIN|configuredOrigin|legacyHostname|response\.redirect\(301/);
   assert.match(environment, /APP_ORIGIN=http:\/\/localhost:3000/);
-  assert.match(environment, /^LEGACY_ORIGIN=$/m);
+  assert.doesNotMatch(environment, /LEGACY_ORIGIN/);
   assert.match(deployRunbook, /APP_ORIGIN=https:\/\/bookmeet\.club/);
-  assert.match(deployRunbook, /LEGACY_ORIGIN=https:\/\/bot\.oqyastana\.kz/);
+  assert.doesNotMatch(deployRunbook, /LEGACY_ORIGIN=https?:\/\//);
+  assert.match(deployRunbook, /retired/i);
+});
+
+test("deployment contract separates production, staging, demo and disposable MySQL", async () => {
+  const readme = await readFile(path.join(root, "README.md"), "utf8");
+  const integrations = await readFile(path.join(root, "docs", "codex", "INTEGRATIONS.md"), "utf8");
+  const testing = await readFile(path.join(root, "docs", "codex", "TESTING.md"), "utf8");
+  const deployRunbook = await readFile(path.join(root, "PLESK_DEPLOY.md"), "utf8");
+  const readiness = await readFile(path.join(root, "docs", "codex", "PRODUCTION_READINESS.md"), "utf8");
+  for (const document of [readme, integrations, deployRunbook]) {
+    assert.match(document, /bookmeet\.club/);
+    assert.match(document, /staging\.bookmeet\.club/);
+    assert.match(document, /DEMO_MODE=1/);
+    assert.match(document, /127\.0\.0\.1:3307/);
+    assert.match(document, /book_meet_test/);
+  }
+  assert.match(deployRunbook, /book_meet_staging/);
+  assert.match(deployRunbook, /book-meet-staging-uploads/);
+  assert.match(deployRunbook, /install --frozen-lockfile/);
+  assert.match(deployRunbook, /db:migrate:status/);
+  assert.match(deployRunbook, /второй migration run будет no-op/is);
+  assert.match(deployRunbook, /Basic Auth/i);
+  assert.match(deployRunbook, /X-Robots-Tag: noindex, nofollow, noarchive/);
+  assert.match(deployRunbook, /HSTS.*CSP.*X-Content-Type-Options/is);
+  assert.match(deployRunbook, /Google, SMTP и Telegram.*выключены/is);
+  assert.match(deployRunbook, /malformed publisher website.*400.*500/is);
+  assert.match(deployRunbook, /malformed publisher sales links.*400.*500/is);
+  assert.match(deployRunbook, /пустые optional URLs.*валидными/is);
+  assert.match(deployRunbook, /malformed\/incomplete URL в `\/api\/books\/preview`.*400.*500/is);
+  assert.match(deployRunbook, /корректные URL Flip, Marwin\/Меломан и Яндекс\.Книги.*успешно/is);
+  for (const profileType of ["Читатель", "Писатель", "Блогер", "Издатель", "Сообщество"]) {
+    assert.match(deployRunbook, new RegExp(profileType));
+  }
+  assert.match(deployRunbook, /PUT `?\/api\/users\/me\/state/);
+  assert.match(deployRunbook, /После этих URL\/profile сценариев.*HTTP 500/is);
+  assert.match(testing, /Staging smoke contract/);
+  assert.match(readiness, /Staging verification status/);
+  assert.match(readiness, /PENDING.*live не проверялось/is);
+  assert.match(readiness, /Staging URL\/profile regression checklist/);
+  assert.match(readiness, /malformed publisher website.*400.*500/is);
+  assert.match(readiness, /malformed publisher sales links.*400.*500/is);
+  assert.match(readiness, /empty optional URLs.*валидными/is);
+  assert.match(readiness, /malformed\/incomplete URL.*`\/api\/books\/preview`.*400.*500/is);
+  assert.match(readiness, /Flip, Marwin\/Меломан и Яндекс\.Книги.*успешно/is);
+  assert.match(readiness, /`PUT \/api\/users\/me\/state`/);
+  assert.match(readiness, /Читатель.*Писатель.*Блогер.*Издатель.*Сообщество/is);
+  assert.match(readiness, /после всех URL\/profile сценариев.*HTTP 500/is);
 });
 
 test("Block 1 фиксирует fail-fast verify и production-safe seed", async () => {
@@ -55,7 +100,7 @@ test("Block 1 документация использует canonical domain, о
   const plesk = await readFile(path.join(root, "PLESK_DEPLOY.md"), "utf8");
   for (const document of [readme, plesk]) {
     assert.match(document, /bookmeet\.club/);
-    assert.match(document, /bot\.oqyastana\.kz.*legacy|legacy.*bot\.oqyastana\.kz/is);
+    assert.doesNotMatch(document, /LEGACY_ORIGIN=https?:\/\//);
     assert.doesNotMatch(document, /\bnpm\s+(?:install|ci)\b/i);
     assert.doesNotMatch(document, /TEST2_PASSWORD|Тест 2|обоими тестовыми аккаунтами|Из Тест 1/);
   }

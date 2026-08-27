@@ -13,15 +13,6 @@ const uploadRoot = path.resolve(projectRoot, process.env.UPLOAD_DIR || "uploads"
 const production = process.env.NODE_ENV === "production";
 const demoMode = process.env.DEMO_MODE === "1";
 
-function configuredOrigin(value) {
-  if (!value) return null;
-  try {
-    return new URL(value).origin;
-  } catch {
-    return null;
-  }
-}
-
 async function start() {
   if (production && demoMode) {
     throw new Error("DEMO_MODE запрещён в production");
@@ -35,16 +26,6 @@ async function start() {
 
   app.disable("x-powered-by");
   app.set("trust proxy", 1);
-  const canonicalOrigin = configuredOrigin(process.env.APP_ORIGIN);
-  const legacyOrigin = configuredOrigin(process.env.LEGACY_ORIGIN);
-  if (canonicalOrigin && legacyOrigin && canonicalOrigin !== legacyOrigin) {
-    const legacyHostname = new URL(legacyOrigin).hostname.toLowerCase();
-    app.use((request, response, next) => {
-      if (request.hostname.toLowerCase() !== legacyHostname) return next();
-      const requestPath = request.originalUrl.startsWith("/") ? request.originalUrl : `/${request.originalUrl}`;
-      return response.redirect(301, `${canonicalOrigin}${requestPath}`);
-    });
-  }
   app.use(express.json({ limit: "8mb" }));
   app.use(express.urlencoded({ extended: false, limit: "1mb" }));
   app.use((_request, response, next) => {

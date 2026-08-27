@@ -17,7 +17,7 @@
 | Endpoint contract or route navigation | [ROUTES_AND_API.md](./ROUTES_AND_API.md), [CODE_MAP.md](./CODE_MAP.md) | `app/navigation/routes.ts`, `server/api.js`, `server/modules/bootstrap-router.js` |
 | Schema, ownership, nullable fields, cascade | [DATA_MODEL.md](./DATA_MODEL.md) | `mysql/migrations/001_initial.sql` … `033_profile_birth_date_visibility.sql`, `scripts/migrate.js`, `server/data.js` |
 | External services and deployment | [INTEGRATIONS.md](./INTEGRATIONS.md), [TESTING.md](./TESTING.md) | `.env.example`, `server/index.js`, `PLESK_DEPLOY.md` |
-| New change, regression, release readiness | [CONVENTIONS.md](./CONVENTIONS.md), [TESTING.md](./TESTING.md), [KNOWN_TECH_DEBT.md](./KNOWN_TECH_DEBT.md) | `package.json`, `tests/`, `.github/workflows/ci.yml` |
+| New change, regression, release readiness | [CONVENTIONS.md](./CONVENTIONS.md), [TESTING.md](./TESTING.md), [PRODUCTION_READINESS.md](./PRODUCTION_READINESS.md), [KNOWN_TECH_DEBT.md](./KNOWN_TECH_DEBT.md) | `package.json`, `tests/`, `.github/workflows/ci.yml` |
 
 ## Canonical documents
 
@@ -30,6 +30,7 @@
 - [INTEGRATIONS.md](./INTEGRATIONS.md) — интеграционные границы и имена env-переменных без значений.
 - [CONVENTIONS.md](./CONVENTIONS.md) — соглашения для безопасных изменений.
 - [TESTING.md](./TESTING.md) — canonical check, тестовая матрица и честные gaps.
+- [PRODUCTION_READINESS.md](./PRODUCTION_READINESS.md) — короткий staging/production gate, текущий verification snapshot и обязательный rollback preflight.
 - [KNOWN_TECH_DEBT.md](./KNOWN_TECH_DEBT.md) — unresolved/residual долги и scope выполненных блоков.
 
 Generated structural inventories are maintained by `pnpm docs:generate` and checked by `pnpm docs:check`: [generated/API_ROUTES.md](./generated/API_ROUTES.md), [generated/FRONTEND_ROUTES.md](./generated/FRONTEND_ROUTES.md), [generated/SCHEMA.md](./generated/SCHEMA.md). Do not edit generated files directly.

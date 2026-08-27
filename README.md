@@ -2,7 +2,18 @@
 
 Самостоятельное web-приложение Book Meet для размещения на Hoster.kz/Plesk. Telegram-бот, Cloudflare Workers и D1 приложению не нужны.
 
-Канонический адрес приложения — `https://bookmeet.club`. Старый адрес `https://bot.oqyastana.kz` используется как legacy-домен и перенаправляет запросы на canonical origin ответом 301 с сохранением пути.
+Канонический production-адрес приложения — `https://bookmeet.club`. Retired `bot.oqyastana.kz` не входит в текущую конфигурацию: DNS, `LEGACY_ORIGIN` и runtime redirect для него не требуются.
+
+Постоянная topology проекта разделена на четыре среды:
+
+| Среда | Назначение | Граница данных |
+| --- | --- | --- |
+| Production | `https://bookmeet.club` | отдельная production MariaDB и `../book-meet-uploads` |
+| Staging | `https://staging.bookmeet.club` | отдельная чистая MariaDB, DB user и `../book-meet-staging-uploads`; production data не копируется |
+| Local/demo | `DEMO_MODE=1` | in-memory adapter, без внешней БД и integrations |
+| Local disposable MySQL | `127.0.0.1:3307` | test-only `book_meet_test` из `compose.mysql-test.yml`, удаляемый после проверки |
+
+Production и staging используют разные DB credentials, seed admin, upload storage и secrets. Подробный staging runbook находится в [PLESK_DEPLOY.md](./PLESK_DEPLOY.md).
 
 ## Архитектура
 
@@ -59,7 +70,7 @@ corepack pnpm run dev
 
 Для production переменные `ADMIN_EMAIL` и `TEST1_PASSWORD` нужно задать явно до первого запуска seed. Не храните их значения в Git.
 
-Production использует другие значения: `NODE_ENV=production`, `APP_ORIGIN=https://bookmeet.club`, отдельного пользователя БД без root, production `UPLOAD_DIR`, сильные `TEST1_PASSWORD`/`ADMIN_EMAIL` и legacy-origin. Полный список и порядок настройки находятся в [PLESK_DEPLOY.md](./PLESK_DEPLOY.md); локальный `.env.example` намеренно не содержит production endpoints или credentials.
+Production использует другие значения: `NODE_ENV=production`, `APP_ORIGIN=https://bookmeet.club`, отдельного пользователя БД без root, production `UPLOAD_DIR` и сильные `TEST1_PASSWORD`/`ADMIN_EMAIL`. Staging использует те же runtime boundaries с собственными domain, DB, uploads, admin и secrets; Google, SMTP и Telegram на staging выключены до отдельного явного решения. Полный список и порядок настройки находятся в [PLESK_DEPLOY.md](./PLESK_DEPLOY.md); локальный `.env.example` намеренно не содержит production/staging endpoints или credentials.
 
 ## Production
 
