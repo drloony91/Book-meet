@@ -1,6 +1,6 @@
 # Book Meet production-readiness gate
 
-Этот gate выполняется до отдельного решения о production deployment. Он не разрешает migrations, restart, изменение environment или данных production.
+Этот gate выполняется до отдельного решения о production deployment. Он не разрешает migrations, restart, произвольное изменение environment или данных production. Единственное точечное исключение финальной подготовки от 28 августа 2026 — явно разрешённое `LEGAL_CONSENT_REQUIRED=1`, фиксирующее уже действовавший default без изменения legal-gate поведения.
 
 ## Обязательные gates
 
@@ -18,6 +18,34 @@
 - [x] После smoke и restart в application/Plesk logs нет новых 5xx, unhandled, DB, auth или upload errors.
 - [x] Подготовлен и, где безопасно, отрепетирован rollback кода/process; для DB указано, где возможен только restore backup, включая partial DDL.
 - [ ] Production deployment отдельно и явно разрешён пользователем после итогового verdict.
+
+## Final production preparation — 2026-08-28
+
+Verdict: **PRODUCTION READY WITH EXPLICIT RISKS**. Production deployment, migrations и restart не выполнялись; production data не изменялись.
+
+| Предыдущий blocker | Фактическое evidence | Статус |
+| --- | --- | --- |
+| Stray runtime export | Единственный unstaged hunk `export function bookProductFromHtml` удалён точечно. Runtime/source и migrations снова не имеют diff относительно staging-tested candidate `8107864d0c18e4ee77142b7de8104df588f918a6`; оставшиеся локальные изменения — canonical env example, focused test и этот readiness report | RESOLVED |
+| Credentials exposure | Focused scan текущего tracked tree, Git history по известным token/private-key форматам и release archive не нашёл фактических secret values или приватных env-файлов; значения не переносились в Git, evidence или отчёт. Пользователь явно отложил ротацию production credentials | ACCEPTED EXPLICIT RISK: выполнить coordinated rotation после deployment window; доказанная утечка немедленно вернёт статус BLOCKED |
+| Legal consent ambiguity | Staging не имел явного `LEGAL_CONSENT_REQUIRED=0` и работал по default `1`. В production Plesk сохранено только `LEGAL_CONSENT_REQUIRED=1`; UI показывает status `configured`. Health/MySQL остались PASS без restart, а публичный legal contract остался `required=true`, `configured=true`. `.env.example` теперь содержит `LEGAL_CONSENT_REQUIRED=1`; focused test доказывает эквивалентность default и явного `1`, а также обязательность полного registration consent | RESOLVED |
+
+### Финальный verification snapshot
+
+- `pnpm verify`: PASS, production build и 129/129 tests;
+- `pnpm verify:db`: PASS, 2/2 disposable-MySQL integration tests; scoped container, volume и network удалены;
+- `pnpm test:e2e`: 23 PASS, 1 ожидаемый desktop project-skip;
+- `pnpm audit --audit-level high`: PASS, no known vulnerabilities;
+- `git diff --check`: PASS;
+- production health: `ok=true`, service `book-meet`, database `mysql`; root продолжает отдавать проверенные hashed JS/CSS assets;
+- последние 1000 production Plesk log entries: HTTP 5xx `0`, error/exception/fatal/unhandled signals `0`;
+- remote `origin/agent/modular-architecture` остаётся на `05b811f`; push не выполнялся.
+
+### Остаточные явные риски
+
+- production credentials сознательно не ротируются в этой задаче; это принятое решение, а не доказательство утечки;
+- final candidate и воспроизводимый artifact сохраняются локально, пока GitHub branch не обновлён из-за прежнего workflow-authorization ограничения;
+- production backup/restore не репетируется в этой задаче: перед deployment обязателен coordinated DB/uploads/release/env snapshot, off-host copy и проверенный manifest; staging rehearsal остаётся доказательством процедуры, но не заменяет production backup;
+- после будущего deployment/restart нужно повторить authenticated SSE, controlled upload, Google OAuth, ограниченные SMTP/Telegram smoke, headers, routes и log window. Любой failed gate требует STOP/rollback.
 
 ## Verification snapshot — 2026-08-27
 

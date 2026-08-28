@@ -61,9 +61,17 @@ test("registration accepts only the complete current legal document set", async 
     published_at: new Date("2026-08-16T00:00:00Z"),
   }));
   const connection = { query: async (sql) => sql.includes("FROM legal_documents") ? [documents] : [[]] };
-  const accepted = await validateLegalAcceptance(connection, { agreementAccepted: true, personalDataAccepted: true, documentIds: [1, 2, 3] }, "ru");
-  assert.equal(accepted.length, 3);
-  await assert.rejects(() => validateLegalAcceptance(connection, { agreementAccepted: true, personalDataAccepted: false, documentIds: [1, 2, 3] }, "ru"), (error) => error?.code === "LEGAL_ACCEPTANCE_REQUIRED");
+  const completePayload = { agreementAccepted: true, personalDataAccepted: true, documentIds: [1, 2, 3] };
+
+  assert.equal(legalConsentRequired({}), true);
+  assert.equal(legalConsentRequired({ LEGAL_CONSENT_REQUIRED: "1" }), true);
+  const acceptedByDefault = await validateLegalAcceptance(connection, completePayload, "ru", {});
+  const acceptedWhenExplicit = await validateLegalAcceptance(connection, completePayload, "ru", { LEGAL_CONSENT_REQUIRED: "1" });
+  assert.equal(acceptedByDefault.length, 3);
+  assert.equal(acceptedWhenExplicit.length, 3);
+
+  await assert.rejects(() => validateLegalAcceptance(connection, { ...completePayload, documentIds: [1, 2] }, "ru", {}), (error) => error?.code === "LEGAL_ACCEPTANCE_REQUIRED");
+  await assert.rejects(() => validateLegalAcceptance(connection, { ...completePayload, personalDataAccepted: false }, "ru", { LEGAL_CONSENT_REQUIRED: "1" }), (error) => error?.code === "LEGAL_ACCEPTANCE_REQUIRED");
 });
 
 test("legal consent can be temporarily disabled without recording a false acceptance", async () => {
