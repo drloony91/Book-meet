@@ -4,19 +4,19 @@
 
 ## Обязательные gates
 
-- [ ] Release привязан к точному commit; архив содержит build/server/migrations, но не `.env`, uploads или локальные artifacts.
-- [ ] Зафиксированы фактические `node --version` и `pnpm --version`; Node удовлетворяет `engines.node`, pnpm равен `packageManager`; выполнен `pnpm install --frozen-lockfile`.
-- [ ] Прошли `pnpm verify`, `pnpm audit --audit-level high` и `git diff --check`.
-- [ ] Прошёл `pnpm verify:db` на текущем наборе migrations в disposable MySQL; контейнер, volume и network удалены.
-- [ ] Прошёл `pnpm test:e2e`: desktop, mobile, upload, console/network diagnostics.
-- [ ] Доказана изоляция staging domain, DB, accounts, uploads и integrations от production.
-- [ ] Env-проверка содержит только статусы `configured`, `missing`, `invalid format`, `not applicable`; секреты не выводятся.
-- [ ] Migration preflight сравнил repository и staging ledger, проверил unresolved attempts и создал согласованный backup DB/uploads до apply.
-- [ ] На staging прошли frozen install, build, start, health, root, direct routes, fresh assets, bootstrap, login/profile/logout и нужные API.
-- [ ] На staging проверены upload write/read/public access/cleanup и сохранность файла после restart/redeploy.
-- [ ] На staging проверены SSE connect/reconnect/no-buffering и только безопасные SMTP/Google/Telegram smoke.
-- [ ] После smoke и restart в application/Plesk logs нет новых 5xx, unhandled, DB, auth или upload errors.
-- [ ] Подготовлен и, где безопасно, отрепетирован rollback кода/process; для DB указано, где возможен только restore backup, включая partial DDL.
+- [x] Release привязан к точному commit; архив содержит build/server/migrations, но не `.env`, uploads или локальные artifacts.
+- [x] Зафиксированы фактические `node --version` и `pnpm --version`; Node удовлетворяет `engines.node`, pnpm равен `packageManager`; выполнен `pnpm install --frozen-lockfile`.
+- [x] Прошли `pnpm verify`, `pnpm audit --audit-level high` и `git diff --check`.
+- [x] Прошёл `pnpm verify:db` на текущем наборе migrations в disposable MySQL; контейнер, volume и network удалены.
+- [x] Прошёл `pnpm test:e2e`: desktop, mobile, upload, console/network diagnostics.
+- [x] Доказана изоляция staging domain, DB, accounts, uploads и integrations от production.
+- [x] Env-проверка содержит только статусы `configured`, `missing`, `invalid format`, `not applicable`; секреты не выводятся.
+- [x] Migration preflight сравнил repository и staging ledger, проверил unresolved attempts и создал согласованный backup DB/uploads до apply.
+- [x] На staging прошли frozen install, build, start, health, root, direct routes, fresh assets, bootstrap, login/profile/logout и нужные API.
+- [x] На staging проверены upload write/read/public access/cleanup и сохранность файла после restart/redeploy.
+- [x] На staging проверены SSE connect/reconnect/no-buffering и только безопасные SMTP/Google/Telegram smoke.
+- [x] После smoke и restart в application/Plesk logs нет новых 5xx, unhandled, DB, auth или upload errors.
+- [x] Подготовлен и, где безопасно, отрепетирован rollback кода/process; для DB указано, где возможен только restore backup, включая partial DDL.
 - [ ] Production deployment отдельно и явно разрешён пользователем после итогового verdict.
 
 ## Verification snapshot — 2026-08-27
@@ -52,7 +52,7 @@ Verdict: **NOT PRODUCTION READY**. Production не изменялся.
 | Isolation | отдельные MariaDB database/user, staging admin/secrets и `../book-meet-staging-uploads`; production data/credentials не использовались, production не изменялся | PASS |
 | Runtime | Plesk Node `22.23.2`, pnpm `11.9.0`, `NODE_ENV=production`, отдельные Application/Document Root и `server/index.js`; offline `install --frozen-lockfile`, build и Plesk restart PASS. Для scheduler build явно использован Node 22 PATH, чтобы не подхватить системный legacy Node | PASS |
 | Migrations | чистая staging DB получила все 37 migrations; unresolved attempts `0`; второй migration run — no-op | PASS |
-| Seed/integrations | отдельный staging admin и ровно по одному fixture каждого profile type; Google, SMTP и Telegram выключены, отправок не выполнялось | PASS |
+| Seed/integrations | отдельный staging admin и ровно по одному fixture каждого profile type; на исходном этапе Google, SMTP и Telegram были выключены и отправок не выполнялось; позднейшие разрешённые integration smoke зафиксированы ниже | PASS |
 | Smoke | health/MySQL, root, `/books`, direct route, fresh asset, login/bootstrap/logout, URL/profile regression и security headers прошли; upload marker сохранился после Passenger restart и затем был удалён с отдельным подтверждением; после smoke нет новых 5xx/unhandled/DB/auth/upload errors | PASS |
 
 ### Staging URL/profile regression checklist
@@ -67,7 +67,27 @@ Verdict: **NOT PRODUCTION READY**. Production не изменялся.
 - `PUT /api/users/me/state` и последующий bootstrap refresh для `Читатель`, `Писатель`, `Блогер`, `Издатель`, `Сообщество` — PASS;
 - после URL/profile smoke в staging access logs остаётся только ранний `GET /api/health` 500 от 27 августа 15:18, до успешного запуска; новых HTTP 500 и записей error/exception/fatal/unhandled после smoke нет — PASS.
 
-Открытые staging gaps до production decision: authenticated SSE connect/reconnect/no-buffering; публичное чтение тестового upload; согласованный backup/rollback rehearsal. Тестовый marker `.staging-upload-persistence-check` удалён после отдельного подтверждения; остальные uploads не изменялись.
+### Production-like gates и rollback rehearsal — 2026-08-28
+
+Итог: **STAGING READY WITH EXPLICIT RISKS**. Целевой staging release возвращён на `5d6e90b`; production deployment не выполнялся, production `bookmeet.club` не изменялся.
+
+| Gate | Фактическое evidence | Статус |
+| --- | --- | --- |
+| Authenticated SSE | Авторизованный `GET /api/realtime` вернул `200 text/event-stream`, `Cache-Control: no-cache, no-transform`; first chunk 13–63 ms, heartbeat 20.019–20.069 s; три финальных reconnect получили connected event за 50–59 ms | PASS WITH RISK: функционально buffering не обнаружен, но внешний proxy не вернул диагностический `X-Accel-Buffering` header |
+| Public staging upload | Публичный URL под staging Basic Auth вернул `200 image/png`, 68 bytes; SHA-256 `431ced6916a2a21a156e38701afe55bbd7f88969fbbfc56d7fe099d47f265460` совпал до backup, после restore, restart, redeploy, rollback и финального roll-forward | PASS |
+| SMTP | Выполнена ровно одна разрешённая `[STAGING/TEST]` отправка только на `kitap@oqyastana.kz`; request accepted, SMTP socket transport success | PASS WITH RISK: подтверждён transport acceptance, но не ручное чтение письма в inbox |
+| Telegram | Выполнено ровно одно `[STAGING/TEST]` сообщение существующим ботом только в admin chat; Telegram API вернул HTTP 200, recipient class `admin-chat-only`; пользовательских отправок не было | PASS |
+| Google OAuth | `/api/auth/providers` вернул `google: false` и пустой client id; отдельные staging credentials намеренно не создавались | PASS, intentionally disabled |
+| Backup capability | Native Plesk Backup Manager доступен только на уровне всей subscription и затрагивает production scope, поэтому для rehearsal не использовался. На хосте подтверждены `mysqldump`, `mysql`, `tar`, `gzip`; создан staging-only snapshot в защищённом subscription storage | PASS WITH RISK: staging backup пока является проверенной ручной процедурой, а не отдельной автоматической Plesk policy |
+| Coordinated staging backup | `snapshot-3dfc5dc2beb07bda`, UTC `2026-08-28T10:41:33.327Z`: DB dump 168250 bytes, uploads archive 277 bytes, release/config archive 46468923 bytes; SHA-256 каждого файла записан в защищённом `manifest.json` | PASS |
+| Restore rehearsal | Контрольная session row и PNG сначала доказанно отсутствовали; DB dump и uploads затем реально восстановлены. Session row и исходный SHA файла вернулись; `CHECK TABLE` проверил 40 таблиц, corruption `false` | PASS |
+| Restart | После Plesk restart повторно прошли health, authenticated bootstrap, public upload SHA и полный SSE heartbeat | PASS |
+| Same-release redeploy | Чистый Git archive `5d6e90b`: offline frozen install с pnpm 11.9.0, production build, migrations 37 → 37 no-op, unresolved attempts 0, restart, health/root/fresh assets/bootstrap/upload/SSE | PASS |
+| Rollback | Чистый Git archive `a71e12b`: frozen install/build, migration compatibility 37/37 и unresolved 0, restart, health/root/bootstrap/upload/SSE; затем выполнен roll-forward обратно на `5d6e90b` с теми же gates | PASS |
+| Application/Plesk logs | Полное добавившееся окно с `2026-08-28T10:34:39.114Z`: HTTP 5xx 0; application/proxy error signals 0; DB/auth/upload/SSE/integration/unhandled по 0 | PASS |
+| Cleanup | Контрольная session row и PNG удалены; временный Basic Auth user `codex_staging_gate`, release archives и helper/runner-файлы удалены. Основной staging Basic Auth сохранён и unauthenticated access остаётся `401`; snapshot, `manifest.json` и `evidence.json` сохранены | PASS |
+
+Явные остаточные риски не блокируют staging: отсутствие внешнего `X-Accel-Buffering` header компенсировано измеренным first-chunk/heartbeat/reconnect поведением; SMTP доказан до acceptance транспортом, не до ручного прочтения; Plesk не предоставляет изолированную staging-only backup policy, поэтому проверенная процедура backup/restore остаётся ручной. Перед production deployment всё равно требуется отдельное явное разрешение и production-scoped backup/change window.
 
 Каноническая процедура находится в [`PLESK_DEPLOY.md`](../../PLESK_DEPLOY.md), а тестовая матрица — в [`TESTING.md`](./TESTING.md). Production `bookmeet.club` остаётся неизменённым и не может быть заменён staging evidence.
 
