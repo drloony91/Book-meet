@@ -53,7 +53,7 @@ Verdict: **NOT PRODUCTION READY**. Production не изменялся.
 | Runtime | Plesk Node `22.23.2`, pnpm `11.9.0`, `NODE_ENV=production`, отдельные Application/Document Root и `server/index.js`; offline `install --frozen-lockfile`, build и Plesk restart PASS. Для scheduler build явно использован Node 22 PATH, чтобы не подхватить системный legacy Node | PASS |
 | Migrations | чистая staging DB получила все 37 migrations; unresolved attempts `0`; второй migration run — no-op | PASS |
 | Seed/integrations | отдельный staging admin и ровно по одному fixture каждого profile type; Google, SMTP и Telegram выключены, отправок не выполнялось | PASS |
-| Smoke | health/MySQL, root, `/books`, direct route, fresh asset, login/bootstrap/logout, URL/profile regression и security headers прошли; upload marker сохранился после Passenger restart; после smoke нет новых 5xx/unhandled/DB/auth/upload errors | PASS |
+| Smoke | health/MySQL, root, `/books`, direct route, fresh asset, login/bootstrap/logout, URL/profile regression и security headers прошли; upload marker сохранился после Passenger restart и затем был удалён с отдельным подтверждением; после smoke нет новых 5xx/unhandled/DB/auth/upload errors | PASS |
 
 ### Staging URL/profile regression checklist
 
@@ -67,7 +67,7 @@ Verdict: **NOT PRODUCTION READY**. Production не изменялся.
 - `PUT /api/users/me/state` и последующий bootstrap refresh для `Читатель`, `Писатель`, `Блогер`, `Издатель`, `Сообщество` — PASS;
 - после URL/profile smoke в staging access logs остаётся только ранний `GET /api/health` 500 от 27 августа 15:18, до успешного запуска; новых HTTP 500 и записей error/exception/fatal/unhandled после smoke нет — PASS.
 
-Открытые staging gaps до production decision: authenticated SSE connect/reconnect/no-buffering; публичное чтение/cleanup тестового upload; согласованный backup/rollback rehearsal. Тестовый marker `.staging-upload-persistence-check` намеренно не удалён без отдельного подтверждения на удаление.
+Открытые staging gaps до production decision: authenticated SSE connect/reconnect/no-buffering; публичное чтение тестового upload; согласованный backup/rollback rehearsal. Тестовый marker `.staging-upload-persistence-check` удалён после отдельного подтверждения; остальные uploads не изменялись.
 
 Каноническая процедура находится в [`PLESK_DEPLOY.md`](../../PLESK_DEPLOY.md), а тестовая матрица — в [`TESTING.md`](./TESTING.md). Production `bookmeet.club` остаётся неизменённым и не может быть заменён staging evidence.
 
