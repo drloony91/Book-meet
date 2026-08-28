@@ -37,6 +37,8 @@ test("deployment contract separates production, staging, demo and disposable MyS
   const testing = await readFile(path.join(root, "docs", "codex", "TESTING.md"), "utf8");
   const deployRunbook = await readFile(path.join(root, "PLESK_DEPLOY.md"), "utf8");
   const readiness = await readFile(path.join(root, "docs", "codex", "PRODUCTION_READINESS.md"), "utf8");
+  const packageJson = JSON.parse(await readFile(path.join(root, "package.json"), "utf8"));
+  const stagingSmoke = await readFile(path.join(root, "scripts", "staging-smoke.mjs"), "utf8");
   for (const document of [readme, integrations, deployRunbook]) {
     assert.match(document, /bookmeet\.club/);
     assert.match(document, /staging\.bookmeet\.club/);
@@ -64,17 +66,30 @@ test("deployment contract separates production, staging, demo and disposable MyS
   assert.match(deployRunbook, /PUT `?\/api\/users\/me\/state/);
   assert.match(deployRunbook, /После этих URL\/profile сценариев.*HTTP 500/is);
   assert.match(testing, /Staging smoke contract/);
-  assert.match(readiness, /Staging verification status/);
-  assert.match(readiness, /PENDING.*live не проверялось/is);
+  assert.match(testing, /STAGING_SMOKE=1.*staging:smoke/is);
+  assert.equal(packageJson.scripts["staging:smoke"], "node scripts/staging-smoke.mjs");
+  assert.match(stagingSmoke, /origin\.hostname !== "staging\.bookmeet\.club"/);
+  assert.match(stagingSmoke, /staging DB_NAME/);
+  assert.match(stagingSmoke, /staging UPLOAD_DIR/);
+  assert.match(stagingSmoke, /Telegram alerts disabled/);
+  assert.match(stagingSmoke, /Google OAuth disabled/);
+  assert.match(stagingSmoke, /SMTP disabled/);
+  assert.match(stagingSmoke, /--cleanup-upload-marker requires --verify-upload-marker/);
+  assert.match(readiness, /Staging verification status — \d{4}-\d{2}-\d{2}/);
+  assert.match(readiness, /Domain\/access.*PASS/is);
+  assert.match(readiness, /Isolation.*PASS/is);
+  assert.match(readiness, /Runtime.*PARTIAL/is);
+  assert.match(readiness, /Migrations.*PASS/is);
+  assert.match(readiness, /Production `bookmeet\.club`.*не изменя/is);
   assert.match(readiness, /Staging URL\/profile regression checklist/);
-  assert.match(readiness, /malformed publisher website.*400.*500/is);
-  assert.match(readiness, /malformed publisher sales links.*400.*500/is);
-  assert.match(readiness, /empty optional URLs.*валидными/is);
-  assert.match(readiness, /malformed\/incomplete URL.*`\/api\/books\/preview`.*400.*500/is);
-  assert.match(readiness, /Flip, Marwin\/Меломан и Яндекс\.Книги.*успешно/is);
+  assert.match(readiness, /malformed publisher website.*400 INVALID_URL.*PASS/is);
+  assert.match(readiness, /malformed publisher sales links.*400 INVALID_URL.*PASS/is);
+  assert.match(readiness, /empty optional URLs.*200.*PASS/is);
+  assert.match(readiness, /malformed\/incomplete URL.*`\/api\/books\/preview`.*400.*PASS/is);
+  assert.match(readiness, /Flip, Marwin\/Меломан и Яндекс\.Книги.*200.*PASS/is);
   assert.match(readiness, /`PUT \/api\/users\/me\/state`/);
   assert.match(readiness, /Читатель.*Писатель.*Блогер.*Издатель.*Сообщество/is);
-  assert.match(readiness, /после всех URL\/profile сценариев.*HTTP 500/is);
+  assert.match(readiness, /новых HTTP 500.*нет.*PASS/is);
 });
 
 test("Block 1 фиксирует fail-fast verify и production-safe seed", async () => {

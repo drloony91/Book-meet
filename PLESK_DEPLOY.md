@@ -182,4 +182,16 @@ corepack pnpm run db:seed
 5. Для каждого profile type — `Читатель`, `Писатель`, `Блогер`, `Издатель`, `Сообщество` — сохранить профиль через `PUT /api/users/me/state`, проверить успешный ответ и сохранение после refresh.
 6. После этих URL/profile сценариев проверить staging application/Plesk logs: новых HTTP 500, unhandled exceptions, DB/auth/upload errors быть не должно. Отдельно сохранить результаты миграционного status/no-op и доступность `book-meet-staging-uploads` после restart/redeploy.
 
-Этот runbook описывает требуемую конфигурацию, но не является доказательством, что staging уже создан или smoke уже выполнен. Production `bookmeet.club` в рамках staging work не изменять.
+Для воспроизводимого URL/profile/upload smoke в Application Root доступна fail-closed команда:
+
+```bash
+STAGING_SMOKE=1 corepack pnpm run staging:smoke
+# после restart Passenger
+STAGING_SMOKE=1 corepack pnpm run staging:smoke -- --verify-upload-marker
+# только после отдельного подтверждения удаления test artifact
+STAGING_SMOKE=1 corepack pnpm run staging:smoke -- --verify-upload-marker --cleanup-upload-marker
+```
+
+Runner разрешён только для `staging.bookmeet.club`, staging-scoped DB и uploads при выключенных Google/SMTP/Telegram. Он создаёт только временные staging sessions, удаляет их в `finally`, сохраняет валидные fixture-профили через API и не содержит секретов. Verification mode по умолчанию только читает `.staging-upload-persistence-check`; удаление этого точного marker выполняется лишь с отдельно подтверждённым `--cleanup-upload-marker`.
+
+Этот runbook описывает процедуру, а датированное live evidence хранится в [`docs/codex/PRODUCTION_READINESS.md`](./docs/codex/PRODUCTION_READINESS.md). Production `bookmeet.club` в рамках staging work не изменять.

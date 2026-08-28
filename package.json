@@ -27,6 +27,7 @@
     "db:migrate:status": "node scripts/migrate-status.mjs",
     "db:migrate:retry": "node scripts/migrate-retry.mjs",
     "db:seed": "node scripts/seed.js",
+    "staging:smoke": "node scripts/staging-smoke.mjs",
     "db:seed-publisher": "node scripts/seed-publisher.js",
     "db:setup": "node scripts/migrate.js && node scripts/seed.js",
     "db:test:up": "node scripts/db-test.mjs up",

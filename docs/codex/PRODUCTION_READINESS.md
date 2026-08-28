@@ -42,30 +42,32 @@ Verdict: **NOT PRODUCTION READY**. Production не изменялся.
 
 Перед повторным gate нужен отдельный staging или прямое разрешение на строго перечисленные read-only/controlled production checks. До этого нельзя выполнять production migrations, restart или deploy.
 
-## Staging verification status — 2026-08-27
+## Staging verification status — 2026-08-28
 
-Этот раздел фиксирует требуемые evidence placeholders для постоянной staging-среды. В рамках текущей documentation/runtime работы Plesk, staging domain, staging DB, uploads и live smoke не создавались и не проверялись; `PENDING` не означает успешное выполнение.
+Постоянная staging-среда создана и проверена отдельно от production. Production `bookmeet.club`, её DB, uploads, environment и процесс в ходе staging-развёртывания не изменялись. Значения секретов в evidence и документацию не переносились.
 
 | Проверка | Требуемое evidence | Статус |
 | --- | --- | --- |
-| Domain/access | `staging.bookmeet.club` по HTTPS, HTTP → HTTPS, Basic Auth (или эквивалент), `X-Robots-Tag: noindex, nofollow, noarchive` | PENDING — live не проверялось |
-| Isolation | отдельные MariaDB database/user, staging admin/password, `../book-meet-staging-uploads` и secrets; production data/credentials не используются | PENDING — live не проверялось |
-| Runtime | Node `22.13.0` (или записанный compatible `engines.node`), pnpm `11.9.0`, frozen install/build, `NODE_ENV=production`, `DEMO_MODE=0` | PENDING — live не проверялось |
-| Migrations | полный chain, `db:migrate:status` без unresolved attempts, второй `db:migrate` как no-op, status повторно | PENDING — live не проверялось |
-| Seed/integrations | только явный staging admin; Google, SMTP и Telegram выключены до отдельного safe decision | PENDING — live не проверялось |
-| Smoke | `/api/health`, `/`, `/books`, direct SPA route, fresh assets, login/logout, upload persistence, nginx security headers и отсутствие новых 5xx в logs | PENDING — live не проверялось |
+| Domain/access | `staging.bookmeet.club`: trusted Let's Encrypt TLS, HTTP → HTTPS, unauthenticated `401` с realm `Book Meet Staging`; authenticated root/static ранее подтвердили `X-Robots-Tag`, HSTS, CSP, `nosniff` и framing protection | PASS |
+| Isolation | отдельные MariaDB database/user, staging admin/secrets и `../book-meet-staging-uploads`; production data/credentials не использовались, production не изменялся | PASS |
+| Runtime | Plesk Node `22.23.2`, `NODE_ENV=production`, отдельные Application/Document Root и `server/index.js`; build/start и фактический Passenger restart подтверждены. Отдельное доказательство успешного Plesk-side `pnpm@11.9.0 install --frozen-lockfile` не сохранено | PARTIAL |
+| Migrations | чистая staging DB получила все 37 migrations; unresolved attempts `0`; второй migration run — no-op | PASS |
+| Seed/integrations | отдельный staging admin и ровно по одному fixture каждого profile type; Google, SMTP и Telegram выключены, отправок не выполнялось | PASS |
+| Smoke | health/MySQL, root, `/books`, direct route, fresh asset, login/bootstrap/logout, URL/profile regression и security headers прошли; upload marker сохранился после Passenger restart; после smoke нет новых 5xx/unhandled/DB/auth/upload errors | PASS |
 
 ### Staging URL/profile regression checklist
 
-Эти проверки обязательны после базового smoke и до любого production decision; они не выполнялись в текущем documentation-only этапе и остаются `PENDING`:
+Эти проверки выполнены 27–28 августа 2026 на изолированной staging DB локальным loopback smoke-процессом на staging-хосте. Временные smoke sessions удалены в `finally`; profile fixture сохраняет только валидные поля через публичный API-контракт.
 
-- malformed publisher website → контролируемый `400`, не `500`;
-- malformed publisher sales links → контролируемый `400`, не `500`;
-- empty optional URLs остаются валидными;
-- malformed/incomplete URL в `/api/books/preview` → контролируемый `400`, не `500`;
-- корректные URL Flip, Marwin/Меломан и Яндекс.Книги успешно обрабатываются;
-- сохранение профиля через `PUT /api/users/me/state` проверяется для `Читатель`, `Писатель`, `Блогер`, `Издатель`, `Сообщество`, включая refresh;
-- после всех URL/profile сценариев staging application/Plesk logs проверяются на отсутствие новых HTTP 500.
+- malformed publisher website → `400 INVALID_URL` — PASS;
+- malformed publisher sales links → `400 INVALID_URL` — PASS;
+- empty optional URLs → `200` — PASS;
+- malformed/incomplete URL в `/api/books/preview` → `400` — PASS;
+- корректные URL Flip, Marwin/Меломан и Яндекс.Книги → `200` с распознанным marketplace — PASS;
+- `PUT /api/users/me/state` и последующий bootstrap refresh для `Читатель`, `Писатель`, `Блогер`, `Издатель`, `Сообщество` — PASS;
+- после URL/profile smoke в staging access logs остаётся только ранний `GET /api/health` 500 от 27 августа 15:18, до успешного запуска; новых HTTP 500 и записей error/exception/fatal/unhandled после smoke нет — PASS.
+
+Открытые staging gaps до production decision: authenticated SSE connect/reconnect/no-buffering; публичное чтение/cleanup тестового upload; сохранённое доказательство точной Plesk-side frozen-install команды; согласованный backup/rollback rehearsal. Тестовый marker `.staging-upload-persistence-check` намеренно не удалён без отдельного подтверждения на удаление.
 
 Каноническая процедура находится в [`PLESK_DEPLOY.md`](../../PLESK_DEPLOY.md), а тестовая матрица — в [`TESTING.md`](./TESTING.md). Production `bookmeet.club` остаётся неизменённым и не может быть заменён staging evidence.
 

@@ -92,6 +92,18 @@ The permanent staging target is `https://staging.bookmeet.club`, isolated from `
 
 With Basic Auth or an equivalent access restriction in place, check staging HTTPS, `/api/health`, `/`, `/books`, a direct SPA route, fresh assets, login/logout, upload persistence and application/Plesk logs. At the Plesk/nginx boundary verify HSTS, CSP, `X-Content-Type-Options: nosniff`, framing protection and `X-Robots-Tag: noindex, nofollow, noarchive`. Google, SMTP and Telegram remain disabled until a separate explicit safety decision; no staging smoke may send to ordinary users. The runbook is a procedure, not evidence that staging currently exists or has passed.
 
+The guarded live regression runner is:
+
+```bash
+STAGING_SMOKE=1 corepack pnpm run staging:smoke
+# after the Plesk/Passenger restart
+STAGING_SMOKE=1 corepack pnpm run staging:smoke -- --verify-upload-marker
+# only after explicit approval to remove the test artifact
+STAGING_SMOKE=1 corepack pnpm run staging:smoke -- --verify-upload-marker --cleanup-upload-marker
+```
+
+It fails closed unless `NODE_ENV=production`, `APP_ORIGIN` targets `staging.bookmeet.club`, and both DB name and upload path are visibly staging-scoped. It also refuses enabled Telegram alerts, configured Google OAuth or a complete SMTP configuration. The main mode uses the isolated staging DB, creates short-lived sessions for the five fixture profile types, exercises profile/URL regressions through a loopback server, removes those sessions in `finally`, and writes a deterministic upload marker. Verification is read-only by default; only the separately approved `--cleanup-upload-marker` flag removes that exact marker.
+
 ## Explicit gaps
 
 - `pnpm verify` does **not** provision or connect to a disposable real MySQL/MariaDB instance. `server/demo-api.js` is an in-memory adapter and cannot prove SQL schema, transaction atomicity, DDL migration recovery, indexes or production seed behavior. `pnpm verify:db` covers these only when Docker Desktop/Compose is actually available and succeeds.
