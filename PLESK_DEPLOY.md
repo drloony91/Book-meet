@@ -160,6 +160,7 @@ TELEGRAM_CHAT_ID=
 Из Application Root staging выполнить последовательно, сохраняя вывод команд без секретов:
 
 ```bash
+export PATH=/opt/plesk/node/22/bin:$PATH
 corepack pnpm install --frozen-lockfile
 corepack pnpm run build
 corepack pnpm run db:migrate
@@ -168,6 +169,8 @@ corepack pnpm run db:migrate
 corepack pnpm run db:migrate:status
 corepack pnpm run db:seed
 ```
+
+На текущем Hoster scheduler явный Node 22 PATH обязателен: без него Corepack может запустить дочерний Vite через системный legacy Node, даже если сам `corepack pnpm --version` выполнен Node 22. Перед install/build записать `node --version` и `corepack pnpm --version`, не выводя environment.
 
 Ожидается, что первый migration run применит весь текущий последовательный chain, status покажет отсутствие unresolved `schema_migration_attempts`, а второй migration run будет no-op. Если status показывает unresolved attempt, сначала сверить фактическую схему и ledger; не повторять migration вслепую. `db:seed` запускать только после явного задания staging `ADMIN_EMAIL`/`TEST1_PASSWORD`; `db:seed-publisher` и production credentials в staging не использовать.
 

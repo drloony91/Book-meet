@@ -78,7 +78,7 @@ test("deployment contract separates production, staging, demo and disposable MyS
   assert.match(readiness, /Staging verification status — \d{4}-\d{2}-\d{2}/);
   assert.match(readiness, /Domain\/access.*PASS/is);
   assert.match(readiness, /Isolation.*PASS/is);
-  assert.match(readiness, /Runtime.*PARTIAL/is);
+  assert.match(readiness, /Runtime.*pnpm `11\.9\.0`.*install --frozen-lockfile.*PASS/is);
   assert.match(readiness, /Migrations.*PASS/is);
   assert.match(readiness, /Production `bookmeet\.club`.*не изменя/is);
   assert.match(readiness, /Staging URL\/profile regression checklist/);
