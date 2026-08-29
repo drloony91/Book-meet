@@ -68,9 +68,9 @@ corepack pnpm run dev
 - email: значение `ADMIN_EMAIL`;
 - пароль: значение `TEST1_PASSWORD`.
 
-Для production переменные `ADMIN_EMAIL` и `TEST1_PASSWORD` нужно задать явно до первого запуска seed. Не храните их значения в Git.
+Для production переменные `ADMIN_EMAIL` и `TEST1_PASSWORD` нужно задать явно перед намеренным запуском seed/reset. `TEST1_PASSWORD` не является runtime credential: после операции удалите её из постоянного production environment. Не храните значения секретов в Git.
 
-Production использует другие значения: `NODE_ENV=production`, `APP_ORIGIN=https://bookmeet.club`, отдельного пользователя БД без root, production `UPLOAD_DIR` и сильные `TEST1_PASSWORD`/`ADMIN_EMAIL`. Staging использует те же runtime boundaries с собственными domain, DB, uploads, admin и secrets; Google, SMTP и Telegram на staging выключены до отдельного явного решения. Полный список и порядок настройки находятся в [PLESK_DEPLOY.md](./PLESK_DEPLOY.md); локальный `.env.example` намеренно не содержит production/staging endpoints или credentials.
+Production использует другие значения: `NODE_ENV=production`, `APP_ORIGIN=https://bookmeet.club`, отдельного пользователя БД без root, production `UPLOAD_DIR` и собственные admin credentials для явного seed/reset. Staging использует те же runtime boundaries с собственными domain, DB, uploads, admin и secrets; Google, SMTP и Telegram на staging выключены до отдельного явного решения. Полный список и порядок настройки находятся в [PLESK_DEPLOY.md](./PLESK_DEPLOY.md); локальный `.env.example` намеренно не содержит production/staging endpoints или credentials.
 
 ## Production
 

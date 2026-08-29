@@ -48,6 +48,7 @@ DB_CONNECTION_LIMIT=5
 SESSION_DAYS=7
 UPLOAD_DIR=../book-meet-uploads
 MAX_COVER_BYTES=5242880
+# Только для явного db:seed/reset; после операции удалить из постоянного production environment.
 TEST1_PASSWORD=отдельный_сложный_пароль
 ADMIN_EMAIL=адрес_администратора
 ```
@@ -64,7 +65,7 @@ corepack pnpm run build
 corepack pnpm run db:setup
 ```
 
-Используется только Corepack/pnpm с обязательным `--frozen-lockfile`; при недоступности этого инструмента установку следует остановить и устранить ограничение окружения. Production seed создаёт один административный аккаунт и требует явные `ADMIN_EMAIL` и `TEST1_PASSWORD`.
+Используется только Corepack/pnpm с обязательным `--frozen-lockfile`; при недоступности этого инструмента установку следует остановить и устранить ограничение окружения. Production seed создаёт один административный аккаунт и требует явные `ADMIN_EMAIL` и `TEST1_PASSWORD`. `TEST1_PASSWORD` не читается normal startup или migrations: задавайте её только на время явного seed/reset и удаляйте после операции.
 
 После этого перезапустить Node.js-приложение в Plesk.
 
@@ -104,7 +105,7 @@ corepack pnpm run build
 corepack pnpm run db:migrate
 ```
 
-После успешных миграций перезапустить приложение и проверить `/api/health`. `db:seed` на обычных обновлениях запускать не нужно: он предназначен для создания единственного seed-аккаунта администратора и сброса его пароля.
+После успешных миграций перезапустить приложение и проверить `/api/health`. `db:seed` на обычных обновлениях запускать не нужно: он предназначен для создания единственного seed-аккаунта администратора и сброса его пароля. Для recovery временно задать `ADMIN_EMAIL`/`TEST1_PASSWORD`, выполнить явную операцию, проверить вход и снова удалить `TEST1_PASSWORD` из постоянного environment; обычный restart и migration chain от неё не зависят.
 
 ## Rollback обновления
 
