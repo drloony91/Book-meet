@@ -7,7 +7,7 @@ type ExpectedHttpError = { path: string | RegExp; status?: number; warning?: str
 type BrowserFixtures = {
   resetDemo: () => Promise<void>;
   allowExpectedHttpError: (expected: ExpectedHttpError) => void;
-  browserDiagnostics: { allowExpectedHttpError: (expected: ExpectedHttpError) => void; assertNoErrors: () => Promise<void> };
+  browserDiagnostics: { allowExpectedHttpError: (expected: ExpectedHttpError) => void; trackPage: (page: Page) => void; assertNoErrors: () => Promise<void> };
 };
 
 function matchesPath(url: string, pattern: string | RegExp) {
@@ -29,8 +29,6 @@ export const test = base.extend<BrowserFixtures>({
     const expected: ExpectedHttpError[] = [];
     const expectedWarnings: Array<string | RegExp> = [];
     const errors: string[] = [];
-    const expectedFailedRequestUrls = new Set<string>();
-    const completedRequestUrls = new Set<string>();
     const allow = (entry: ExpectedHttpError) => {
       expected.push(entry);
       if (entry.warning) expectedWarnings.push(entry.warning);
@@ -40,54 +38,60 @@ export const test = base.extend<BrowserFixtures>({
       return Boolean(match);
     };
 
-    page.on("pageerror", (error) => errors.push(`pageerror: ${error.stack || error.message}`));
-    page.on("console", (message) => {
-      if (message.type() === "error") {
-        const statusMatch = /Failed to load resource: the server responded with a status of (\d{3})/i.exec(message.text());
-        if (statusMatch) {
-          const status = Number(statusMatch[1]);
-          const sourceUrl = message.location().url;
-          // Chromium sometimes emits this generic message without exposing the
-          // matching fetch through Playwright's response event (notably for the
-          // parallel unauthenticated bootstrap requests). The message itself
-          // carries the observed status and source URL; both must match an
-          // explicit per-test allowance.
-          if (sourceUrl && expected.some((entry) => entry.status === status && matchesPath(sourceUrl, entry.path))) return;
+    const trackPage = (trackedPage: Page) => {
+      const expectedFailedRequestUrls = new Set<string>();
+      const completedRequestUrls = new Set<string>();
+      trackedPage.on("pageerror", (error) => errors.push(`pageerror: ${error.stack || error.message}`));
+      trackedPage.on("console", (message) => {
+        if (message.type() === "error") {
+          const statusMatch = /Failed to load resource: the server responded with a status of (\d{3})/i.exec(message.text());
+          if (statusMatch) {
+            const status = Number(statusMatch[1]);
+            const sourceUrl = message.location().url;
+            // Chromium sometimes emits this generic message without exposing the
+            // matching fetch through Playwright's response event (notably for the
+            // parallel unauthenticated bootstrap requests). The message itself
+            // carries the observed status and source URL; both must match an
+            // explicit per-test allowance.
+            if (sourceUrl && expected.some((entry) => entry.status === status && matchesPath(sourceUrl, entry.path))) return;
+          }
+          errors.push(`console.error: ${message.text()}${message.location().url ? ` (${message.location().url})` : ""}`);
         }
-        errors.push(`console.error: ${message.text()}${message.location().url ? ` (${message.location().url})` : ""}`);
-      }
-      if (message.type() === "warning" && !/Download the React DevTools/i.test(message.text()) && !expectedWarnings.some((pattern) => pattern instanceof RegExp ? pattern.test(message.text()) : message.text().includes(pattern))) errors.push(`console.warn: ${message.text()}`);
-    });
-    page.on("requestfailed", (request) => {
-      const failureText = request.failure()?.errorText || "unknown";
-      if (request.resourceType() === "eventsource" && failureText === "net::ERR_ABORTED") return;
-      if (expectedFailedRequestUrls.has(request.url())) return;
-      if (completedRequestUrls.has(request.url())) return;
-      if (expected.some((entry) => entry.status !== undefined && entry.status >= 500 && (matchesPath(request.url(), entry.path) || typeof entry.path === "string" && request.url().includes(entry.path)))) return;
-      const resourceType = request.resourceType();
-      const localAsset = ["document", "script", "stylesheet", "image", "font"].includes(resourceType)
-        && request.url().startsWith(String(testInfo.project.use?.baseURL || "http://127.0.0.1"));
-      errors.push(`${localAsset ? "broken local asset" : "requestfailed"} ${resourceType} ${request.method()} ${request.url()}: ${failureText}`);
-    });
-    page.on("response", (response) => {
-      const url = response.url();
-      const status = response.status();
-      if (status >= 400 && status <= 599) {
-        if (expectedResponse(url, status)) {
-          if (status >= 500) expectedFailedRequestUrls.add(url);
+        if (message.type() === "warning" && !/Download the React DevTools/i.test(message.text()) && !expectedWarnings.some((pattern) => pattern instanceof RegExp ? pattern.test(message.text()) : message.text().includes(pattern))) errors.push(`console.warn: ${message.text()}`);
+      });
+      trackedPage.on("requestfailed", (request) => {
+        const failureText = request.failure()?.errorText || "unknown";
+        if (request.resourceType() === "eventsource" && failureText === "net::ERR_ABORTED") return;
+        if (expectedFailedRequestUrls.has(request.url())) return;
+        if (completedRequestUrls.has(request.url())) return;
+        if (expected.some((entry) => entry.status !== undefined && entry.status >= 500 && (matchesPath(request.url(), entry.path) || typeof entry.path === "string" && request.url().includes(entry.path)))) return;
+        const resourceType = request.resourceType();
+        const localAsset = ["document", "script", "stylesheet", "image", "font"].includes(resourceType)
+          && request.url().startsWith(String(testInfo.project.use?.baseURL || "http://127.0.0.1"));
+        errors.push(`${localAsset ? "broken local asset" : "requestfailed"} ${resourceType} ${request.method()} ${request.url()}: ${failureText}`);
+      });
+      trackedPage.on("response", (response) => {
+        const url = response.url();
+        const status = response.status();
+        if (status >= 400 && status <= 599) {
+          if (expectedResponse(url, status)) {
+            if (status >= 500) expectedFailedRequestUrls.add(url);
+            return;
+          }
+          errors.push(`unexpected HTTP ${status} ${response.request().method()} ${url}`);
           return;
         }
-        errors.push(`unexpected HTTP ${status} ${response.request().method()} ${url}`);
-        return;
-      }
-      const resourceType = response.request().resourceType();
-      if (status >= 200 && status < 400) completedRequestUrls.add(url);
-      const localAsset = ["document", "script", "stylesheet", "image", "font"].includes(resourceType) && url.startsWith(String(testInfo.project.use?.baseURL || "http://127.0.0.1"));
-      if (localAsset && status === 0) errors.push(`broken local asset ${resourceType} ${url}`);
-    });
+        const resourceType = response.request().resourceType();
+        if (status >= 200 && status < 400) completedRequestUrls.add(url);
+        const localAsset = ["document", "script", "stylesheet", "image", "font"].includes(resourceType) && url.startsWith(String(testInfo.project.use?.baseURL || "http://127.0.0.1"));
+        if (localAsset && status === 0) errors.push(`broken local asset ${resourceType} ${url}`);
+      });
+    };
+    trackPage(page);
 
     await use({
       allowExpectedHttpError: allow,
+      trackPage,
       assertNoErrors: async () => {
         if (!errors.length) return;
         const report = [...new Set(errors)].join("\n");

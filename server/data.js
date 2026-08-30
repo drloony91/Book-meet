@@ -375,6 +375,15 @@ export async function loadBootstrap(userId, options = {}) {
   const [communityMembershipRows] = includeCatalog || includeSocial ? await pool.query(
     "SELECT community_user_id, member_user_id FROM community_memberships",
   ) : [[]];
+  const [activeOrganizationRows] = includeCatalog ? await pool.query(
+    `SELECT u.id
+       FROM users u
+       JOIN profiles p ON p.user_id = u.id
+      WHERE u.deleted_at IS NULL
+        AND u.purged_at IS NULL
+        AND p.profile_type IN ('Издатель', 'Сообщество')
+        AND p.publisher_status = 'approved'`,
+  ) : [[]];
   const [wishlistRows] = includeCatalog ? await pool.query(
     `SELECT w.id, w.user_id, w.catalog_book_id, w.author, w.title, w.genres,
             COALESCE(NULLIF(w.annotation, ''), b.annotation, '') AS annotation,
@@ -393,13 +402,19 @@ export async function loadBootstrap(userId, options = {}) {
   ) : [[]];
   const [notificationRows] = includeSocial ? await pool.query(
     `SELECT id, user_id, actor_user_id, notification_type, title, body, material_kind, material_id, is_unread, created_at
-       FROM notifications WHERE user_id = ? ORDER BY created_at DESC LIMIT 200`, [userId],
+       FROM notifications
+      WHERE user_id = ? AND notification_type <> 'new_message'
+      ORDER BY created_at DESC LIMIT 200`, [userId],
+  ) : [[]];
+  const [chatHistoryClearRows] = includeSocial ? await pool.query(
+    "SELECT peer_user_id, cleared_through_message_id FROM chat_history_clears WHERE user_id = ?",
+    [userId],
   ) : [[]];
   const [messageRows] = includeSocial ? await pool.query(
     `SELECT id, sender_user_id, recipient_user_id, body, attachment_kind, attachment_id, is_system, read_at, created_at
-       FROM messages
+      FROM messages
       WHERE sender_user_id = ? OR recipient_user_id = ?
-      ORDER BY created_at`, [userId, userId],
+      ORDER BY created_at, id`, [userId, userId],
   ) : [[]];
   const [likeRows] = includeSocial ? await pool.query("SELECT user_id, material_kind, material_id, created_at FROM material_likes") : [[]];
   // Saves are deliberately private: the viewer gets only their own action history.
@@ -487,7 +502,7 @@ export async function loadBootstrap(userId, options = {}) {
          (m.sender_user_id = r.reporter_user_id AND m.recipient_user_id = r.target_user_id)
          OR (m.sender_user_id = r.target_user_id AND m.recipient_user_id = r.reporter_user_id)
        )
-      ORDER BY r.id, m.created_at`,
+      ORDER BY r.id, m.created_at, m.id`,
   ) : [[]];
   const conversationByReport = new Map();
   for (const row of reportedConversationRows) {
@@ -506,9 +521,11 @@ export async function loadBootstrap(userId, options = {}) {
     });
   }
   const messages = {};
+  const clearedThroughByPeer = new Map(chatHistoryClearRows.map((row) => [Number(row.peer_user_id), Number(row.cleared_through_message_id)]));
   for (const row of messageRows) {
     const otherId = Number(row.sender_user_id) === Number(userId) ? Number(row.recipient_user_id) : Number(row.sender_user_id ?? row.recipient_user_id);
     if (!currentUser?.isAdmin && hiddenUserIds.has(otherId)) continue;
+    if (Number(row.id) <= (clearedThroughByPeer.get(otherId) ?? 0)) continue;
     const key = [Number(userId), otherId].sort((a, b) => a - b).join("-");
     messages[key] ??= [];
     messages[key].push({
@@ -623,6 +640,7 @@ export async function loadBootstrap(userId, options = {}) {
     },
     adultAccess: { status: adultStatus, restricted: restrictedAdultMaterials },
     users: previewOnlyUsers,
+    activeOrganizationIds: activeOrganizationRows.map((row) => Number(row.id)),
     linkedProfile: linkedProfileRow ? { id: Number(linkedProfileRow.id), name: linkedProfileRow.display_name, type: linkedProfileRow.profile_type, avatarUrl: linkedProfileRow.avatar_path ?? undefined, profileCompleted: Boolean(linkedProfileRow.profile_completed) } : undefined,
     books: profileGate.complete ? catalogBooks : catalogBooks.map((book) => ({ ...book, annotation: "", isbn: undefined, publisher: undefined, links: [], flipUrl: undefined })),
     blocks: blockRows.map((row) => ({ blockerId: Number(row.blocker_user_id), blockedId: Number(row.blocked_user_id), createdAt: new Date(row.created_at).toISOString() })),

@@ -10,6 +10,7 @@ export type Friend = {
   unread?: number;
   lastMessage: string;
   time: string;
+  lastActivityAt?: string;
   bio: string;
   books: string;
   support?: boolean;

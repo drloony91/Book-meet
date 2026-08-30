@@ -122,6 +122,7 @@ test("MySQL production migrations, seed and critical relational behavior", async
     "legal_documents.document_type",
     "telegram_alert_outbox.actor_user_id",
     "material_saves.material_kind",
+    "chat_history_clears.cleared_through_message_id",
   ]) assert.ok(columns.has(column), `missing late-schema column ${column}`);
 
   const [foreignKeys] = await rootPool.query(
@@ -131,7 +132,7 @@ test("MySQL production migrations, seed and critical relational behavior", async
     [databaseName],
   );
   const rules = new Set(foreignKeys.map((row) => `${row.TABLE_NAME ?? row.table_name}->${row.REFERENCED_TABLE_NAME ?? row.referenced_table_name}:${row.DELETE_RULE ?? row.delete_rule}`));
-  for (const rule of ["profiles->users:CASCADE", "messages->users:SET NULL", "legal_acceptances->legal_documents:RESTRICT"]) {
+  for (const rule of ["profiles->users:CASCADE", "messages->users:SET NULL", "chat_history_clears->users:CASCADE", "legal_acceptances->legal_documents:RESTRICT"]) {
     assert.ok(rules.has(rule), `missing foreign-key rule ${rule}`);
   }
 
@@ -173,6 +174,19 @@ test("MySQL production migrations, seed and critical relational behavior", async
     /foreign key/i,
     "MySQL must reject an invalid foreign key",
   );
+
+  const clearViewerId = await insertUser("chat-clear-viewer");
+  const clearPeerId = await insertUser("chat-clear-peer");
+  const [olderMessage] = await rootPool.query("INSERT INTO messages (sender_user_id, recipient_user_id, body) VALUES (?, ?, 'older')", [clearViewerId, clearPeerId]);
+  const [newerMessage] = await rootPool.query("INSERT INTO messages (sender_user_id, recipient_user_id, body) VALUES (?, ?, 'newer')", [clearPeerId, clearViewerId]);
+  await rootPool.query("INSERT INTO chat_history_clears (user_id, peer_user_id, cleared_through_message_id) VALUES (?, ?, ?)", [clearViewerId, clearPeerId, newerMessage.insertId]);
+  const [[viewerCursor]] = await rootPool.query("SELECT cleared_through_message_id FROM chat_history_clears WHERE user_id = ? AND peer_user_id = ?", [clearViewerId, clearPeerId]);
+  const [[peerCursor]] = await rootPool.query("SELECT COUNT(*) AS count FROM chat_history_clears WHERE user_id = ? AND peer_user_id = ?", [clearPeerId, clearViewerId]);
+  assert.equal(Number(viewerCursor.cleared_through_message_id), Number(newerMessage.insertId), "clear cursor must stop at the viewer's current pair maximum");
+  assert.equal(peerCursor.count, 0, "clearing must not create a cursor for the peer");
+  const [laterMessage] = await rootPool.query("INSERT INTO messages (sender_user_id, recipient_user_id, body) VALUES (?, ?, 'later')", [clearPeerId, clearViewerId]);
+  assert.ok(Number(laterMessage.insertId) > Number(viewerCursor.cleared_through_message_id), "messages sent after clearing must remain visible above the cursor");
+  assert.ok(Number(olderMessage.insertId) <= Number(viewerCursor.cleared_through_message_id));
 
   const cascadeUserId = await insertUser("cascade-user-test");
   await rootPool.query("INSERT INTO material_saves (user_id, material_kind, material_id) VALUES (?, 'book', 1)", [cascadeUserId]);

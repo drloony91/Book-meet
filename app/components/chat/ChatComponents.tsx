@@ -1,6 +1,7 @@
-import { FormEvent, useMemo, useState } from "react";
+import { FormEvent, useEffect, useMemo, useState } from "react";
 import type { ChatAttachment, ChatAttachmentKind, ChatShareItem, Friend, Message } from "./types";
 import { useI18n } from "../../i18n";
+import { chatDayLabel, localCalendarDayKey } from "./chat-utils.js";
 
 export function Avatar({ friend, size = "md" }: { friend: Friend; size?: "sm" | "md" | "lg" }) {
   return (
@@ -102,6 +103,7 @@ export function ChatView({
   shareItems,
   onOpenAttachment,
   onReport,
+  onClearHistory,
   profileEnabled = true,
   fullPage = false,
   mobileDialog = false,
@@ -116,17 +118,46 @@ export function ChatView({
   shareItems: ChatShareItem[];
   onOpenAttachment: (attachment: ChatAttachment) => void;
   onReport?: () => void;
+  onClearHistory: () => Promise<boolean>;
   profileEnabled?: boolean;
   fullPage?: boolean;
   mobileDialog?: boolean;
 }) {
-  const { t, formatTime, domainLabel } = useI18n();
+  const { t, locale, formatTime, domainLabel } = useI18n();
   const [draft, setDraft] = useState("");
   const [shareOpen, setShareOpen] = useState(false);
   const [shareKind, setShareKind] = useState<ChatAttachmentKind | null>(null);
   const [shareQuery, setShareQuery] = useState("");
   const [attachment, setAttachment] = useState<ChatShareItem | null>(null);
+  const [historyMenuOpen, setHistoryMenuOpen] = useState(false);
+  const [historyClearing, setHistoryClearing] = useState(false);
+  const [calendarNow, setCalendarNow] = useState(() => new Date());
+  useEffect(() => { setHistoryMenuOpen(false); }, [friend.id]);
+  useEffect(() => {
+    let midnightTimer = 0;
+    const scheduleNextLocalMidnight = () => {
+      const now = new Date();
+      const nextMidnight = new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1);
+      midnightTimer = window.setTimeout(() => {
+        setCalendarNow(new Date());
+        scheduleNextLocalMidnight();
+      }, Math.max(1_000, nextMidnight.getTime() - now.getTime() + 100));
+    };
+    scheduleNextLocalMidnight();
+    return () => window.clearTimeout(midnightTimer);
+  }, []);
   const messageTime = (message: Message) => message.createdAt ? formatTime(message.createdAt) : message.time;
+  const messageGroups = useMemo(() => {
+    const visibleMessages = messages.filter((message) => !(message.system && friend.support));
+    return visibleMessages.reduce<{ key: string; label: string; messages: Message[] }[]>((groups, message) => {
+      const createdAt = message.createdAt ? new Date(message.createdAt) : calendarNow;
+      const key = localCalendarDayKey(createdAt);
+      const last = groups[groups.length - 1];
+      if (last?.key === key) last.messages.push(message);
+      else groups.push({ key, label: chatDayLabel(createdAt, calendarNow, locale, t("chat.today"), t("chat.yesterday")), messages: [message] });
+      return groups;
+    }, []);
+  }, [calendarNow, friend.support, locale, messages, t]);
   const shareTypes: { kind: ChatAttachmentKind; label: string; hint: string }[] = [
     { kind: "book", label: t("chat.shareBook"), hint: t("chat.hintBook") },
     { kind: "user", label: t("chat.shareUser"), hint: t("chat.hintUser") },
@@ -190,6 +221,16 @@ export function ChatView({
     setAttachment(null);
   }
 
+  async function clearHistory() {
+    if (historyClearing || !window.confirm(t("chat.clearHistoryConfirm", { name: friend.name }))) return;
+    setHistoryClearing(true);
+    try {
+      if (await onClearHistory()) setHistoryMenuOpen(false);
+    } finally {
+      setHistoryClearing(false);
+    }
+  }
+
   return (
     <main className={`chat-view ${expanded ? "chat-expanded" : "chat-compact"} ${fullPage ? "chat-full-page" : ""}`}>
       <header className="chat-header">
@@ -199,19 +240,19 @@ export function ChatView({
           <span><strong data-i18n-skip>{friend.name}</strong><small>{mobileDialog && friend.username ? <span data-i18n-skip>@{friend.username}</span> : <>{domainLabel(friend.type)}<span data-i18n-skip> · {friend.city}</span> · {friend.online ? t("chat.online") : t("chat.offline")}</>}</small></span>
         </button>
         <div className="chat-actions">
-          {!fullPage && <button type="button" onClick={onToggleExpanded} aria-label={expanded ? t("chat.collapse") : t("chat.expand")} title={expanded ? t("chat.collapse") : t("chat.expand")}>{expanded ? "↙" : "⛶"}</button>}
+          {!fullPage && <button className="chat-expand-action" type="button" onClick={onToggleExpanded} aria-label={expanded ? t("chat.collapse") : t("chat.expand")} title={expanded ? t("chat.collapse") : t("chat.expand")}>{expanded ? "↙" : "⛶"}</button>}
           {onReport && <button className="modal-tool-button modal-report-button" type="button" onClick={onReport} data-tooltip={t("safety.report")} aria-label={t("chat.report")}><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3 2.8 20h18.4L12 3Z" /><path d="M12 9v5m0 3h.01" /></svg></button>}
-          {!fullPage && <button type="button" onClick={onClose} aria-label={t("chat.close")} title={t("chat.close")}>×</button>}
+          <div className="chat-history-menu"><button className="chat-history-trigger" type="button" onClick={() => setHistoryMenuOpen((open) => !open)} aria-haspopup="menu" aria-expanded={historyMenuOpen} aria-label={t("chat.actions")} title={t("chat.actions")}>⋯</button>{historyMenuOpen && <div className="chat-history-dropdown" role="menu"><button type="button" role="menuitem" disabled={historyClearing} onClick={() => void clearHistory()}>{historyClearing ? t("chat.clearingHistory") : t("chat.clearHistory")}</button></div>}</div>
+          {!fullPage && <button className="chat-close-action" type="button" onClick={onClose} aria-label={t("chat.close")} title={t("chat.close")}>×</button>}
         </div>
       </header>
       <section className="message-area" aria-live="polite">
-        <div className="chat-day">{t("chat.today")}</div>
-        {messages.map((message) => (
-          message.system ? (friend.support ? null : <div className="system-message" data-i18n-skip key={message.id}>✦ {message.text}</div>) :
+        {messageGroups.map((group) => <div className="chat-day-group" key={group.key}><div className="chat-day">{group.label}</div>{group.messages.map((message) => (
+          message.system ? <div className="system-message" key={message.id}><span data-i18n-skip>✦ {message.text}</span><time dateTime={message.createdAt}>{messageTime(message)}</time></div> :
             <div className={`message-wrap ${message.mine ? "mine" : "theirs"}`} key={message.id}>
               <div className="message-bubble">{message.attachment && (() => { const item = shareItems.find((candidate) => candidate.kind === message.attachment?.kind && candidate.id === message.attachment?.id); return item ? <button className="chat-attachment-card" type="button" onClick={() => onOpenAttachment(message.attachment!)}><ChatAttachmentVisual item={item} /><span data-i18n-skip><strong>{item.title}</strong><em>{item.subtitle}</em></span></button> : null; })()}{message.text && <p data-i18n-skip>{message.text}</p>}<time>{messageTime(message)}{message.mine && <span className={`message-checks ${message.read ? "is-read" : ""}`} aria-label={message.read ? t("chat.read") : t("chat.sent")}>{message.read ? "✓✓" : "✓"}</span>}</time></div>
             </div>
-        ))}
+        ))}</div>)}
       </section>
       <div className="chat-composer">
         {shareOpen && <section className="chat-share-popover"><header><h3>{t("chat.share")}</h3><button type="button" onClick={() => { setShareOpen(false); setShareKind(null); }}>×</button></header>{!shareKind ? <div className="chat-share-types">{shareTypes.map((item) => <button type="button" key={item.kind} onClick={() => setShareKind(item.kind)}>{item.label}</button>)}</div> : <><button className="chat-share-back" type="button" onClick={() => { setShareKind(null); setShareQuery(""); }}>← {t("common.back")}</button><input autoFocus value={shareQuery} onChange={(event) => changeShareQuery(event.target.value)} placeholder={currentShareType?.hint} /><div className="chat-share-results">{matchingItems.map((item) => <button type="button" key={`${item.kind}-${item.id}`} onClick={() => chooseAttachment(item)}><ChatAttachmentVisual item={item} compact /><b>{item.title}</b><small>{item.subtitle}</small></button>)}{shareQuery.trim() && !matchingItems.length && <p>{t("common.nothingFound")}</p>}</div></>}</section>}

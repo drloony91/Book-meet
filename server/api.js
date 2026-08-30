@@ -821,6 +821,25 @@ async function assertUsersCanInteract(connection, firstUserId, secondUserId) {
   }
 }
 
+async function assertMessagePairAccess(connection, userId, targetId) {
+  if (!Number.isInteger(targetId) || targetId <= 0 || targetId === Number(userId)) {
+    throw Object.assign(new Error("Некорректный пользователь"), { statusCode: 400 });
+  }
+  await assertUsersCanInteract(connection, userId, targetId);
+  const low = Math.min(userId, targetId); const high = Math.max(userId, targetId);
+  const [[friendship]] = await connection.query("SELECT 1 FROM friendships WHERE user_low_id = ? AND user_high_id = ?", [low, high]);
+  const [[membership]] = await connection.query("SELECT 1 FROM community_memberships WHERE (community_user_id = ? AND member_user_id = ?) OR (community_user_id = ? AND member_user_id = ?)", [userId, targetId, targetId, userId]);
+  const [participants] = await connection.query("SELECT u.id, u.role, p.profile_type FROM users u JOIN profiles p ON p.user_id = u.id WHERE u.id IN (?, ?)", [userId, targetId]);
+  if (participants.length !== 2) throw Object.assign(new Error("Пользователь не найден"), { statusCode: 404 });
+  const hasAdmin = participants.some((participant) => participant.role === "admin");
+  const [firstParticipant, secondParticipant] = participants;
+  if (!membership && !hasAdmin) await assertAgeCompatible(connection, userId, targetId);
+  if (!canMessagePair({ friends: Boolean(friendship), communityMembers: Boolean(membership), hasAdmin, firstProfileType: firstParticipant?.profile_type, secondProfileType: secondParticipant?.profile_type })) {
+    throw Object.assign(new Error("Переписка доступна только друзьям, участникам сообщества, издательствам и службе поддержки"), { statusCode: 403 });
+  }
+  return { participants };
+}
+
 async function lockInteractionPair(connection, firstUserId, secondUserId) {
   const low = Math.min(Number(firstUserId), Number(secondUserId));
   const high = Math.max(Number(firstUserId), Number(secondUserId));
@@ -3597,7 +3616,7 @@ router.post("/social/friend-requests", asyncRoute(async (request, response) => {
       const [created] = await connection.query("INSERT IGNORE INTO community_memberships (community_user_id, member_user_id) VALUES (?, ?)", [targetId, userId]);
       if (created.affectedRows) {
         const systemText = "Вы стали участником открытого сообщества и можете начать переписку";
-        await connection.query("INSERT INTO messages (sender_user_id, recipient_user_id, body, is_system) VALUES (?, ?, ?, 1), (?, ?, ?, 1)", [userId, targetId, systemText, targetId, userId, systemText]);
+        await connection.query("INSERT INTO messages (sender_user_id, recipient_user_id, body, is_system) VALUES (?, ?, ?, 1)", [userId, targetId, systemText]);
         await connection.query("INSERT INTO notifications (user_id, actor_user_id, notification_type, title, body) VALUES (?, ?, 'friendship_started', ?, ?), (?, ?, 'friendship_started', ?, ?)", [targetId, userId, "Новый участник", `${source.display_name} присоединился(ась) к открытому сообществу.`, userId, targetId, "Вы вступили в сообщество", `Вы вступили в сообщество ${target.display_name}`]);
       }
       return;
@@ -3649,7 +3668,7 @@ router.post("/social/friends/:targetId/accept", asyncRoute(async (request, respo
       await connection.query("INSERT IGNORE INTO follows (follower_user_id, target_user_id) VALUES (?, ?), (?, ?)", [userId, targetId, targetId, userId]);
     }
     const systemText = membership ? "Заявка принята. Теперь вы участник сообщества и можете начать переписку" : "Теперь вы друзья и можете начать переписку";
-    await connection.query("INSERT INTO messages (sender_user_id, recipient_user_id, body, is_system) VALUES (?, ?, ?, 1), (?, ?, ?, 1)", [targetId, userId, systemText, userId, targetId, systemText]);
+    await connection.query("INSERT INTO messages (sender_user_id, recipient_user_id, body, is_system) VALUES (?, ?, ?, 1)", [targetId, userId, systemText]);
     const title = membership ? "Заявка принята" : "Теперь вы друзья";
     const currentText = membership ? `${sourceProfile.display_name} вступил(а) в сообщество.` : `Теперь вы друзья с ${sourceProfile.display_name}`;
     const sourceText = membership ? `Вы вступили в сообщество ${currentProfile.display_name}` : `Теперь вы друзья с ${currentProfile.display_name}`;
@@ -3735,25 +3754,15 @@ router.post("/social/messages", asyncRoute(async (request, response) => {
   const targetId = Number(request.body?.targetId);
   const body = String(request.body?.body ?? "").trim().slice(0, 5000);
   if (!targetId || (!body && !request.body?.attachment)) return response.status(400).json({ error: "Сообщение пусто" });
-  const low = Math.min(userId, targetId); const high = Math.max(userId, targetId);
   const createdMessage = await withTransaction(async (connection) => {
-    await assertUsersCanInteract(connection, userId, targetId);
-    const [[friendship]] = await connection.query("SELECT 1 FROM friendships WHERE user_low_id = ? AND user_high_id = ?", [low, high]);
-    const [[membership]] = await connection.query("SELECT 1 FROM community_memberships WHERE (community_user_id = ? AND member_user_id = ?) OR (community_user_id = ? AND member_user_id = ?)", [userId, targetId, targetId, userId]);
-    const [participants] = await connection.query("SELECT u.id, u.role, p.profile_type FROM users u JOIN profiles p ON p.user_id = u.id WHERE u.id IN (?, ?)", [userId, targetId]);
-    const hasAdmin = participants.some((participant) => participant.role === "admin");
-    const [firstParticipant, secondParticipant] = participants;
-    if (!membership && !hasAdmin) await assertAgeCompatible(connection, userId, targetId);
-    if (!canMessagePair({ friends: Boolean(friendship), communityMembers: Boolean(membership), hasAdmin, firstProfileType: firstParticipant?.profile_type, secondProfileType: secondParticipant?.profile_type })) throw Object.assign(new Error("Переписка доступна только друзьям, участникам сообщества, издательствам и службе поддержки"), { statusCode: 403 });
+    const { participants } = await assertMessagePairAccess(connection, userId, targetId);
     const attachment = await validatedChatAttachment(connection, request.body?.attachment, userId, targetId);
     const [created] = await connection.query("INSERT INTO messages (sender_user_id, recipient_user_id, body, attachment_kind, attachment_id) VALUES (?, ?, ?, ?, ?)", [userId, targetId, body, attachment?.kind ?? null, attachment?.id ?? null]);
     if (shouldEnqueueSupportAlert(participants, userId, targetId)) {
       await enqueueTelegramAlert(connection, { eventType: "support_message", entityId: created.insertId, actorUserId: userId, summary: "Новое сообщение пользователя" });
     }
-    const [[actor]] = await connection.query("SELECT display_name FROM profiles WHERE user_id = ?", [userId]);
-    const notificationPreview = body || "Поделился(ась) материалом";
-    await connection.query("INSERT INTO notifications (user_id, actor_user_id, notification_type, title, body, group_key) VALUES (?, ?, 'new_message', 'Новое сообщение', ?, ?) ON DUPLICATE KEY UPDATE actor_user_id = VALUES(actor_user_id), body = VALUES(body), is_unread = 1, created_at = CURRENT_TIMESTAMP", [targetId, userId, `${actor.display_name}: ${notificationPreview}`, `message:${userId}`]);
-    return { id: Number(created.insertId), createdAt: new Date().toISOString(), attachment };
+    const [[savedMessage]] = await connection.query("SELECT created_at FROM messages WHERE id = ?", [created.insertId]);
+    return { id: Number(created.insertId), createdAt: new Date(savedMessage.created_at).toISOString(), attachment };
   });
   response.status(201).json({ ok: true, message: { ...createdMessage, senderId: userId, mine: true, text: body, read: false } });
 }));
@@ -3762,10 +3771,34 @@ router.patch("/social/messages/:targetId/read", asyncRoute(async (request, respo
   const userId = request.bookMeetUser.id;
   const targetId = Number(request.params.targetId);
   await withTransaction(async (connection) => {
+    await assertMessagePairAccess(connection, userId, targetId);
     await connection.query("UPDATE messages SET read_at = UTC_TIMESTAMP() WHERE sender_user_id = ? AND recipient_user_id = ? AND read_at IS NULL", [targetId, userId]);
-    await connection.query("UPDATE notifications SET is_unread = 0 WHERE user_id = ? AND actor_user_id = ? AND notification_type = 'new_message'", [userId, targetId]);
   });
   response.json({ ok: true });
+}));
+
+router.delete("/social/messages/:targetId/history", asyncRoute(async (request, response) => {
+  const userId = request.bookMeetUser.id;
+  const targetId = Number(request.params.targetId);
+  const clearedThroughMessageId = await withTransaction(async (connection) => {
+    await assertMessagePairAccess(connection, userId, targetId);
+    const [[cursor]] = await connection.query(
+      `SELECT COALESCE(MAX(id), 0) AS message_id
+         FROM messages
+        WHERE (sender_user_id = ? AND recipient_user_id = ?)
+           OR (sender_user_id = ? AND recipient_user_id = ?)`,
+      [userId, targetId, targetId, userId],
+    );
+    const messageId = Number(cursor.message_id);
+    await connection.query(
+      `INSERT INTO chat_history_clears (user_id, peer_user_id, cleared_through_message_id)
+       VALUES (?, ?, ?)
+       ON DUPLICATE KEY UPDATE cleared_through_message_id = GREATEST(cleared_through_message_id, VALUES(cleared_through_message_id)), cleared_at = CURRENT_TIMESTAMP`,
+      [userId, targetId, messageId],
+    );
+    return messageId;
+  });
+  response.json({ ok: true, clearedThroughMessageId });
 }));
 
 router.patch("/notifications/read-all", asyncRoute(async (request, response) => {

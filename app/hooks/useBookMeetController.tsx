@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { Avatar, ChatView } from "../components/chat/ChatComponents";
 import type { ChatAttachment, ChatShareItem, Friend, Message } from "../components/chat/types";
+import { sortChatFriends } from "../components/chat/chat-utils.js";
 import { BookMeetHeader, MobileBottomNavigation, MobileNavigationDrawer, WorkspaceScreen, type MobileCreateOption } from "../components/layout/AppLayout";
 import { NotificationDetail, NotificationsMenu, NotificationsPage } from "../components/notifications/Notifications";
 import {
@@ -109,11 +110,12 @@ import type {
 import { localizedApiError, useI18n } from "../i18n";
 
 export function useBookMeetController() {
-  const { t, formatDate, formatNumber } = useI18n();
+  const { t, formatDate, formatTime, formatNumber } = useI18n();
   const localizedViewTitle = (target: MainView) => target === "profile" ? `${t("profile.my")} — Book Meet` : target === "search" ? `${t("common.search")} — Book Meet` : mainViewTitle(target, t);
   const [users, setUsers] = useState<DemoUser[]>([]);
   const setData = (updater: (current: { users: DemoUser[] } | null) => { users: DemoUser[] } | null) => setUsers((current) => updater({ users: current })?.users ?? current);
   const [catalogBooks, setCatalogBooks] = useState<Array<LibraryBook | AuthorBook>>([]);
+  const [activeOrganizationIds, setActiveOrganizationIds] = useState<number[]>([]);
   const [activeUserId, setActiveUserId] = useState<number | null>(null);
   const [authLoading, setAuthLoading] = useState(true);
   const [authTransition, setAuthTransition] = useState(false);
@@ -242,6 +244,7 @@ export function useBookMeetController() {
         if (!active) return;
         setUsers(data.users);
         setCatalogBooks(data.books ?? []);
+        setActiveOrganizationIds(data.activeOrganizationIds ?? []);
         setMessages(data.messages ?? {});
         setFriendRequests(data.friendRequests ?? []);
         setFriendships(data.friendships ?? []);
@@ -486,11 +489,11 @@ export function useBookMeetController() {
   const friendRows: Friend[] = [...new Map([...currentFriendUsers, ...currentMembershipUsers, ...conversationUsers].map((user) => [user.id, user])).values()].map((user) => {
     const conversation = currentUser ? messages[conversationKey(currentUser.id, user.id)] ?? [] : [];
     const last = [...conversation].reverse().find((message) => !message.system);
-    return { id: user.id, name: user.profile.name, username: user.username, type: user.profile.type, city: user.profile.city, initials: user.initials, avatarUrl: user.avatarUrl, color: user.color, online: Boolean(user.online), unread: conversation.filter((message) => message.unread && !message.mine && !message.system).length || undefined, lastMessage: last?.text || (last?.attachment ? t("chat.attachment") : user.profile.type === "Сообщество" || currentUser?.profile.type === "Сообщество" ? t("chat.communityMember") : t("notification.friendshipStarted")), time: last?.time ?? t("common.now"), bio: user.profile.bio, books: user.profile.favoriteGenres.join(", ") };
+    return { id: user.id, name: user.profile.name, username: user.username, type: user.profile.type, city: user.profile.city, initials: user.initials, avatarUrl: user.avatarUrl, color: user.color, online: Boolean(user.online), unread: conversation.filter((message) => message.unread && !message.mine && !message.system).length || undefined, lastMessage: last?.text || (last?.attachment ? t("chat.attachment") : user.profile.type === "Сообщество" || currentUser?.profile.type === "Сообщество" ? t("chat.communityMember") : t("notification.friendshipStarted")), time: last?.createdAt ? formatTime(last.createdAt) : last?.time ?? "", lastActivityAt: last?.createdAt, bio: user.profile.bio, books: user.profile.favoriteGenres.join(", ") };
   });
-  const supportRow: Friend[] = currentUser && !currentUser.isAdmin && adminUser && !friendRows.some((friend) => friend.id === adminUser.id) ? (() => { const conversation = messages[conversationKey(currentUser.id, adminUser.id)] ?? []; const last = [...conversation].reverse().find((message) => !message.system); return [{ id: adminUser.id, name: t("chat.support"), username: adminUser.username, type: adminUser.profile.type, city: adminUser.profile.city, initials: "✓", color: "navy", online: Boolean(adminUser.online), support: true, unread: conversation.filter((message) => message.unread && !message.mine && !message.system).length || undefined, lastMessage: last?.text ?? t("chat.alwaysHelp"), time: last?.time ?? "", bio: t("chat.officialSupport"), books: "" }]; })() : [];
-  const adminSupportRows: Friend[] = currentUser?.isAdmin ? users.filter((user) => user.id !== currentUser.id && !friendIds.includes(user.id) && Object.prototype.hasOwnProperty.call(messages, conversationKey(currentUser.id, user.id))).map((user) => { const conversation = messages[conversationKey(currentUser.id, user.id)] ?? []; const last = [...conversation].reverse().find((message) => !message.system); return { id: user.id, name: user.profile.name, username: user.username, type: user.profile.type, city: user.profile.city, initials: user.initials, avatarUrl: user.avatarUrl, color: user.color, online: Boolean(user.online), supportCase: true, unread: conversation.filter((message) => message.unread && !message.mine && !message.system).length || undefined, lastMessage: last?.text || (last?.attachment ? t("chat.attachment") : t("chat.supportRequest")), time: last?.time ?? "", bio: user.profile.bio, books: user.profile.favoriteGenres.join(", ") }; }) : [];
-  const currentFriends: Friend[] = currentUser?.isAdmin ? [...friendRows, ...adminSupportRows] : [...friendRows.filter((friend) => friend.id !== adminUser?.id), ...(currentUser && adminUser ? (friendRows.some((friend) => friend.id === adminUser.id) ? friendRows.filter((friend) => friend.id === adminUser.id).map((friend) => ({ ...friend, name: t("chat.support"), support: true })) : supportRow) : [])];
+  const supportRow: Friend[] = currentUser && !currentUser.isAdmin && adminUser && !friendRows.some((friend) => friend.id === adminUser.id) ? (() => { const conversation = messages[conversationKey(currentUser.id, adminUser.id)] ?? []; const last = [...conversation].reverse().find((message) => !message.system); return [{ id: adminUser.id, name: t("chat.support"), username: adminUser.username, type: adminUser.profile.type, city: adminUser.profile.city, initials: "✓", color: "navy", online: Boolean(adminUser.online), support: true, unread: conversation.filter((message) => message.unread && !message.mine && !message.system).length || undefined, lastMessage: last?.text ?? t("chat.alwaysHelp"), time: last?.createdAt ? formatTime(last.createdAt) : last?.time ?? "", lastActivityAt: last?.createdAt, bio: t("chat.officialSupport"), books: "" }]; })() : [];
+  const adminSupportRows: Friend[] = currentUser?.isAdmin ? users.filter((user) => user.id !== currentUser.id && !friendIds.includes(user.id) && Object.prototype.hasOwnProperty.call(messages, conversationKey(currentUser.id, user.id))).map((user) => { const conversation = messages[conversationKey(currentUser.id, user.id)] ?? []; const last = [...conversation].reverse().find((message) => !message.system); return { id: user.id, name: user.profile.name, username: user.username, type: user.profile.type, city: user.profile.city, initials: user.initials, avatarUrl: user.avatarUrl, color: user.color, online: Boolean(user.online), supportCase: true, unread: conversation.filter((message) => message.unread && !message.mine && !message.system).length || undefined, lastMessage: last?.text || (last?.attachment ? t("chat.attachment") : t("chat.supportRequest")), time: last?.createdAt ? formatTime(last.createdAt) : last?.time ?? "", lastActivityAt: last?.createdAt, bio: user.profile.bio, books: user.profile.favoriteGenres.join(", ") }; }) : [];
+  const currentFriends: Friend[] = sortChatFriends(currentUser?.isAdmin ? [...friendRows, ...adminSupportRows] : [...friendRows.filter((friend) => friend.id !== adminUser?.id), ...(currentUser && adminUser ? (friendRows.some((friend) => friend.id === adminUser.id) ? friendRows.filter((friend) => friend.id === adminUser.id).map((friend) => ({ ...friend, name: t("chat.support"), support: true })) : supportRow) : [])]);
   const mobileMessageRequests: MobileMessageRequest[] = currentUser ? friendRequests.filter((request) => request.status === "pending" && request.toId === currentUser.id && request.fromId !== currentUser.id).flatMap((request) => {
     const user = users.find((candidate) => candidate.id === request.fromId);
     if (!user) return [];
@@ -512,10 +515,23 @@ export function useBookMeetController() {
   }, [catalog, users, events, occasions]);
   const homeReviews = currentUser ? allReviews : [];
   const homeExcerpts = currentUser ? allExcerpts : [];
-  const currentNotifications = currentUser ? notifications.filter((notification) => notification.userId === currentUser.id).sort((a, b) => b.id - a.id) : [];
+  const currentNotifications = currentUser ? notifications.filter((notification) => notification.userId === currentUser.id && notification.type !== "new_message").sort((a, b) => b.id - a.id) : [];
   const unreadCount = currentNotifications.filter((notification) => notification.unread).length;
   const unreadMessages = currentFriends.reduce((total, friend) => total + (friend.unread ?? 0), 0);
   const profileUser = users.find((user) => user.id === profileUserId && !user.isAdmin) ?? null;
+  const activeUnreadMessageIds = selectedFriend && currentUser ? (messages[conversationKey(currentUser.id, selectedFriend.id)] ?? []).filter((message) => message.unread && !message.mine && !message.system).map((message) => message.id).join(",") : "";
+
+  useEffect(() => {
+    if (!selectedFriend || !currentUser || !activeUnreadMessageIds) return;
+    let active = true;
+    const peerId = selectedFriend.id;
+    const key = conversationKey(currentUser.id, peerId);
+    void apiFetch(`/api/social/messages/${peerId}/read`, { method: "PATCH", credentials: "same-origin" }).then((response) => {
+      if (!response.ok) throw new Error(t("chat.readStatusError"));
+      if (active) setMessages((current) => ({ ...current, [key]: (current[key] ?? []).map((message) => message.mine ? message : { ...message, unread: false }) }));
+    }).catch((error) => console.warn(error));
+    return () => { active = false; };
+  }, [activeUnreadMessageIds, currentUser?.id, selectedFriend?.id, t]);
 
   useEffect(() => {
     if (!currentUser) { setCommenters({}); return; }
@@ -546,6 +562,7 @@ export function useBookMeetController() {
   function applyBootstrap(data: BootstrapData) {
     setUsers(data.users);
     setCatalogBooks(data.books ?? []);
+    setActiveOrganizationIds(data.activeOrganizationIds ?? []);
     setActiveUserId(data.activeUserId);
     setMessages(data.messages ?? {});
     setFriendRequests(data.friendRequests ?? []);
@@ -574,7 +591,7 @@ export function useBookMeetController() {
     } catch (error) {
       if (!(error instanceof BootstrapRequestError) || error.status !== 423) throw error;
       setSuspension({ permanent: Boolean(error.data.permanent), until: typeof error.data.until === "string" ? error.data.until : undefined, reason: typeof error.data.reason === "string" ? error.data.reason : "" });
-      setUsers([]); setCatalogBooks([]);
+      setUsers([]); setCatalogBooks([]); setActiveOrganizationIds([]);
       setActiveUserId(null);
     }
   }
@@ -920,10 +937,6 @@ export function useBookMeetController() {
     setSelectedFriend({ id: user.id, name: user.isAdmin && !currentUser.isAdmin ? t("chat.support") : user.profile.name, username: user.username, type: user.profile.type, city: user.profile.city, initials: user.initials, avatarUrl: user.avatarUrl, color: user.isAdmin ? "navy" : user.color, online: Boolean(user.online), support: Boolean(user.isAdmin && !currentUser.isAdmin), lastMessage: "", time: "", bio: user.profile.bio, books: user.profile.favoriteGenres.join(", ") });
     setChatExpanded(false);
     if (!desktopChat) setView("chat");
-    const key = conversationKey(currentUser.id, userId);
-    setMessages((current) => ({ ...current, [key]: (current[key] ?? []).map((message) => message.mine ? message : { ...message, unread: false }) }));
-    setNotifications((current) => current.map((notification) => notification.userId === currentUser.id && notification.actorId === userId && notification.type === "new_message" ? { ...notification, unread: false } : notification));
-    void apiFetch(`/api/social/messages/${userId}/read`, { method: "PATCH", credentials: "same-origin" }).catch((error) => console.warn(error));
     setProfileUserId(null); setNotificationsOpen(false);
   }
 
@@ -935,7 +948,24 @@ export function useBookMeetController() {
     const createdAt = data.message?.createdAt ?? new Date().toISOString();
     const key = conversationKey(currentUser.id, selectedFriend.id);
     setMessages((current) => ({ ...current, [key]: [...(current[key] ?? []), { id: data.message?.id ?? Date.now(), mine: true, senderId: currentUser.id, text, attachment, time: "", createdAt, read: false }] }));
-    addNotification({ userId: selectedFriend.id, actorId: currentUser.id, type: "new_message", title: t("notification.newMessage"), text: `${currentUser.profile.name}: ${text || t("chat.sharedMaterial")}` });
+  }
+
+  async function clearChatHistory() {
+    if (!selectedFriend || !currentUser) return false;
+    try {
+      const response = await apiFetch(`/api/social/messages/${selectedFriend.id}/history`, { method: "DELETE", credentials: "same-origin" });
+      const data = await response.json().catch(() => ({})) as { error?: string };
+      if (!response.ok) {
+        window.alert(localizedApiError(data.error, t("chat.clearHistoryError")));
+        return false;
+      }
+      const key = conversationKey(currentUser.id, selectedFriend.id);
+      setMessages((current) => ({ ...current, [key]: [] }));
+      return true;
+    } catch {
+      window.alert(t("chat.clearHistoryError"));
+      return false;
+    }
   }
 
   async function sendFriendRequest(targetId: number, message: string) {
@@ -970,10 +1000,8 @@ export function useBookMeetController() {
       const pairs = [{ followerId: currentUser.id, targetId }, { followerId: targetId, targetId: currentUser.id }];
       return [...current, ...pairs.filter((pair) => !current.some((follow) => follow.followerId === pair.followerId && follow.targetId === pair.targetId))];
     });
-    const key = conversationKey(currentUser.id, targetId);
     const systemText = isMembership ? t("social.membershipAcceptedSystem") : t("social.friendshipAcceptedSystem");
     const notificationTitle = isMembership ? t("social.requestAccepted") : t("notification.friendshipStarted");
-    setMessages((current) => ({ ...current, [key]: [{ id: Date.now(), mine: false, system: true, text: systemText, time: t("common.now") }] }));
     addNotification({ userId: currentUser.id, actorId: targetId, type: "friendship_started", title: notificationTitle, text: systemText });
     addNotification({ userId: targetId, actorId: currentUser.id, type: "friendship_started", title: notificationTitle, text: systemText });
     setProfileUserId(null);
@@ -1202,7 +1230,7 @@ export function useBookMeetController() {
 
   async function logout() {
     await apiFetch("/api/auth/logout", { method: "POST", credentials: "same-origin" }).catch(() => undefined);
-    setUsers([]); setCatalogBooks([]); setActiveUserId(null); setMessages({}); setFriendRequests([]); setFriendships([]); setCommunityMemberships([]); setFollows([]); setNotifications([]); setLikes({}); setSaves({}); setLikedMaterialRefs([]); setSavedMaterialRefs([]); setEvents([]); setOccasions([]); setBlocks([]); setBlockedByUserIds([]); setReports([]); setSuspension(null); setCommenters({}); setCommentCounts({}); setSaveCounts({}); setSelectedFriend(null); setChatExpanded(false);
+    setUsers([]); setCatalogBooks([]); setActiveOrganizationIds([]); setActiveUserId(null); setMessages({}); setFriendRequests([]); setFriendships([]); setCommunityMemberships([]); setFollows([]); setNotifications([]); setLikes({}); setSaves({}); setLikedMaterialRefs([]); setSavedMaterialRefs([]); setEvents([]); setOccasions([]); setBlocks([]); setBlockedByUserIds([]); setReports([]); setSuspension(null); setCommenters({}); setCommentCounts({}); setSaveCounts({}); setSelectedFriend(null); setChatExpanded(false);
     navigateMainView("home", { replace: true }); setNotificationsOpen(false); setProfileAction(null); setNewlyRegistered(false); setAuthTransition(false);
   }
 
@@ -1281,14 +1309,15 @@ export function useBookMeetController() {
     }
     setSelectedPublisherNews(source ?? null);
   };
-  const chat = selectedFriend ? <ChatView friend={selectedFriend} messages={activeChatMessages} profileEnabled={!selectedFriend.support} onOpenProfile={() => openUserProfile(selectedFriend.id)} onSend={sendMessage} shareItems={shareItems} onOpenAttachment={openChatAttachment} onReport={!currentUser.isAdmin && !selectedFriend.support ? () => openReportDialog({ kind: "chat", id: selectedFriend.id }) : undefined} expanded={chatExpanded} onToggleExpanded={toggleChatExpanded} onClose={closeChat} /> : null;
-  const mobileChatPage = currentRoute.overlay?.kind === "chat" && selectedFriend ? <div className="mobile-chat-dialog"><ChatView friend={selectedFriend} messages={activeChatMessages} profileEnabled={!selectedFriend.support} onOpenProfile={() => openUserProfile(selectedFriend.id)} onSend={sendMessage} shareItems={shareItems} onOpenAttachment={openChatAttachment} onReport={!currentUser.isAdmin && !selectedFriend.support ? () => openReportDialog({ kind: "chat", id: selectedFriend.id }) : undefined} expanded={false} onToggleExpanded={() => undefined} onClose={closeChat} fullPage mobileDialog /> </div> : <MobileMessagesPage friends={currentFriends} requests={mobileMessageRequests} onSelectFriend={(friend) => openChat(friend.id)} onOpenRequest={openUserProfile} />;
-  const chatPage = selectedFriend ? <ChatView friend={selectedFriend} messages={activeChatMessages} profileEnabled={!selectedFriend.support} onOpenProfile={() => openUserProfile(selectedFriend.id)} onSend={sendMessage} shareItems={shareItems} onOpenAttachment={openChatAttachment} onReport={!currentUser.isAdmin && !selectedFriend.support ? () => openReportDialog({ kind: "chat", id: selectedFriend.id }) : undefined} expanded={false} onToggleExpanded={() => undefined} onClose={() => undefined} fullPage /> : <ChatScreen hasFriends={currentFriends.length > 0} />;
+  const chat = selectedFriend ? <ChatView friend={selectedFriend} messages={activeChatMessages} profileEnabled={!selectedFriend.support} onOpenProfile={() => openUserProfile(selectedFriend.id)} onSend={sendMessage} onClearHistory={clearChatHistory} shareItems={shareItems} onOpenAttachment={openChatAttachment} onReport={!currentUser.isAdmin && !selectedFriend.support ? () => openReportDialog({ kind: "chat", id: selectedFriend.id }) : undefined} expanded={chatExpanded} onToggleExpanded={toggleChatExpanded} onClose={closeChat} /> : null;
+  const mobileChatPage = currentRoute.overlay?.kind === "chat" && selectedFriend ? <div className="mobile-chat-dialog"><ChatView friend={selectedFriend} messages={activeChatMessages} profileEnabled={!selectedFriend.support} onOpenProfile={() => openUserProfile(selectedFriend.id)} onSend={sendMessage} onClearHistory={clearChatHistory} shareItems={shareItems} onOpenAttachment={openChatAttachment} onReport={!currentUser.isAdmin && !selectedFriend.support ? () => openReportDialog({ kind: "chat", id: selectedFriend.id }) : undefined} expanded={false} onToggleExpanded={() => undefined} onClose={closeChat} fullPage mobileDialog /> </div> : <MobileMessagesPage friends={currentFriends} requests={mobileMessageRequests} onSelectFriend={(friend) => openChat(friend.id)} onOpenRequest={openUserProfile} />;
+  const chatPage = selectedFriend ? <ChatView friend={selectedFriend} messages={activeChatMessages} profileEnabled={!selectedFriend.support} onOpenProfile={() => openUserProfile(selectedFriend.id)} onSend={sendMessage} onClearHistory={clearChatHistory} shareItems={shareItems} onOpenAttachment={openChatAttachment} onReport={!currentUser.isAdmin && !selectedFriend.support ? () => openReportDialog({ kind: "chat", id: selectedFriend.id }) : undefined} expanded={false} onToggleExpanded={() => undefined} onClose={() => undefined} fullPage /> : <ChatScreen hasFriends={currentFriends.length > 0} />;
   const routedChatPage = <><div className="desktop-chat-page">{chatPage}</div>{mobileChatPage}</>;
   const upcomingEvents = events.filter((item) => eventTimestamp(item) > eventClock);
   const visibleHomeEvents = upcomingEvents.filter((item) => item.creatorId === currentUser.id && item.status !== "rejected" || item.status === "published").sort((a, b) => eventTimestamp(a) - eventTimestamp(b));
   const visibleHomeOccasions = occasions.filter((item) => item.creatorId === currentUser.id && item.status !== "rejected" || item.status === "published" && (item.targetGender === "Все" || item.targetGender === currentUser.profile.gender) && (item.targetProfileType === "Все" || item.targetProfileType === currentUser.profile.type));
   const materialDirectoryProps = { reviews: allReviews, excerpts: allExcerpts, publisherNews: allPublisherNews, currentUser, users: visibleUsers, catalog, likes, saves, commenters, commentCounts, saveCounts, onToggleLike: toggleLike, onToggleSave: toggleSave, onComment: addComment, onOpenUser: openUserProfile, relationshipFor, isFollowing: followsUser, onAddFriend: sendFriendRequest, onFollow: followUser };
+  const activeOrganizationUsers = visibleUsers.filter((user) => activeOrganizationIds.includes(user.id) && !user.deletedAt && !user.purged);
   const mobileCreateOptions: MobileCreateOption[] = [
     ...(!["Издатель", "Сообщество"].includes(currentUser.profile.type) ? [{ label: t("content.createPublication"), onClick: () => startCreating("excerpt") }] : []),
     ...(["Читатель", "Писатель", "Блогер"].includes(currentUser.profile.type) ? [{ label: t("content.createReview"), onClick: () => startCreating("review") }] : []),
@@ -1309,11 +1338,11 @@ export function useBookMeetController() {
           : view === "users"
             ? directoryShell(<UsersDirectoryPage currentUser={currentUser} users={visibleUsers} onOpenUser={openUserProfile} />)
             : view === "publishing"
-              ? directoryShell(<PublishingDirectoryPage users={visibleUsers} events={upcomingEvents} onOpenUser={openUserProfile} />)
+              ? directoryShell(<PublishingDirectoryPage users={activeOrganizationUsers} events={upcomingEvents} onOpenUser={openUserProfile} />)
             : view === "books"
               ? directoryShell(<AllBooksDirectoryPage users={visibleUsers} currentUser={currentUser} onOpenUser={openUserProfile} />)
             : view === "communities"
-              ? directoryShell(<CommunitiesDirectoryPage users={visibleUsers} events={upcomingEvents} onOpenUser={openUserProfile} />)
+              ? directoryShell(<CommunitiesDirectoryPage users={activeOrganizationUsers} events={upcomingEvents} onOpenUser={openUserProfile} />)
             : view === "partners"
               ? directoryShell(<SimpleDirectoryPage kind="partners" />)
             : view === "liked"

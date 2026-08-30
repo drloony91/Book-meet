@@ -1036,6 +1036,13 @@ export const ru = {
   "material.typePublisherNews": "Новость издательства",
   "material.typeCommunityNews": "Новость сообщества",
   "material.typePartnerNews": "Новость партнера",
+  "chat.yesterday": "Вчера",
+  "chat.actions": "Действия с чатом",
+  "chat.clearHistory": "Очистить историю чата",
+  "chat.clearingHistory": "Очищаем историю…",
+  "chat.clearHistoryConfirm": "Очистить историю чата с {name}? Переписка исчезнет только у вас.",
+  "chat.clearHistoryError": "Не удалось очистить историю чата",
+  "chat.readStatusError": "Не удалось обновить статус прочтения",
 } as const;
 
 export type MessageKey = keyof typeof ru;
@@ -1088,6 +1095,7 @@ export const kk = {
   "authorBooks.mine": "Менің кітаптарым", "authorBooks.writtenByYou": "Сіз жазған кітаптар", "authorBooks.authored": "Авторлық кітап", "authorBooks.addAuthored": "Авторлық кітап қосу", "authorBooks.communityHint": "Қауымдастығыңыз қосқан кітаптар", "authorBooks.publisherHint": "Баспаңыз шығарған кітаптар", "authorBooks.deleteConfirm": "«{title}» кітабын кітаптарыңыз тізімінен жою керек пе?",
   "editor.inlineImage": "Мәтіндегі сурет",
   "publication.count": "Жарияланымдар: {count}", "publication.deleteConfirm": "Жарияланымды жою керек пе?", "publication.linkedQuestion": "Жарияланым кітабыңызбен байланысты ма?",
+  "chat.yesterday": "Кеше", "chat.actions": "Чат әрекеттері", "chat.clearHistory": "Чат тарихын тазалау", "chat.clearingHistory": "Тарих тазалануда…", "chat.clearHistoryConfirm": "{name} пайдаланушысымен чат тарихын тазалау керек пе? Хат алмасу тек сізде жоғалады.", "chat.clearHistoryError": "Чат тарихын тазалау мүмкін болмады", "chat.readStatusError": "Оқылған күйін жаңарту мүмкін болмады",
   "admin.openMaterial": "Материалды ашу",
 } satisfies Record<MessageKey, string>;
 
@@ -1139,6 +1147,7 @@ export const en = {
   "authorBooks.mine": "My books", "authorBooks.writtenByYou": "Books you wrote", "authorBooks.authored": "Author book", "authorBooks.addAuthored": "Add author book", "authorBooks.communityHint": "Books added by your community", "authorBooks.publisherHint": "Books released by your publisher", "authorBooks.deleteConfirm": "Remove “{title}” from your books?",
   "editor.inlineImage": "Inline image",
   "publication.count": "Publications: {count}", "publication.deleteConfirm": "Delete publication?", "publication.linkedQuestion": "Is this publication linked to your book?",
+  "chat.yesterday": "Yesterday", "chat.actions": "Chat actions", "chat.clearHistory": "Clear chat history", "chat.clearingHistory": "Clearing history…", "chat.clearHistoryConfirm": "Clear your chat history with {name}? The conversation will disappear only for you.", "chat.clearHistoryError": "Could not clear chat history", "chat.readStatusError": "Could not update read status",
   "admin.openMaterial": "Open material",
 } satisfies Record<MessageKey, string>;
 

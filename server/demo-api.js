@@ -235,6 +235,7 @@ const state = {
     { id: 24, catalogBookId: 24, author: "Айгерим Жансугурова", title: "Точки на карте", genres: ["Современная проза"], annotation: "Каталожная книга без записи в личной библиотеке.", pages: "", format: "Бумажная", durationHours: "", durationMinutes: "", rating: 0, review: "", coverTone: "mint", links: [] },
   ],
   messages: {},
+  chatHistoryClears: {},
   friendRequests: [],
   // Keep one deterministic reader/publisher conversation available to the
   // browser suite without granting any additional production permissions.
@@ -362,7 +363,7 @@ function bootstrap(userId) {
   const link = state.linkedProfiles.find((item) => item.personalUserId === userId || item.communityUserId === userId);
   const previewOnlyUsers = !profileGate.complete ? visibleUsers.map((entry) => ({ ...entry, reviews: (entry.reviews ?? []).map((review) => ({ ...review, fullText: "", bodyHtml: "" })), excerpts: (entry.excerpts ?? []).map((excerpt) => ({ ...excerpt, text: "", bodyHtml: "" })), publisherNews: (entry.publisherNews ?? []).map((news) => ({ ...news, body: "", bodyHtml: "" })) })) : visibleUsers;
   const linked = link ? users.find((item) => item.id === (link.personalUserId === userId ? link.communityUserId : link.personalUserId)) : undefined;
-  const { linkedProfiles: _linkedProfiles, saves: saveEntries, ...publicState } = state;
+  const { linkedProfiles: _linkedProfiles, saves: saveEntries, messages: _messages, notifications: _notifications, chatHistoryClears: _chatHistoryClears, ...publicState } = state;
   const saves = {};
   const savedMaterialRefs = [];
   for (const [key, entries] of Object.entries(saveEntries)) {
@@ -380,11 +381,58 @@ function bootstrap(userId) {
   const visibleBooks = state.catalogBooks.filter((item) => adultStatus === "adult" || !item.isAdult).map((item) => profileGate.complete ? item : { ...item, annotation: "", isbn: undefined, publisher: undefined, links: [], flipUrl: undefined });
   const visibleEvents = state.events.filter((item) => (viewer?.isAdmin || adultStatus === "adult" || !item.isAdult) && (viewer?.isAdmin || item.status === "published" || item.creatorId === userId)).map((item) => profileGate.complete ? item : { ...item, description: "", address: "", mapUrl: "", detailsUrl: "" });
   const visibleOccasions = state.occasions.filter((item) => (viewer?.isAdmin || adultStatus === "adult" || !item.isAdult) && (viewer?.isAdmin || item.creatorId === userId || item.status === "published" && (item.targetGender === "Все" || item.targetGender === viewer?.profile.gender) && (item.targetProfileType === "Все" || item.targetProfileType === viewer?.profile.type))).map((item) => profileGate.complete ? item : { ...item, audienceText: "", meetingDate: undefined, meetingStartTime: undefined, meetingEndTime: undefined, meetingCity: undefined, meetingCityId: undefined, meetingAddress: undefined, meetingMapUrl: undefined });
-  return structuredClone({ activeUserId: userId, profileCompleted: profileGate.complete, accessGate: { profileComplete: profileGate.complete, missingProfileFields: profileGate.missing, legalConfigured: legalGate.configured, pendingLegalDocuments: legalGate.pending, legalDocuments: legalGate.documents }, adultAccess: { status: adultStatus, restricted }, users: previewOnlyUsers, ...publicState, saves, savedMaterialRefs, likedMaterialRefs, linkedProfile: linked ? { id: linked.id, name: linked.profile.name, type: linked.profile.type, avatarUrl: linked.avatarUrl, profileCompleted: demoProfileAccess(linked).complete } : undefined, books: visibleBooks, blocks: relatedBlocks, blockedByUserIds, reports: viewer?.isAdmin ? state.reports : [], events: visibleEvents, occasions: visibleOccasions });
+  const viewerMessages = Object.fromEntries(Object.entries(state.messages).filter(([key]) => key.split("-").map(Number).includes(userId)).map(([key, entries]) => {
+    const peerId = key.split("-").map(Number).find((id) => id !== userId);
+    const cursor = Number(state.chatHistoryClears[`${userId}:${peerId}`] ?? 0);
+    return [key, entries.filter((item) => Number(item.id) > cursor).map((item) => ({
+      ...item,
+      mine: Number(item.senderId) === userId,
+      unread: Number(item.recipientId) === userId && !item.readAt && !item.system,
+      read: Boolean(item.readAt),
+      time: "",
+    }))];
+  }));
+  const activeOrganizationIds = users.filter((user) => !user.deletedAt && !user.purged && ["Издатель", "Сообщество"].includes(user.profile.type) && user.profile.publisherStatus === "approved").map((user) => user.id);
+  const visibleNotifications = state.notifications.filter((item) => item.userId === userId && item.type !== "new_message");
+  return structuredClone({ activeUserId: userId, profileCompleted: profileGate.complete, accessGate: { profileComplete: profileGate.complete, missingProfileFields: profileGate.missing, legalConfigured: legalGate.configured, pendingLegalDocuments: legalGate.pending, legalDocuments: legalGate.documents }, adultAccess: { status: adultStatus, restricted }, users: previewOnlyUsers, activeOrganizationIds, ...publicState, messages: viewerMessages, notifications: visibleNotifications, saves, savedMaterialRefs, likedMaterialRefs, linkedProfile: linked ? { id: linked.id, name: linked.profile.name, type: linked.profile.type, avatarUrl: linked.avatarUrl, profileCompleted: demoProfileAccess(linked).complete } : undefined, books: visibleBooks, blocks: relatedBlocks, blockedByUserIds, reports: viewer?.isAdmin ? state.reports : [], events: visibleEvents, occasions: visibleOccasions });
 }
 
 function conversationKey(first, second) {
   return [Number(first), Number(second)].sort((a, b) => a - b).join("-");
+}
+
+function demoInteractionAge(user) {
+  if (user.profile.type === "Издатель") return 18;
+  if (Number.isFinite(Number(user.profile.age))) return Number(user.profile.age);
+  const birthDate = String(user.profile.birthDate ?? "");
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(birthDate)) return null;
+  const birth = new Date(`${birthDate}T00:00:00Z`);
+  const today = new Date();
+  let age = today.getUTCFullYear() - birth.getUTCFullYear();
+  if (today.getUTCMonth() < birth.getUTCMonth() || today.getUTCMonth() === birth.getUTCMonth() && today.getUTCDate() < birth.getUTCDate()) age -= 1;
+  return age;
+}
+
+function assertDemoMessagePairAccess(userId, targetId) {
+  if (!Number.isInteger(targetId) || targetId <= 0 || targetId === Number(userId)) return { status: 400, error: "Некорректный пользователь" };
+  const sender = users.find((user) => user.id === userId);
+  const target = users.find((user) => user.id === targetId);
+  if (!sender || !target) return { status: 404, error: "Пользователь не найден" };
+  if (sender.deletedAt || sender.purged || target.deletedAt || target.purged) return { status: 410, error: "Взаимодействие с удалённым профилем недоступно" };
+  const blockedPair = state.blocks.some((item) => [item.blockerId, item.blockedId].includes(userId) && [item.blockerId, item.blockedId].includes(targetId));
+  if (blockedPair) return { status: 403, error: "Взаимодействие с пользователем недоступно" };
+  const friends = state.friendships.some((item) => [item.userA, item.userB].includes(userId) && [item.userA, item.userB].includes(targetId));
+  const membership = state.communityMemberships.some((item) => (item.communityId === userId && item.memberId === targetId) || (item.communityId === targetId && item.memberId === userId));
+  const hasAdmin = Boolean(sender.isAdmin || target.isAdmin);
+  if (!membership && !hasAdmin && ![sender, target].some((user) => user.profile.type === "Сообщество")) {
+    const ages = [demoInteractionAge(sender), demoInteractionAge(target)];
+    if (ages.some((age) => age === null)) return { status: 403, code: "AGE_REQUIRED", error: "Для взаимодействия оба пользователя должны указать дату рождения" };
+    if ((ages[0] < 18) !== (ages[1] < 18)) return { status: 403, code: "CROSS_AGE_INTERACTION_FORBIDDEN", error: "Прямое взаимодействие между совершеннолетними и несовершеннолетними пользователями недоступно" };
+  }
+  if (!canMessagePair({ friends, communityMembers: membership, hasAdmin, firstProfileType: sender.profile.type, secondProfileType: target.profile.type })) {
+    return { status: 403, error: "Переписка доступна только друзьям, участникам сообщества, издательствам и службе поддержки" };
+  }
+  return { sender, target };
 }
 
 function notification(userId, actorId, type, title, text, extra = {}) {
@@ -403,7 +451,7 @@ router.get("/auth/legal-documents", (_request, response) => response.json({ requ
 router.get("/auth/demo-login", (request, response) => {
   const token = randomBytes(24).toString("hex");
   const requestedUserId = Number(request.query.user);
-  sessions.set(token, [1, 2, 3].includes(requestedUserId) ? requestedUserId : 1);
+  sessions.set(token, users.some((user) => user.id === requestedUserId) ? requestedUserId : 1);
   response.setHeader("Set-Cookie", `book_meet_demo=${token}; Path=/; HttpOnly; SameSite=Lax`);
   response.redirect("/");
 });
@@ -412,6 +460,19 @@ if (process.env.DEMO_MODE === "1") {
   router.post("/__test__/reset", (_request, response) => {
     resetDemoState();
     response.json({ ok: true, mode: "demo", nextId });
+  });
+  router.post("/__test__/chat-scenario", (_request, response) => {
+    if (users.some((user) => user.id === 4)) return response.status(409).json({ error: "Сценарий уже создан" });
+    const reader = structuredClone(users.find((user) => user.id === 3));
+    const publisher = structuredClone(users.find((user) => user.id === 2));
+    const peer = { ...reader, id: 4, username: "chat-peer", email: "chat-peer@bookmeet.test", initials: "СП", profile: { ...reader.profile, name: "Собеседник проверки" }, books: [], reviews: [], excerpts: [], wishBooks: [] };
+    const deletedCommunity = { ...publisher, id: 5, username: "deleted-community", email: "deleted-community@bookmeet.test", initials: "УС", deletedAt: new Date().toISOString(), profile: { ...publisher.profile, name: "Удалённое сообщество", type: "Сообщество" }, books: [], authorBooks: [], publisherNews: [] };
+    const deletedPublisher = { ...publisher, id: 6, username: "deleted-publisher", email: "deleted-publisher@bookmeet.test", initials: "УИ", deletedAt: new Date().toISOString(), profile: { ...publisher.profile, name: "Удалённое издательство" }, books: [], authorBooks: [], publisherNews: [] };
+    const minorPeer = { ...reader, id: 7, username: "minor-chat-peer", email: "minor-chat-peer@bookmeet.test", initials: "НС", profile: { ...reader.profile, name: "Несовершеннолетний собеседник", birthDate: "2012-05-10", age: 14 }, books: [], reviews: [], excerpts: [], wishBooks: [] };
+    users.push(peer, deletedCommunity, deletedPublisher, minorPeer);
+    demoLegalAcceptances.set(peer.id, new Set(demoLegalDocuments.map((document) => document.id)));
+    state.friendRequests.push({ id: nextId++, fromId: peer.id, toId: 3, status: "pending", message: "Проверка системного сообщения" });
+    response.status(201).json({ peerId: peer.id, minorPeerId: minorPeer.id, deletedCommunityId: deletedCommunity.id, deletedPublisherId: deletedPublisher.id });
   });
 }
 
@@ -530,7 +591,7 @@ router.get("/bootstrap/:section", (request, response) => {
   if (user?.suspension && (user.suspension.permanent || new Date(user.suspension.until).getTime() > Date.now())) return response.status(423).json({ suspended: true, ...user.suspension });
   const keys = {
     session: ["activeUserId", "profileCompleted", "accessGate"],
-    catalog: ["activeUserId", "adultAccess", "users", "books", "events", "occasions"],
+    catalog: ["activeUserId", "adultAccess", "users", "activeOrganizationIds", "books", "events", "occasions"],
     social: ["activeUserId", "blocks", "blockedByUserIds", "friendRequests", "friendships", "communityMemberships", "follows", "notifications", "messages", "likes", "saves", "likedMaterialRefs", "savedMaterialRefs"],
     moderation: ["activeUserId", "reports"],
   }[request.params.section];
@@ -550,7 +611,7 @@ router.get("/public/catalog", (_request, response) => {
   ]).sort((first, second) => Date.parse(second.createdAt) - Date.parse(first.createdAt));
   const events = state.events.filter((item) => isPublicUpcomingEvent(item)).map((item) => ({ id: item.id, title: item.title, summary: item.summary, date: item.date, time: item.time, city: item.city, address: item.address, createdAt: item.createdAt }));
   const occasions = state.occasions.filter(isPublicOccasion).map((item) => ({ id: item.id, type: item.type, primaryText: item.primaryText, audienceText: item.audienceText, targetCities: item.targetCities ?? [], meetingDate: item.meetingDate, meetingStartTime: item.meetingStartTime, meetingEndTime: item.meetingEndTime, meetingCity: item.meetingCity, meetingAddress: item.meetingAddress, createdAt: item.createdAt }));
-  const organizations = users.filter((user) => ["Издатель", "Сообщество"].includes(user.profile.type) && user.profile.publisherStatus === "approved").map((user) => ({ id: user.id, name: user.profile.name, city: user.profile.city, type: user.profile.type, bio: user.profile.bio, communityType: user.profile.communityType, communityIsClosed: user.profile.type === "Сообщество" ? Boolean(user.profile.communityIsClosed) : false, initials: user.initials, color: user.color, avatarUrl: user.avatarUrl }));
+  const organizations = users.filter((user) => !user.deletedAt && !user.purged && ["Издатель", "Сообщество"].includes(user.profile.type) && user.profile.publisherStatus === "approved").map((user) => ({ id: user.id, name: user.profile.name, city: user.profile.city, type: user.profile.type, bio: user.profile.bio, communityType: user.profile.communityType, communityIsClosed: user.profile.type === "Сообщество" ? Boolean(user.profile.communityIsClosed) : false, initials: user.initials, color: user.color, avatarUrl: user.avatarUrl }));
   response.json({ books, materials, events, occasions, organizations });
 });
 
@@ -598,6 +659,18 @@ router.get("/realtime", (request, response) => {
   response.write("event: connected\ndata: demo\n\n");
   demoRealtimeClients.add(response);
   request.on("close", () => demoRealtimeClients.delete(response));
+});
+
+router.use((request, response, next) => {
+  if (!["GET", "HEAD", "OPTIONS"].includes(request.method)) {
+    response.once("finish", () => {
+      if (response.statusCode >= 400) return;
+      for (const client of demoRealtimeClients) {
+        try { client.write(`event: update\ndata: ${Date.now()}\n\n`); } catch { demoRealtimeClients.delete(client); }
+      }
+    });
+  }
+  next();
 });
 
 router.get("/search/materials", (request, response) => {
@@ -1487,7 +1560,7 @@ router.post("/social/friend-requests", (request, response) => {
     state.communityMemberships.push({ communityId: targetId, memberId: request.demoUserId });
     const systemText = "Вы стали участником открытого сообщества и можете начать переписку";
     const key = conversationKey(request.demoUserId, targetId);
-    (state.messages[key] ??= []).push({ id: nextId++, system: true, text: systemText, time: "сейчас" });
+    (state.messages[key] ??= []).push({ id: nextId++, senderId: request.demoUserId, recipientId: targetId, system: true, text: systemText, createdAt: new Date().toISOString() });
     notification(targetId, request.demoUserId, "friendship_started", "Новый участник", `${source?.profile.name} присоединился(ась) к открытому сообществу.`);
     notification(request.demoUserId, targetId, "friendship_started", "Вы вступили в сообщество", `Вы вступили в сообщество ${target.profile.name}`);
     return response.status(201).json({ ok: true });
@@ -1527,7 +1600,7 @@ router.post("/social/friends/:targetId/accept", (request, response) => {
   }
   const key = conversationKey(targetId, request.demoUserId);
   const community = isCommunity;
-  (state.messages[key] ??= []).push({ id: nextId++, system: true, text: community ? "Заявка принята. Теперь вы участник сообщества и можете начать переписку" : "Теперь вы друзья и можете начать переписку", time: "сейчас" });
+  (state.messages[key] ??= []).push({ id: nextId++, senderId: targetId, recipientId: request.demoUserId, system: true, text: community ? "Заявка принята. Теперь вы участник сообщества и можете начать переписку" : "Теперь вы друзья и можете начать переписку", createdAt: new Date().toISOString() });
   if (community) {
     notification(targetId, request.demoUserId, "friendship_started", "Заявка принята", `Вы вступили в сообщество ${acceptor?.profile.name}`);
     notification(request.demoUserId, targetId, "friendship_started", "Заявка принята", `${requester?.profile.name} вступил(а) в сообщество.`);
@@ -1570,28 +1643,33 @@ router.delete("/social/follows/:targetId", (request, response) => {
 
 router.post("/social/messages", (request, response) => {
   const targetId = Number(request.body.targetId);
-  const sender = users.find((user) => user.id === request.demoUserId);
-  const target = users.find((user) => user.id === targetId);
-  if (!target) return response.status(404).json({ error: "Пользователь не найден" });
-  const blockedPair = state.blocks.some((item) => [item.blockerId, item.blockedId].includes(request.demoUserId) && [item.blockerId, item.blockedId].includes(targetId));
-  if (blockedPair) return response.status(403).json({ error: "Взаимодействие с пользователем недоступно" });
-  const friends = state.friendships.some((item) => [item.userA, item.userB].includes(request.demoUserId) && [item.userA, item.userB].includes(targetId));
-  const membership = state.communityMemberships.some((item) => (item.communityId === request.demoUserId && item.memberId === targetId) || (item.communityId === targetId && item.memberId === request.demoUserId));
-  if (!canMessagePair({ friends, communityMembers: membership, hasAdmin: Boolean(sender?.isAdmin || target?.isAdmin), firstProfileType: sender?.profile.type, secondProfileType: target?.profile.type })) return response.status(403).json({ error: "Переписка доступна только друзьям, участникам сообщества, издательствам и службе поддержки" });
+  const access = assertDemoMessagePairAccess(request.demoUserId, targetId);
+  if (access.error) return response.status(access.status).json({ error: access.error, ...(access.code ? { code: access.code } : {}) });
   const body = String(request.body.body ?? "").trim();
   const attachment = request.body.attachment && Number(request.body.attachment.id) ? { kind: String(request.body.attachment.kind), id: Number(request.body.attachment.id) } : undefined;
   if (!body && !attachment) return response.status(400).json({ error: "Сообщение пусто" });
-  const message = { id: nextId++, senderId: request.demoUserId, mine: true, unread: true, text: body, attachment, time: "сейчас" };
+  const message = { id: nextId++, senderId: request.demoUserId, recipientId: targetId, text: body, attachment, createdAt: new Date().toISOString(), readAt: null };
   (state.messages[conversationKey(request.demoUserId, targetId)] ??= []).push(message);
-  notification(targetId, request.demoUserId, "new_message", "Новое сообщение", message.text);
-  response.json({ ok: true, message });
+  response.json({ ok: true, message: { ...message, mine: true, unread: false, read: false } });
 });
 
 router.patch("/social/messages/:targetId/read", (request, response) => {
-  const key = conversationKey(request.demoUserId, Number(request.params.targetId));
-  (state.messages[key] ?? []).forEach((item) => { if (item.senderId !== request.demoUserId) item.unread = false; });
-  state.notifications.forEach((item) => { if (item.userId === request.demoUserId && item.actorId === Number(request.params.targetId) && item.type === "new_message") item.unread = false; });
+  const targetId = Number(request.params.targetId);
+  const access = assertDemoMessagePairAccess(request.demoUserId, targetId);
+  if (access.error) return response.status(access.status).json({ error: access.error, ...(access.code ? { code: access.code } : {}) });
+  const key = conversationKey(request.demoUserId, targetId);
+  (state.messages[key] ?? []).forEach((item) => { if (item.senderId === targetId && item.recipientId === request.demoUserId && !item.readAt) item.readAt = new Date().toISOString(); });
   response.json({ ok: true });
+});
+
+router.delete("/social/messages/:targetId/history", (request, response) => {
+  const targetId = Number(request.params.targetId);
+  const access = assertDemoMessagePairAccess(request.demoUserId, targetId);
+  if (access.error) return response.status(access.status).json({ error: access.error, ...(access.code ? { code: access.code } : {}) });
+  const entries = state.messages[conversationKey(request.demoUserId, targetId)] ?? [];
+  const clearedThroughMessageId = entries.reduce((maximum, item) => Math.max(maximum, Number(item.id)), 0);
+  state.chatHistoryClears[`${request.demoUserId}:${targetId}`] = Math.max(Number(state.chatHistoryClears[`${request.demoUserId}:${targetId}`] ?? 0), clearedThroughMessageId);
+  response.json({ ok: true, clearedThroughMessageId });
 });
 
 router.post("/events", (request, response) => {

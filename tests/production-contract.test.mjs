@@ -217,7 +217,7 @@ test("linked community profiles have a strict one-to-one, session-safe contract"
   assert.match(api, /const legalDocuments = legalConsentRequired\(\) \? await activeLegalDocuments/);
   assert.match(api, /recordLegalAcceptances\(connection, communityId, legalDocuments\)/);
   assert.match(data, /linkedProfile: linkedProfileRow/);
-  assert.match(demo, /const \{ linkedProfiles: _linkedProfiles, saves: saveEntries, \.\.\.publicState \} = state/);
+  assert.match(demo, /const \{ linkedProfiles: _linkedProfiles, saves: saveEntries,[^\n]+\.\.\.publicState \} = state/);
   assert.match(demo, /router\.post\("\/linked-profiles\/switch"/);
   assertLocalized(profile, "linked.attachCommunity");
   assertLocalized(profile, "linked.title");
@@ -597,7 +597,7 @@ test("адаптивный редактор, обложки и мобильна�
   assert.match(styles, /organization-directory-filters\.has-community-type \{ grid-template-columns:/);
   assert.match(styles, /reading-stats-mobile-row/);
   assert.match(styles, /publishing-card-intro > \.avatar/);
-  assert.match(styles, /chat-popup \.chat-actions button:last-child/);
+  assert.match(styles, /chat-popup \.chat-close-action/);
   assert.match(styles, /\.mobile-friends-backdrop \{ display: none; \}/);
 });
 

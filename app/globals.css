@@ -624,8 +624,14 @@ button { color: inherit; }
 .chat-person small { color: var(--muted); font-size: 11px; }
 .chat-actions { display: flex; gap: 6px; }
 .chat-actions button { width: 38px; height: 38px; border: 1px solid var(--line); background: white; border-radius: 50%; cursor: pointer; }
+.chat-history-menu { position: relative; }
+.chat-history-dropdown { position: absolute; z-index: 20; top: calc(100% + 8px); right: 0; width: max-content; min-width: 210px; padding: 5px; border: 1px solid var(--line); border-radius: 11px; background: white; box-shadow: 0 14px 34px rgba(43, 34, 26, .18); }
+.chat-actions .chat-history-dropdown button { width: 100%; height: auto; min-height: 38px; padding: 9px 12px; border: 0; border-radius: 8px; color: var(--red); text-align: left; white-space: nowrap; }
+.chat-actions .chat-history-dropdown button:hover { background: var(--red-soft); }
+.chat-actions .chat-history-dropdown button:disabled { opacity: .55; cursor: wait; }
 .message-area { min-height: 0; overflow-y: auto; padding: 30px clamp(30px, 8vw, 120px); background-image: radial-gradient(#dfd9d2 0.6px, transparent .6px); background-size: 22px 22px; }
 .chat-day { width: max-content; margin: 0 auto 17px; padding: 5px 11px; border-radius: 15px; background: #ebe6e0; color: #817970; font-size: 10px; }
+.chat-day-group + .chat-day-group > .chat-day { margin-top: 25px; }
 .letter-note { width: fit-content; max-width: 500px; margin: 0 auto 30px; padding: 13px 18px; border: 1px solid #ecdfcf; border-radius: 10px; background: rgba(255, 250, 240, .9); color: #8b7968; text-align: center; font: italic 12px/1.4 Georgia, serif; }
 .letter-note span { color: var(--red); margin-right: 4px; }
 .message-wrap { display: flex; margin: 11px 0; }
@@ -637,7 +643,8 @@ button { color: inherit; }
 .mine .message-bubble time { color: rgba(255,255,255,.68); }
 .message-checks { display: inline-block; margin-left: 5px; letter-spacing: -3px; color: rgba(255,255,255,.72); font-size: 11px; font-weight: 800; }
 .message-checks.is-read { color: #bde2ff; }
-.system-message { width: fit-content; max-width: 520px; margin: 22px auto; padding: 11px 16px; border: 1px solid #d7e4ef; border-radius: 18px; color: #61778a; background: rgba(237,246,255,.92); text-align: center; font-size: 11px; }
+.system-message { display: flex; width: fit-content; max-width: 520px; margin: 22px auto; padding: 8px 16px; border: 1px solid #d7e4ef; border-radius: 18px; color: #61778a; background: rgba(237,246,255,.92); text-align: center; font-size: 11px; flex-direction: column; align-items: center; gap: 2px; }
+.system-message time { color: #8193a2; font-size: 10px; font-variant-numeric: tabular-nums; }
 .message-form { display: grid; grid-template-columns: 42px 1fr 44px; gap: 10px; align-items: center; padding: 17px 30px; background: white; border-top: 1px solid var(--line); }
 .message-form input { height: 48px; padding: 0 17px; border: 1px solid #ded8d2; border-radius: 14px; outline: 0; background: #fbfaf9; }
 .message-form input:focus { border-color: #d49ba0; box-shadow: 0 0 0 3px var(--red-soft); }
@@ -1198,7 +1205,7 @@ select option {
   .content-hub-switch { top: 158px; }
   .chat-popup-layer { inset: 158px 0 0; }
   .chat-popup, .chat-view { height: calc(100dvh - 158px); }
-  .chat-popup .chat-actions button:first-child { display: none; }
+  .chat-popup .chat-expand-action { display: none; }
   .all-books-grid { grid-template-columns: repeat(2,minmax(0,1fr)); gap: 18px 12px; }
   .books-directory-controls { width: 100%; align-items: stretch; flex-direction: column; }
   .books-search-field { min-width: 0 !important; width: 100%; }
@@ -1244,7 +1251,7 @@ select option {
   .chat-full-page .chat-header { padding-inline: clamp(24px, 4vw, 58px); }
   .chat-full-page .message-area { padding-inline: clamp(24px, 5vw, 80px); }
   .chat-full-page .message-form { padding-inline: clamp(24px, 5vw, 80px); }
-  .chat-full-page .chat-actions button:first-child, .chat-full-page .chat-actions button:last-child { display: none; }
+  .chat-full-page .chat-expand-action, .chat-full-page .chat-close-action { display: none; }
   .chat-popup-layer { display: none; }
   .content-hub-switch { display: none !important; }
 }
@@ -3460,7 +3467,7 @@ select {
   .chat-popup-layer { z-index: 48; inset: 62px 0 0; transition: top .28s cubic-bezier(.22,.8,.3,1); }
   .chat-popup-layer.mobile-friends-visible { top: 144px; }
   .chat-popup { width: 100%; height: 100%; max-height: none; border-radius: 0; }
-  .chat-actions button:first-child { display: none; }
+  .chat-expand-action { display: none; }
   .all-books-grid { grid-template-columns: repeat(2,minmax(0,1fr)); gap: 12px 9px; }
   .public-books-grid { grid-template-columns: repeat(2,minmax(0,1fr)); gap: 14px 10px; }
   .all-books-grid .library-book { padding: 7px; }
@@ -3526,7 +3533,7 @@ select {
   .chat-header, .chat-person, .chat-person > span:last-child { min-width: 0; }
   .chat-person { flex: 1 1 auto; }
   .chat-actions { display: flex; flex: 0 0 auto; min-width: 78px; justify-content: flex-end; }
-  .chat-popup .chat-actions button:last-child { display: inline-grid; place-items: center; flex: 0 0 34px; }
+  .chat-popup .chat-close-action { display: inline-grid; place-items: center; flex: 0 0 34px; }
   .publishing-card-intro { grid-template-columns: 52px minmax(0,1fr); gap: 12px; }
   .publishing-card-intro > .avatar { width: 52px; height: 52px; min-width: 52px; border-radius: 50%; aspect-ratio: 1; }
   .publishing-card-copy { min-width: 0; }
@@ -4134,7 +4141,7 @@ select {
   .mobile-chat-dialog .chat-person strong, .mobile-chat-dialog .chat-person small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .mobile-chat-dialog .chat-person strong { font-size: 16px; }
   .mobile-chat-dialog .chat-person small { font-size: 11px; }
-  .mobile-chat-dialog .chat-actions { min-width: 42px; }
+  .mobile-chat-dialog .chat-actions { display: flex; min-width: 42px; }
   .mobile-chat-dialog .message-area { padding: 22px 14px; }
   .mobile-chat-dialog .message-form { padding: 12px 12px calc(12px + env(safe-area-inset-bottom)); }
   .mobile-chat-dialog .message-form input { min-width: 0; }

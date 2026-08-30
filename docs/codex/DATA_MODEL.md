@@ -1,6 +1,6 @@
 # Data model
 
-Source of truth: `mysql/migrations/001_initial.sql` … `033_profile_birth_date_visibility.sql`. `scripts/migrate.js` applies sorted files and records `schema_migrations`; it splits statements and must not be used to rewrite an applied migration. `server/data.js` is the read/DTO projection layer. Nullable below means the current schema accepts `NULL`; JSON/LONGTEXT empty defaults are separate from SQL null.
+Source of truth: `mysql/migrations/001_initial.sql` … `038_chat_history_clears.sql`. `scripts/migrate.js` applies sorted files and records `schema_migrations`; it splits statements and must not be used to rewrite an applied migration. `server/data.js` is the read/DTO projection layer. Nullable below means the current schema accepts `NULL`; JSON/LONGTEXT empty defaults are separate from SQL null.
 
 Real-schema verification runs through the disposable Docker Compose MySQL 8.4.11 fixture (`compose.mysql-test.yml`), isolated as `book_meet_test` on `127.0.0.1:3307`. It validates the final schema and ledger against the real engine; it never targets production configuration or credentials. On 2026-08-24 `pnpm verify:db` passed the complete clean-schema, repeat-run, seed, transaction, relational and A-01 recovery suite and removed its container and named data volume afterward.
 
@@ -42,7 +42,10 @@ Real-schema verification runs through the disposable Docker Compose MySQL 8.4.11
 | `friendships`, `follows`, `community_memberships` | endpoint user IDs/created time required; friendship uses ordered low/high IDs. | all user FKs cascade. Community membership is directional community→member and is never a friendship/privacy grant. | `001`, `024`; `BootstrapData.communityMemberships`. |
 | `user_blocks` | blocker/blocked/created required. | both users cascade; block filtering is viewer-aware in `loadUsers`. | `017`; `/api/social/blocks/*`. |
 | `messages` | recipient/body/system/time required; sender, read time and attachment kind/id nullable. | recipient cascade; sender `ON DELETE SET NULL`; only permitted pairs/admin support can read/write. | `001`, `012`; `ChatScreen.tsx`. |
+| `chat_history_clears` | viewer, peer, maximum hidden message ID and clear time required; viewer and peer must differ. | Composite viewer/peer key; both users cascade. This is a per-viewer visibility cursor only: message rows and the peer's history remain intact, and later message IDs remain visible. | `038`; `DELETE /api/social/messages/:targetId/history`, `server/data.js`. |
 | `notifications` | recipient/type/title/body/time required; actor/material refs/group key nullable; unread defaults true. | recipient cascade; actor `SET NULL`; unique group key per recipient. | `001`; `/api/notifications/*`. |
+
+Migration `038` also removes historical `new_message` rows from the general notification center. New personal messages retain unread/read state only in `messages`; they no longer create `notifications` rows.
 
 `035_community_book_month.sql` adds nullable `user_books.featured_month` and `featured_year` for community-only catalogue associations; the pair is either both null or a valid month/year. `036_privacy_friends_defaults.sql` makes birth-date and social visibility default to `friends` and normalizes existing profiles.
 

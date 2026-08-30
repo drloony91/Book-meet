@@ -42,3 +42,4 @@ This is a deterministic file-level inventory of migration names and `CREATE TABL
 | `035_community_book_month.sql` | `ALTER TABLE user_books` |
 | `036_privacy_friends_defaults.sql` | `ALTER TABLE profiles` |
 | `037_publisher_book_dates.sql` | `ALTER TABLE user_books` |
+| `038_chat_history_clears.sql` | `CREATE TABLE chat_history_clears` |

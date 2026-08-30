@@ -19,6 +19,17 @@
 - [x] Подготовлен и, где безопасно, отрепетирован rollback кода/process; для DB указано, где возможен только restore backup, включая partial DDL.
 - [ ] Production deployment отдельно и явно разрешён пользователем после итогового verdict.
 
+## Chat, notifications and deleted organizations release candidate — 2026-08-30
+
+Verdict: **READY FOR USER-MANAGED PLESK UPLOAD WITH PRE-RESTART MIGRATION**. Codex prepares and verifies the exact local artifact; upload, production migration and restart remain user-managed.
+
+- Scope: chat system-message deduplication for new friendship/community events, browser-local message dates and times, live read receipts, activity sorting with support last, per-viewer history clearing, deleted-organization directory filtering and removal of personal messages from the general notification center.
+- Schema: append-only `038_chat_history_clears.sql`. It adds a per-viewer message-ID cursor and removes historical `new_message` notification rows; it does not delete message rows, friendships, report evidence or the peer's history.
+- Required Plesk order: coordinated production backup -> extract the exact artifact -> frozen install -> production build -> `db:migrate` -> `db:migrate:status` -> repeat `db:migrate` as a no-op -> repeat status -> only then restart.
+- Seed is forbidden for this update. If migration status reports an unresolved attempt, stop and reconcile the actual schema before any retry.
+- Local evidence: `pnpm verify` 132/132, `pnpm test:e2e` 29 passed with one expected desktop skip, `pnpm verify:db` 2/2 with 38 migrations and disposable-resource cleanup, plus `git diff --check` pass.
+- Existing historical reciprocal system-message duplicates are not bulk-deleted because the database does not contain an explicit duplicate marker; new friendship/community events create one persisted system row.
+
 ## Final production preparation — 2026-08-28
 
 Verdict: **PRODUCTION READY WITH EXPLICIT RISKS**. Production deployment, migrations и restart не выполнялись; production data не изменялись.

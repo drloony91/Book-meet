@@ -111,6 +111,7 @@ Production Express routes only; demo-api routes are intentionally excluded. The 
 | `POST` | `/api/social/friends/:targetId/accept` |
 | `POST` | `/api/social/friends/:targetId/reject` |
 | `POST` | `/api/social/messages` |
+| `DELETE` | `/api/social/messages/:targetId/history` |
 | `PATCH` | `/api/social/messages/:targetId/read` |
 | `DELETE` | `/api/users/me/avatar` |
 | `PATCH` | `/api/users/me/home-view` |
