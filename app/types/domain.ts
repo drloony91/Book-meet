@@ -119,6 +119,8 @@ export type LibraryBook = {
   featuredYear?: number;
   publicationMonth?: number;
   publicationYear?: number;
+  averageRating?: number;
+  ratingCount: number;
 };
 export type CommunityBook = LibraryBook;
 

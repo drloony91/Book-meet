@@ -14,6 +14,18 @@ export function telegramAlertsEnabled(environment = process.env) {
     && Boolean(environment.TELEGRAM_CHAT_ID);
 }
 
+// Deliberately configuration-only: callers can expose this to operators without
+// reading token/chat values or attempting a Telegram request.
+export function telegramDiagnostics(environment = process.env) {
+  const configured = Boolean(environment.TELEGRAM_BOT_TOKEN && environment.TELEGRAM_CHAT_ID);
+  const enabledFlag = environment.TELEGRAM_ALERTS_ENABLED === "1";
+  return {
+    configured,
+    enabled: telegramAlertsEnabled(environment),
+    status: !configured ? "not_configured" : enabledFlag ? "configured_unverified" : "disabled",
+  };
+}
+
 export function shouldEnqueueSupportAlert(participants, senderId, recipientId) {
   const sender = participants.find((participant) => Number(participant.id) === Number(senderId));
   const recipient = participants.find((participant) => Number(participant.id) === Number(recipientId));

@@ -8,13 +8,14 @@ import { requestLimitPolicy } from "../server/modules/request-limits.js";
 import { canCreateFriendRequest, canMessagePair } from "../server/modules/social-permissions.js";
 import { ageFromBirthDate } from "../server/data.js";
 import { nextTopRank, top3Eligibility } from "../server/modules/top3.js";
-import { createTelegramOutboxDispatcher, dispatchTelegramOutbox, shouldEnqueueSupportAlert, telegramAlertsEnabled, telegramAlertText } from "../server/modules/telegram-outbox.js";
+import { createTelegramOutboxDispatcher, dispatchTelegramOutbox, shouldEnqueueSupportAlert, telegramAlertsEnabled, telegramAlertText, telegramDiagnostics } from "../server/modules/telegram-outbox.js";
 import { safeReturnTo } from "../app/lib/navigation-security.js";
 import { loadPublicCatalog } from "../server/modules/public-catalog.js";
 import { consumeAccountActionToken, createOpaqueActionToken, hashAccountActionToken, replaceAccountActionToken } from "../server/modules/account-tokens.js";
-import { mailerEnabled, sendAccountEmail } from "../server/modules/mailer.js";
+import { mailerDiagnostics, mailerEnabled, sendAccountEmail } from "../server/modules/mailer.js";
 import { occasionPayload } from "../server/modules/material-input.js";
 import { en, kk, ru } from "../app/i18n/messages.ts";
+import { notificationCategoryFor } from "../app/lib/notification-categories.js";
 
 const root = path.resolve(import.meta.dirname, "..");
 const assertLocalized = (source, key) => {
@@ -72,7 +73,27 @@ test("account action tokens are opaque, purpose-scoped, expiring and single-use"
 
 test("mailer is an env-only safe no-op when SMTP is not configured", async () => {
   assert.equal(mailerEnabled({}), false);
+  assert.deepEqual(mailerDiagnostics({}), { configured: false, enabled: false, status: "not_configured", missing: ["smtp_host", "smtp_user", "smtp_pass", "mail_from"], portValid: true, secure: false, transportMode: "starttls_required" });
+  const diagnostics = mailerDiagnostics({ SMTP_HOST: "smtp.example", SMTP_USER: "user", SMTP_PASS: "password", MAIL_FROM: "Book Meet <no-reply@example.com>", SMTP_PORT: "465", SMTP_SECURE: "1" });
+  assert.deepEqual(diagnostics, { configured: true, enabled: true, status: "configured_unverified", missing: [], portValid: true, secure: true, transportMode: "implicit_tls" });
+  assert.doesNotMatch(JSON.stringify(diagnostics), /smtp\.example|password|no-reply/);
   assert.deepEqual(await sendAccountEmail({ to: "person@example.com", subject: "test", text: "text" }, {}), { delivered: false, reason: "disabled" });
+});
+
+test("delivery diagnostics expose structural status only", () => {
+  assert.deepEqual(telegramDiagnostics({}), { configured: false, enabled: false, status: "not_configured" });
+  assert.deepEqual(telegramDiagnostics({ TELEGRAM_BOT_TOKEN: "secret-token", TELEGRAM_CHAT_ID: "42", TELEGRAM_ALERTS_ENABLED: "0" }), { configured: true, enabled: false, status: "disabled" });
+  const configured = telegramDiagnostics({ TELEGRAM_BOT_TOKEN: "secret-token", TELEGRAM_CHAT_ID: "42", TELEGRAM_ALERTS_ENABLED: "1" });
+  assert.deepEqual(configured, { configured: true, enabled: true, status: "configured_unverified" });
+  assert.doesNotMatch(JSON.stringify(configured), /secret-token|42/);
+});
+
+test("notification category mapping is exhaustive and unknown types stay in All", () => {
+  assert.equal(notificationCategoryFor("like"), "reactions");
+  assert.equal(notificationCategoryFor("comment"), "comments");
+  for (const type of ["event_submitted", "event_moderation", "event_reminder"]) assert.equal(notificationCategoryFor(type), "events");
+  for (const type of ["friend_request", "friendship_started", "friend_rejected", "new_follower", "friendship_ended", "publication", "author_book_activity", "gift_reserved"]) assert.equal(notificationCategoryFor(type), "friends");
+  assert.equal(notificationCategoryFor("system_future"), null);
 });
 
 test("Nodemailer dynamic import and createTransport API remain compatible without delivery", async () => {

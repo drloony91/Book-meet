@@ -104,10 +104,10 @@ export function normalizeBookSearchText(value: string) {
   return value.normalize("NFKC").toLocaleLowerCase("ru").replace(/[^\p{L}\p{N}]+/gu, " ").trim().replace(/\s+/g, " ");
 }
 
-export function matchesBookQuery(book: Pick<LibraryBook | AuthorBook, "title" | "author" | "isbn" | "publisher">, query: string) {
+export function matchesBookQuery(book: Pick<LibraryBook | AuthorBook, "title" | "author" | "annotation" | "isbn" | "publisher">, query: string) {
   const tokens = normalizeBookSearchText(query).split(" ").filter(Boolean);
   if (!tokens.length) return false;
-  const searchable = normalizeBookSearchText([book.title, book.author, book.isbn, book.publisher].filter(Boolean).join(" "));
+  const searchable = normalizeBookSearchText([book.title, book.author, book.annotation, book.isbn, book.publisher].filter(Boolean).join(" "));
   return tokens.every((token) => searchable.includes(token));
 }
 
@@ -120,6 +120,27 @@ export function catalogFromUsers(users: DemoUser[]) {
 export function catalogFromSources(books: Array<LibraryBook | AuthorBook>, users: DemoUser[]) {
   const all = [...books, ...catalogFromUsers(users)];
   return all.filter((book, index) => all.findIndex((item) => item.id === book.id || (book.isbn && item.isbn === book.isbn) || (item.title.toLowerCase() === book.title.toLowerCase() && item.author.toLowerCase() === book.author.toLowerCase())) === index);
+}
+
+/** Canonical metadata always wins; only the authenticated viewer's relation is overlaid. */
+export function resolveViewerBook(source: LibraryBook | AuthorBook, catalog: Array<LibraryBook | AuthorBook>, viewer?: DemoUser): LibraryBook | AuthorBook {
+  const canonicalId = source.catalogBookId ?? source.id;
+  const canonical = catalog.find((book) => (book.catalogBookId ?? book.id) === canonicalId) ?? source;
+  const relation = viewer?.books.find((book) => (book.catalogBookId ?? book.id) === canonicalId);
+  if (!relation) return canonical;
+  return {
+    ...canonical,
+    id: canonical.id,
+    catalogBookId: canonical.catalogBookId ?? canonical.id,
+    rating: relation.rating,
+    review: relation.review,
+    readMonth: relation.readMonth,
+    readYear: relation.readYear,
+    readingStatus: relation.readingStatus,
+    topRank: relation.topRank,
+    lastReadChapter: relation.lastReadChapter,
+    readingComment: relation.readingComment,
+  } as LibraryBook;
 }
 
 export function reviewReadingItemById(users: DemoUser[], id: number): ReadingItem | null {

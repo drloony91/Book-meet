@@ -75,11 +75,49 @@ test("profile settings persist through the demo API", async ({ page }, testInfo)
 
 test("books directory and personal library are reachable", async ({ page }) => {
   await loginAs(page, 3, "/books");
-  await expect(page.getByPlaceholder("Название книги или автор")).toBeVisible();
+  await expect(page.getByPlaceholder("Поиск книги")).toBeVisible();
   await expect(page.locator(".all-books-grid .library-book").first()).toBeVisible();
   await page.goto("/profile/library");
   await expect(page.getByRole("button", { name: /Библиотека/ }).last()).toBeVisible();
   await expect(page.getByText("Точки на карте", { exact: true }).first()).toBeVisible();
+});
+
+test("library add-book CTA is full-width on mobile boundaries and does not regress desktop", async ({ page }, testInfo) => {
+  await loginAs(page, 3, "/profile/library");
+  const addBook = page.getByRole("button", { name: /Добавить книгу/ });
+  await expect(addBook).toBeVisible();
+  if (testInfo.project.name === "mobile") {
+    for (const width of [390, 800]) {
+      await page.setViewportSize({ width, height: 844 });
+      const box = await addBook.boundingBox();
+      const wrapper = await page.locator(".library-import-actions").boundingBox();
+      expect(box?.width ?? 0).toBeGreaterThanOrEqual((wrapper?.width ?? 0) - 1);
+    }
+  } else {
+    await page.setViewportSize({ width: 1280, height: 900 });
+    expect((await addBook.boundingBox())?.width ?? 0).toBeLessThan(700);
+  }
+});
+
+test("feed tabs, notification tabs and material share keep local viewer state", async ({ page }) => {
+  await loginAs(page, 3);
+  await page.getByRole("tab", { name: "Подписки" }).click();
+  await expect(page.getByRole("tab", { name: "Подписки" })).toHaveAttribute("aria-selected", "true");
+  await page.getByRole("tab", { name: "Все" }).click();
+  await expect(page.getByRole("tab", { name: "Все" })).toHaveAttribute("aria-selected", "true");
+  await page.goto("/notifications");
+  await page.getByRole("tab", { name: "Комментарии" }).click();
+  await expect(page.getByRole("tab", { name: "Комментарии" })).toHaveAttribute("aria-selected", "true");
+  await page.goto("/");
+  const share = page.getByRole("button", { name: "Отправить другу" }).first();
+  await expect(share).toBeVisible();
+  const response = page.waitForResponse((item) => item.url().endsWith("/api/social/messages") && item.request().method() === "POST");
+  await share.click();
+  await page.locator(".material-share-picker").getByRole("button", { name: /Издательство «Тест»/, exact: true }).click();
+  expect((await response).status()).toBe(200);
+  await expect(page.getByText("Отправлено", { exact: true })).toBeVisible();
+  const social = await (await page.context().request.get("/api/bootstrap/social")).json();
+  expect(social.notifications.some((item: { type: string }) => item.type === "new_message")).toBeFalsy();
 });
 
 test("feed material opens and supports like, save and comment state", async ({ page }) => {

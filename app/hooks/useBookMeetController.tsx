@@ -51,6 +51,7 @@ import {
   emptyOccasion,
 } from "../components/content/ContentComponents";
 import { EmptyContentState } from "../components/common/EmptyContentState";
+import { MaterialSharePicker } from "../components/content/MaterialSharePicker";
 import { ModalIconActions } from "../components/modals/ModalIconActions";
 import { SafetyCenter, openReportDialog } from "../components/safety/SafetyCenter";
 import { ComplianceAccessGate } from "../components/compliance/AccessGate";
@@ -150,6 +151,7 @@ export function useBookMeetController() {
   const [commentCounts, setCommentCounts] = useState<Record<string, number>>({});
   const [saveCounts, setSaveCounts] = useState<Record<string, number>>({});
   const [selectedBook, setSelectedBook] = useState<LibraryBook | AuthorBook | null>(null);
+  const [materialShareAttachment, setMaterialShareAttachment] = useState<ChatAttachment | null>(null);
   const [catalogBookToAdd, setCatalogBookToAdd] = useState<LibraryBook | null>(null);
   const [selectedMaterial, setSelectedMaterial] = useState<ReadingItem | null>(null);
   const [adminEditingMaterial, setAdminEditingMaterial] = useState<AdminCatalogItem | null>(null);
@@ -194,6 +196,38 @@ export function useBookMeetController() {
     document.addEventListener("click", captureMaterialOpen, true);
     return () => document.removeEventListener("click", captureMaterialOpen, true);
   }, [profileIncomplete]);
+  useEffect(() => {
+    const open = (event: Event) => {
+      const attachment = (event as CustomEvent<{ attachment?: ChatAttachment }>).detail?.attachment;
+      if (attachment) setMaterialShareAttachment(attachment);
+    };
+    window.addEventListener("bookmeet:share-material", open);
+    return () => window.removeEventListener("bookmeet:share-material", open);
+  }, []);
+  useEffect(() => {
+    const ownedCatalogId = (value: unknown) => {
+      const id = Number((value as { bookId?: number } | undefined)?.bookId);
+      return Number.isInteger(id) && currentUser?.books.some((book) => (book.catalogBookId ?? book.id) === id) ? id : null;
+    };
+    const edit = (event: Event) => {
+      const id = ownedCatalogId((event as CustomEvent<{ bookId?: number }>).detail);
+      if (id === null) return;
+      setProfileAction("book"); setProfileEditId(id); setSelectedBook(null); setView("profile");
+      window.history.pushState({}, "", "/profile/library");
+    };
+    const remove = async (event: Event) => {
+      const detail = (event as CustomEvent<{ bookId?: number; title?: string }>).detail;
+      const id = ownedCatalogId(detail);
+      if (id === null || !window.confirm(t("library.deleteConfirm", { title: detail?.title ?? "" }))) return;
+      const response = await apiFetch(`/api/books/${id}`, { method: "DELETE", credentials: "same-origin" });
+      if (!response.ok) { window.alert(t("book.deleteError")); return; }
+      setUsers((current) => current.map((user) => user.id === currentUser?.id ? { ...user, books: user.books.filter((book) => (book.catalogBookId ?? book.id) !== id) } : user));
+      setSelectedBook(null);
+    };
+    window.addEventListener("bookmeet:edit-owned-book", edit);
+    window.addEventListener("bookmeet:delete-owned-book", remove);
+    return () => { window.removeEventListener("bookmeet:edit-owned-book", edit); window.removeEventListener("bookmeet:delete-owned-book", remove); };
+  }, [currentUser, t]);
   useEffect(() => {
     if (!mobileNavigationOpen) return;
     const scrollY = window.scrollY;
@@ -950,6 +984,15 @@ export function useBookMeetController() {
     setMessages((current) => ({ ...current, [key]: [...(current[key] ?? []), { id: data.message?.id ?? Date.now(), mine: true, senderId: currentUser.id, text, attachment, time: "", createdAt, read: false }] }));
   }
 
+  async function shareMaterial(targetId: number, attachment: ChatAttachment) {
+    if (!currentUser || !isFriendPair(currentUser.id, targetId)) throw new Error(t("share.error"));
+    const response = await apiFetch("/api/social/messages", { method: "POST", credentials: "same-origin", headers: { "content-type": "application/json" }, body: JSON.stringify({ targetId, body: "", attachment }) });
+    const data = await response.json().catch(() => ({})) as { error?: string; message?: Message };
+    if (!response.ok) throw new Error(localizedApiError(data.error, t("share.error")));
+    const key = conversationKey(currentUser.id, targetId);
+    setMessages((current) => ({ ...current, [key]: [...(current[key] ?? []), { id: data.message?.id ?? Date.now(), mine: true, senderId: currentUser.id, text: "", attachment, time: "", createdAt: data.message?.createdAt ?? new Date().toISOString(), read: false }] }));
+  }
+
   async function clearChatHistory() {
     if (!selectedFriend || !currentUser) return false;
     try {
@@ -1432,7 +1475,7 @@ export function useBookMeetController() {
 
       <MobileNavigationDrawer open={mobileNavigationOpen} activeView={view} onClose={() => setMobileNavigationOpen(false)} onNavigate={navigateMainView} createOptions={mobileCreateOptions} />
 
-      {selectedBook && <UnifiedBookModal book={selectedBook} users={visibleUsers} catalog={catalog} events={events} retainWhenInactive onClose={() => setSelectedBook(null)} onReport={currentUser.isAdmin || selectedBook.creatorUserId === currentUser.id || users.some((user) => user.id === currentUser.id && (user.authorBooks ?? []).some((book) => book.id === selectedBook.id)) ? undefined : () => openReportDialog({ kind: "book", id: selectedBook.id })} onOpenUser={openUserProfile} onOpenEvent={(event) => setSelectedEvent(event)} onOpenReview={(review, user) => { setSelectedMaterial({ id: review.id, kind: "review", title: review.bookTitle, author: user.profile.name, text: review.fullText, bodyHtml: review.bodyHtml, linkedBookId: review.bookId, ownerId: user.id, createdAt: review.createdAt, preview: review.preview, bookAuthor: review.bookAuthor, rating: review.rating }); }} />}
+      {selectedBook && <UnifiedBookModal book={selectedBook} viewer={currentUser} users={visibleUsers} catalog={catalog} events={events} retainWhenInactive onClose={() => setSelectedBook(null)} onEdit={() => { const id = selectedBook.catalogBookId ?? selectedBook.id; setProfileAction("book"); setProfileEditId(id); setSelectedBook(null); setView("profile"); window.history.pushState({}, "", "/profile/library"); }} onDelete={async () => { const id = selectedBook.catalogBookId ?? selectedBook.id; const response = await apiFetch(`/api/books/${id}`, { method: "DELETE", credentials: "same-origin" }); if (!response.ok) { window.alert(t("book.deleteError")); return; } setUsers((current) => current.map((user) => user.id === currentUser.id ? { ...user, books: user.books.filter((book) => (book.catalogBookId ?? book.id) !== id) } : user)); setSelectedBook(null); }} onReport={currentUser.isAdmin || currentUser.books.some((book) => (book.catalogBookId ?? book.id) === (selectedBook.catalogBookId ?? selectedBook.id)) || selectedBook.creatorUserId === currentUser.id || (currentUser.authorBooks ?? []).some((book) => (book.catalogBookId ?? book.id) === (selectedBook.catalogBookId ?? selectedBook.id)) ? undefined : () => openReportDialog({ kind: "book", id: selectedBook.catalogBookId ?? selectedBook.id })} onOpenUser={openUserProfile} onOpenEvent={(event) => setSelectedEvent(event)} onOpenReview={(review, user) => { setSelectedMaterial({ id: review.id, kind: "review", title: review.bookTitle, author: user.profile.name, text: review.fullText, bodyHtml: review.bodyHtml, linkedBookId: review.bookId, ownerId: user.id, createdAt: review.createdAt, preview: review.preview, bookAuthor: review.bookAuthor, rating: review.rating }); }} />}
       {selectedMaterial && <ReadingModal item={selectedMaterial} currentUser={currentUser} users={visibleUsers} catalog={catalog} likedUserIds={likes[`${selectedMaterial.kind}-${selectedMaterial.id}`] ?? []} saved={Boolean(saves[`${selectedMaterial.kind}-${selectedMaterial.id}`]?.includes(currentUser.id))} savesCount={saveCounts[`${selectedMaterial.kind}-${selectedMaterial.id}`] ?? 0} onToggleLike={() => toggleLike(selectedMaterial)} onToggleSave={() => toggleSave(selectedMaterial)} onComment={(text) => addComment(selectedMaterial, text)} onOpenUser={openUserProfile} onClose={() => setSelectedMaterial(null)} onReport={selectedMaterial.ownerId !== currentUser.id && !currentUser.isAdmin ? () => openReportDialog({ kind: selectedMaterial.kind, id: selectedMaterial.id }) : undefined} onEdit={currentUser.isAdmin || selectedMaterial.ownerId === currentUser.id ? () => void editReadingMaterial(selectedMaterial, currentUser) : undefined} onDelete={currentUser.isAdmin || selectedMaterial.ownerId === currentUser.id ? () => void deleteReadingMaterial(selectedMaterial, currentUser) : undefined} />}
       {adminEditingMaterial && <AdminCatalogEditor item={adminEditingMaterial} users={users} catalog={catalog} onClose={() => setAdminEditingMaterial(null)} onSave={async (payload) => { const response = await apiFetch(`/api/admin/materials/${adminEditingMaterial.kind}/${adminEditingMaterial.id}`, { method: "PATCH", credentials: "same-origin", headers: { "content-type": "application/json" }, body: JSON.stringify(payload) }); const data = await response.json().catch(() => ({})) as { error?: string }; if (!response.ok) { window.alert(localizedApiError(data.error, t("common.saveChangesError"))); return; } setAdminEditingMaterial(null); await refreshBootstrap(); }} />}
       {detailNotification && <NotificationDetail notification={detailNotification} actor={users.find((user) => user.id === detailNotification.actorId)} isFollowing={follows.some((follow) => follow.followerId === currentUser.id && follow.targetId === detailNotification.actorId)} onClose={() => setDetailNotification(null)} onFollow={() => followUser(detailNotification.actorId)} />}
@@ -1452,6 +1495,7 @@ export function useBookMeetController() {
       {blockedProfileNotice && <div className="nested-modal-backdrop" onMouseDown={() => setBlockedProfileNotice(false)}><section className="confirm-social-modal" role="alertdialog" aria-modal="true" onMouseDown={(event) => event.stopPropagation()}><h2>{t("social.blockedNotice")}</h2><button className="primary-button" type="button" autoFocus onClick={() => setBlockedProfileNotice(false)}>{t("common.ok")}</button></section></div>}
       {adultRestrictionNotice && <div className="nested-modal-backdrop"><section className="adult-restriction-modal" role="alertdialog" aria-modal="true" aria-labelledby="adult-restriction-title"><span className="adult-restriction-mark" aria-hidden="true">18+</span><h2 id="adult-restriction-title">{t("content.adultRestriction")}</h2>{adultRestrictionNotice === "missing" && <p>{t("content.birthDateRequired")}</p>}<div className="form-actions">{adultRestrictionNotice === "missing" ? <><button className="primary-button" type="button" onClick={() => leaveRestrictedMaterial(true)}>{t("event.goProfile")}</button><button className="outline-button" type="button" onClick={() => leaveRestrictedMaterial(false)}>{t("common.logout")}</button></> : <button className="primary-button" type="button" autoFocus onClick={() => leaveRestrictedMaterial(false)}>{t("common.ok")}</button>}</div></section></div>}
       {catalogBookToAdd && <BookEditor book={catalogBookToAdd} catalog={catalog} top3Count={currentUser.books.filter((item) => item.topRank).length} onClose={() => setCatalogBookToAdd(null)} onSave={(book) => void saveCatalogBookToLibrary(book)} />}
+      {materialShareAttachment && <MaterialSharePicker attachment={materialShareAttachment} recipients={currentFriendUsers} onClose={() => setMaterialShareAttachment(null)} onSend={shareMaterial} />}
       {accessGate && (accessGate.pendingLegalDocuments.length > 0 || newlyRegistered && !accessGate.profileComplete || completionNotice && !accessGate.profileComplete) && <ComplianceAccessGate gate={accessGate} registrationFlow={newlyRegistered} onDismiss={() => setCompletionNotice(false)} onAccepted={async () => { await refreshBootstrap(); }} onOpenProfile={() => { setCompletionNotice(false); setCompletionProfileEditing(true); setProfileAction(null); setProfileEditId(null); setView("profile"); window.history.replaceState({}, "", "/profile"); }} />}
       <SafetyCenter onChanged={() => void refreshBootstrap()} />
     </div>

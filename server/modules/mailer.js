@@ -12,6 +12,27 @@ export function mailerEnabled(environment = process.env) {
   return Boolean(mailConfiguration(environment));
 }
 
+// This is intentionally structural only. It neither resolves the host nor
+// opens a socket, and never returns SMTP credentials or host values.
+export function mailerDiagnostics(environment = process.env) {
+  const port = Number(environment.SMTP_PORT || 587);
+  const requiredFields = ["SMTP_HOST", "SMTP_USER", "SMTP_PASS", "MAIL_FROM"];
+  const missing = requiredFields.filter((field) => !environment[field]);
+  const portValid = Number.isInteger(port) && port >= 1 && port <= 65535;
+  const configured = missing.length === 0 && portValid;
+  const secure = environment.SMTP_SECURE === "1" || environment.SMTP_SECURE === "true";
+  const transportMode = secure ? "implicit_tls" : "starttls_required";
+  return {
+    configured,
+    enabled: mailerEnabled(environment),
+    status: configured ? "configured_unverified" : "not_configured",
+    missing: missing.map((field) => field.toLowerCase()),
+    portValid,
+    secure,
+    transportMode,
+  };
+}
+
 function mimeHeader(value) {
   return `=?UTF-8?B?${Buffer.from(value, "utf8").toString("base64")}?=`;
 }

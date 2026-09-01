@@ -987,7 +987,7 @@ async function validatedChatAttachment(connection, input, senderUserId, recipien
   const id = Number(input.id);
   if (!Number.isInteger(id) || id < 1) throw Object.assign(new Error("Некорректное вложение"), { statusCode: 400 });
   const queries = {
-    book: "SELECT id FROM books WHERE id = ? LIMIT 1",
+    book: "SELECT id, creator_user_id AS owner_id FROM books WHERE id = ? LIMIT 1",
     user: "SELECT id FROM users WHERE id = ? AND role <> 'admin' LIMIT 1",
     event: "SELECT id FROM events WHERE id = ? AND status = 'published' LIMIT 1",
     review: "SELECT id FROM reviews WHERE id = ? LIMIT 1",
@@ -997,9 +997,22 @@ async function validatedChatAttachment(connection, input, senderUserId, recipien
   if (!queries[kind]) throw Object.assign(new Error("Неизвестный тип вложения"), { statusCode: 400 });
   const [[item]] = await connection.query(queries[kind], [id]);
   if (!item) throw Object.assign(new Error("Материал для отправки не найден"), { statusCode: 404 });
-  if (kind !== "user") {
+  let materialOwnerId = Number(item.owner_id) || null;
+  if (["review", "excerpt", "event", "occasion"].includes(kind)) {
+    // Both participants must be able to read the exact shared material, not
+    // merely be permitted to message each other. This preserves block, status
+    // and 18+ visibility at the attachment boundary.
+    const senderMaterial = await readableMaterialInfo(connection, senderUserId, kind, id);
+    const recipientMaterial = await readableMaterialInfo(connection, recipientUserId, kind, id);
+    materialOwnerId = Number(senderMaterial.owner_id ?? recipientMaterial.owner_id) || null;
+  } else if (kind !== "user") {
     await assertAdultMaterialReadable(connection, senderUserId, kind, id);
     await assertAdultMaterialReadable(connection, recipientUserId, kind, id);
+  }
+  if (materialOwnerId) {
+    for (const participantUserId of [senderUserId, recipientUserId]) {
+      if (Number(participantUserId) !== materialOwnerId) await assertUsersCanInteract(connection, participantUserId, materialOwnerId);
+    }
   }
   return { kind, id };
 }
@@ -2515,18 +2528,33 @@ router.patch("/users/me/profile-complete", asyncRoute(async (request, response) 
 router.get("/books/catalog", asyncRoute(async (request, response) => {
   const [[viewer]] = await getPool().query("SELECT u.role, p.birth_date FROM users u JOIN profiles p ON p.user_id = u.id WHERE u.id = ?", [request.bookMeetUser.id]);
   const adultViewer = viewer?.role === "admin" || Number(ageFromBirthDate(viewer?.birth_date) ?? -1) >= 18;
+  const rawQuery = String(request.query.q ?? "");
+  const query = rawQuery.normalize("NFKC").trim().replace(/\s+/gu, " ");
+  // A one-character remote search has very poor selectivity. An empty query
+  // intentionally keeps the established catalogue/sort response.
+  if (query.length === 1) return response.json({ books: [] });
+  if (query.length > 160) return response.status(400).json({ error: "Слишком длинный поисковый запрос" });
+  const needle = query ? `%${query.toLocaleLowerCase("ru")}%` : null;
   const [rows] = await getPool().query(
     `SELECT b.id, b.creator_user_id AS creatorUserId, b.author, b.title, b.isbn, b.publisher, b.genres, b.annotation,
             b.is_adult AS isAdult, b.cover_path AS coverUrl, b.cover_tone AS coverTone, b.flip_url AS flipUrl,
-            b.created_at AS addedAt, COUNT(DISTINCT CASE WHEN ub.is_author = 0 THEN ub.user_id END) AS popularity
+            b.created_at AS addedAt, COUNT(DISTINCT CASE WHEN ub.is_author = 0 THEN ub.user_id END) AS popularity,
+            COUNT(DISTINCT CASE WHEN ub.is_author = 0 AND rating_user.deleted_at IS NULL AND rating_user.purged_at IS NULL AND ub.rating IS NOT NULL AND TRIM(COALESCE(ub.short_review, '')) <> '' THEN ub.user_id END) AS ratingCount,
+            AVG(CASE WHEN ub.is_author = 0 AND rating_user.deleted_at IS NULL AND rating_user.purged_at IS NULL AND ub.rating IS NOT NULL AND TRIM(COALESCE(ub.short_review, '')) <> '' THEN ub.rating END) AS averageRating
        FROM books b
        LEFT JOIN user_books ub ON ub.book_id = b.id
-      WHERE (? = 1 OR b.is_adult = 0)
+       LEFT JOIN users rating_user ON rating_user.id = ub.user_id
+       LEFT JOIN users creator_user ON creator_user.id = b.creator_user_id
+       WHERE (? = 1 OR b.is_adult = 0)
+        AND (b.creator_user_id IS NULL OR (creator_user.deleted_at IS NULL AND creator_user.purged_at IS NULL))
+        AND NOT EXISTS (SELECT 1 FROM user_blocks block WHERE (block.blocker_user_id = ? AND block.blocked_user_id = b.creator_user_id) OR (block.blocker_user_id = b.creator_user_id AND block.blocked_user_id = ?))
+        AND (? IS NULL OR LOWER(CONCAT_WS(' ', b.title, b.author, COALESCE(b.annotation, ''), COALESCE(b.isbn, ''), COALESCE(b.publisher, ''))) LIKE ?)
       GROUP BY b.id
-      ORDER BY b.title_key, b.author_key`,
-    [adultViewer ? 1 : 0],
+      ORDER BY b.title_key, b.author_key
+      LIMIT 100`,
+    [adultViewer ? 1 : 0, request.bookMeetUser.id, request.bookMeetUser.id, needle, needle],
   );
-  response.json({ books: rows.map((row) => ({ ...row, id: Number(row.id), creatorUserId: row.creatorUserId ? Number(row.creatorUserId) : undefined, isAdult: Boolean(row.isAdult), genres: JSON.parse(row.genres || "[]"), popularity: Number(row.popularity || 0), addedAt: new Date(row.addedAt).toISOString() })) });
+  response.json({ books: rows.map((row) => ({ ...row, id: Number(row.id), creatorUserId: row.creatorUserId ? Number(row.creatorUserId) : undefined, isAdult: Boolean(row.isAdult), genres: JSON.parse(row.genres || "[]"), popularity: Number(row.popularity || 0), ratingCount: Number(row.ratingCount || 0), averageRating: row.averageRating == null ? undefined : Math.round(Number(row.averageRating) * 10) / 10, addedAt: new Date(row.addedAt).toISOString() })) });
 }));
 
 router.get("/books", asyncRoute(async (request, response) => {
@@ -2536,7 +2564,7 @@ router.get("/books", asyncRoute(async (request, response) => {
   if (!tokens.length) return response.json({ books: [] });
   const [[viewer]] = await getPool().query("SELECT u.role, p.birth_date FROM users u JOIN profiles p ON p.user_id = u.id WHERE u.id = ?", [request.bookMeetUser.id]);
   const adultViewer = viewer?.role === "admin" || Number(ageFromBirthDate(viewer?.birth_date) ?? -1) >= 18;
-  const tokenClauses = tokens.map(() => "LOWER(CONCAT_WS(' ', title, author, COALESCE(isbn, ''), COALESCE(publisher, ''))) LIKE ?").join(" AND ");
+  const tokenClauses = tokens.map(() => "LOWER(CONCAT_WS(' ', title, author, COALESCE(annotation, ''), COALESCE(isbn, ''), COALESCE(publisher, ''))) LIKE ?").join(" AND ");
   const [rows] = await getPool().query(`SELECT id, author, title, isbn, publisher, genres, annotation, is_adult AS isAdult, cover_path AS coverUrl, cover_tone AS coverTone, flip_url AS flipUrl FROM books WHERE (? = 1 OR is_adult = 0) AND ${tokenClauses} ORDER BY updated_at DESC LIMIT 8`, [adultViewer ? 1 : 0, ...tokens.map((token) => `%${token}%`)]);
   response.json({ books: rows.map((row) => ({ ...row, id: Number(row.id), isAdult: Boolean(row.isAdult), genres: JSON.parse(row.genres || "[]") })) });
 }));

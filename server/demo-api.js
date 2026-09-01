@@ -435,6 +435,23 @@ function assertDemoMessagePairAccess(userId, targetId) {
   return { sender, target };
 }
 
+function demoCatalogOwner(book) {
+  return book.creatorUserId ? users.find((user) => user.id === book.creatorUserId) : users.find((user) => [...(user.authorBooks ?? []), ...(user.communityBooks ?? [])].some((item) => item.id === book.id));
+}
+
+function demoViewerCanReadAttachment(user, attachment) {
+  const kind = attachment?.kind; const id = Number(attachment?.id);
+  if (!Number.isInteger(id) || !["book", "review", "excerpt", "event", "occasion"].includes(kind)) return false;
+  let material; let owner;
+  if (kind === "book") { material = state.catalogBooks.find((item) => item.id === id); owner = material && demoCatalogOwner(material); }
+  if (kind === "review") { owner = users.find((item) => item.reviews.some((review) => review.id === id)); material = owner?.reviews.find((review) => review.id === id); }
+  if (kind === "excerpt") { owner = users.find((item) => item.excerpts.some((excerpt) => excerpt.id === id)); material = owner?.excerpts.find((excerpt) => excerpt.id === id); }
+  if (kind === "event") { material = state.events.find((item) => item.id === id && item.status === "published"); owner = material && users.find((item) => item.id === material.creatorId); }
+  if (kind === "occasion") { material = state.occasions.find((item) => item.id === id && item.status === "published"); owner = material && users.find((item) => item.id === material.creatorId); }
+  if (!material || owner?.deletedAt || owner?.purged || material.isAdult && !(user?.isAdmin || Number(user?.profile.age ?? -1) >= 18)) return false;
+  return !owner || owner.id === user.id || !state.blocks.some((item) => [item.blockerId, item.blockedId].includes(user.id) && [item.blockerId, item.blockedId].includes(owner.id));
+}
+
 function notification(userId, actorId, type, title, text, extra = {}) {
   state.notifications.push({ id: nextId++, userId, actorId, type, title, text, unread: true, createdAt: "сейчас", ...extra });
 }
@@ -1095,15 +1112,23 @@ router.patch("/users/me/profile-complete", (request, response) => {
 router.get("/books/catalog", (request, response) => {
   const viewer = users.find((user) => user.id === request.demoUserId);
   const adultViewer = Boolean(viewer?.isAdmin || Number(viewer?.profile.age ?? -1) >= 18);
+  const query = String(request.query.q ?? "").normalize("NFKC").trim().replace(/\s+/gu, " ");
+  if (query.length === 1) return response.json({ books: [] });
+  if (query.length > 160) return response.status(400).json({ error: "Слишком длинный поисковый запрос" });
+  const needle = query.toLocaleLowerCase("ru");
   const unique = new Map();
   for (const book of state.catalogBooks) {
     if (book.isAdult && !adultViewer) continue;
+    const owner = demoCatalogOwner(book);
+    if (owner?.deletedAt || owner?.purged || state.blocks.some((item) => [item.blockerId, item.blockedId].includes(viewer?.id) && [item.blockerId, item.blockedId].includes(owner.id))) continue;
+    if (needle && !`${book.title} ${book.author} ${book.annotation ?? ""} ${book.isbn ?? ""} ${book.publisher ?? ""}`.normalize("NFKC").toLocaleLowerCase("ru").includes(needle)) continue;
     const key = book.catalogBookId ?? book.isbn ?? `${book.author}|${book.title}`.toLocaleLowerCase("ru");
     const current = unique.get(key);
-    const popularity = users.filter((user) => user.books.some((item) => (item.catalogBookId ?? item.id) === (book.catalogBookId ?? book.id))).length;
-    if (!current || popularity > current.popularity) unique.set(key, { ...book, addedAt: book.addedAt ?? new Date().toISOString(), popularity });
+    const ratings = users.filter((user) => !user.deletedAt && !user.purged).flatMap((user) => user.books.filter((item) => !item.isAuthor && (item.catalogBookId ?? item.id) === (book.catalogBookId ?? book.id) && Number.isFinite(Number(item.rating)) && String(item.review ?? item.shortReview ?? "").trim()).map((item) => Number(item.rating)));
+    const popularity = users.filter((user) => !user.deletedAt && !user.purged && user.books.some((item) => (item.catalogBookId ?? item.id) === (book.catalogBookId ?? book.id))).length;
+    if (!current || popularity > current.popularity) unique.set(key, { ...book, addedAt: book.addedAt ?? new Date().toISOString(), popularity, ratingCount: ratings.length, averageRating: ratings.length ? Math.round(ratings.reduce((sum, value) => sum + value, 0) / ratings.length * 10) / 10 : undefined });
   }
-  response.json({ books: [...unique.values()] });
+  response.json({ books: [...unique.values()].sort((first, second) => first.title.localeCompare(second.title, "ru") || first.author.localeCompare(second.author, "ru")).slice(0, 100) });
 });
 
 router.get("/books", (request, response) => {
@@ -1648,6 +1673,7 @@ router.post("/social/messages", (request, response) => {
   const body = String(request.body.body ?? "").trim();
   const attachment = request.body.attachment && Number(request.body.attachment.id) ? { kind: String(request.body.attachment.kind), id: Number(request.body.attachment.id) } : undefined;
   if (!body && !attachment) return response.status(400).json({ error: "Сообщение пусто" });
+  if (attachment && (!demoViewerCanReadAttachment(access.sender, attachment) || !demoViewerCanReadAttachment(access.target, attachment))) return response.status(403).json({ error: "Материал недоступен для отправки" });
   const message = { id: nextId++, senderId: request.demoUserId, recipientId: targetId, text: body, attachment, createdAt: new Date().toISOString(), readAt: null };
   (state.messages[conversationKey(request.demoUserId, targetId)] ??= []).push(message);
   response.json({ ok: true, message: { ...message, mine: true, unread: false, read: false } });

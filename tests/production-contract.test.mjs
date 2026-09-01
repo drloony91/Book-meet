@@ -298,7 +298,7 @@ test("book search and chat report icon keep shared production contracts", async 
   const chat = await readFile(path.join(root, "app", "components", "chat", "ChatComponents.tsx"), "utf8");
   const styles = await readFile(path.join(root, "app", "globals.css"), "utf8");
   assert.match(content, /matchesBookQuery\(book, query\)/);
-  assert.match(api, /tokens\.map\(\(\) => "LOWER\(CONCAT_WS\(' ', title, author, COALESCE\(isbn, ''\), COALESCE\(publisher, ''\)\)\) LIKE \?"\)\.join\(" AND "\)/);
+  assert.match(api, /tokens\.map\(\(\) => "LOWER\(CONCAT_WS\(' ', title, author, COALESCE\(annotation, ''\), COALESCE\(isbn, ''\), COALESCE\(publisher, ''\)\)\) LIKE \?"\)\.join\(" AND "\)/);
   assert.match(demo, /tokens\.every\(\(token\) => searchable\.includes\(token\)\)/);
   assert.match(chat, /M12 3 2\.8 20h18\.4L12 3Z/);
   assert.match(chat, /M12 9v5m0 3h\.01/);
@@ -739,6 +739,28 @@ test("chat attachments keep the composer visible and profile cards are fully cli
   assert.match(content, /className="profile-friend-card"[\s\S]*?onClick=\{\(\) => onOpenUser\(friend\.id\)\}/);
   assert.match(css, /\.profile-friend-groups details \{[^}]*border: 0/);
   assert.match(css, /\.profile-friends-grid \{[^}]*gap: 12px/);
+});
+
+test("chat attachment validation checks each participant against the material owner", async () => {
+  const api = await readFile(path.join(root, "server", "api.js"), "utf8");
+  const start = api.indexOf("async function validatedChatAttachment");
+  const end = api.indexOf("async function notifyFollowersAboutPublication", start);
+  const validation = api.slice(start, end);
+  assert.ok(start >= 0 && end > start, "attachment validation boundaries must remain discoverable");
+  assert.match(validation, /book: "SELECT id, creator_user_id AS owner_id FROM books WHERE id = \? LIMIT 1"/);
+  assert.match(validation, /const senderMaterial = await readableMaterialInfo\(connection, senderUserId, kind, id\)/);
+  assert.match(validation, /const recipientMaterial = await readableMaterialInfo\(connection, recipientUserId, kind, id\)/);
+  assert.match(validation, /for \(const participantUserId of \[senderUserId, recipientUserId\]\)/);
+  assert.match(validation, /await assertUsersCanInteract\(connection, participantUserId, materialOwnerId\)/);
+});
+
+test("shared canonical books keep the current library viewer for overlay and owner actions", async () => {
+  const content = await readFile(path.join(root, "app", "components", "content", "ContentComponents.tsx"), "utf8");
+  assert.match(content, /const effectiveViewer = viewer \?\? users\.find\(\(user\) => user\.id === Number\(document\.documentElement\.dataset\.bookMeetUserId\)\)/);
+  assert.match(content, /resolveViewerBook\(canonical, catalog, effectiveViewer\)/);
+  assert.match(content, /const viewerBook = effectiveViewer\?\.books\.find/);
+  assert.match(content, /onEdit=\{onEdit \?\? \(ownsLibraryRelation \? requestDefaultEdit : undefined\)\}/);
+  assert.match(content, /UnifiedBookModal book=\{openedBook\} viewer=\{viewer\} users=\{users\} nested/);
 });
 
 test("publisher profiles are moderated, private and separated from writer publications", async () => {

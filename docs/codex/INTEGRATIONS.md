@@ -15,6 +15,8 @@ This document records boundaries and **environment variable names only**. Values
 | Canonical origin/CORS | `server/index.js` validates mutating API Origin against the configured application origin; retired legacy hosts are not part of runtime | `APP_ORIGIN` |
 | Plesk/Node | one Node/Express process serves API and Vite output; production and staging roots/startup paths are in `PLESK_DEPLOY.md` | `PORT`, `NODE_ENV`, `APP_ORIGIN`, `DEMO_MODE` |
 
+`mailerDiagnostics()` and `telegramDiagnostics()` are configuration-only helpers for local/operator checks. `configured_unverified` explicitly means that values have the required shape only; it does not imply host reachability, TLS validity, authentication or delivery. They report only structural status (and missing SMTP field names / safe transport mode); they do not reveal values, resolve hosts, open a connection, authenticate, or send a message.
+
 ## Deployment contract
 
 The permanent topology is production (`bookmeet.club`), staging (`staging.bookmeet.club`), local/demo (`DEMO_MODE=1`, in-memory) and local disposable MySQL (`127.0.0.1:3307`, test-only `book_meet_test`). Production and staging require separate MariaDB databases/users, upload directories, seed admin credentials and secrets. Staging uses `../book-meet-staging-uploads`, HTTPS, Basic Auth or equivalent access restriction, `X-Robots-Tag: noindex, nofollow, noarchive`, and nginx/Plesk boundary security headers. Google, SMTP and Telegram remain disabled on staging until explicitly approved safe.

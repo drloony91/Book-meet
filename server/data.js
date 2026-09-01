@@ -606,9 +606,23 @@ export async function loadBootstrap(userId, options = {}) {
   // must still resolve after its last library relation has been removed.
   const [catalogRows] = includeCatalog ? await pool.query(
     `SELECT b.id, b.creator_user_id, b.author, b.title, b.isbn, b.publisher, b.genres,
-            b.annotation, b.is_adult, b.cover_path, b.cover_tone, b.flip_url
+            b.annotation, b.is_adult, b.cover_path, b.cover_tone, b.flip_url,
+            ratings.rating_count, ratings.average_rating
        FROM books b
-      WHERE ? = 1 OR b.is_adult = 0
+       LEFT JOIN users creator_user ON creator_user.id = b.creator_user_id
+       LEFT JOIN (
+         SELECT ub.book_id, COUNT(*) AS rating_count, AVG(ub.rating) AS average_rating
+           FROM user_books ub
+           JOIN users rating_user ON rating_user.id = ub.user_id
+          WHERE ub.is_author = 0
+            AND ub.rating IS NOT NULL
+            AND TRIM(COALESCE(ub.short_review, '')) <> ''
+            AND rating_user.deleted_at IS NULL
+            AND rating_user.purged_at IS NULL
+          GROUP BY ub.book_id
+       ) ratings ON ratings.book_id = b.id
+      WHERE (? = 1 OR b.is_adult = 0)
+        AND (b.creator_user_id IS NULL OR (creator_user.deleted_at IS NULL AND creator_user.purged_at IS NULL))
       ORDER BY b.title_key, b.author_key`,
     [adultStatus === "adult" ? 1 : 0],
   ) : [[]];
@@ -619,11 +633,12 @@ export async function loadBootstrap(userId, options = {}) {
       ORDER BY id`,
     catalogIds,
   ) : [[]];
-  const catalogBooks = catalogRows.map((row) => ({
+  const catalogBooks = catalogRows.filter((row) => currentUser?.isAdmin || !row.creator_user_id || !hiddenUserIds.has(Number(row.creator_user_id))).map((row) => ({
     id: Number(row.id), creatorUserId: row.creator_user_id ? Number(row.creator_user_id) : undefined,
     catalogBookId: Number(row.id), author: row.author, title: row.title, isbn: row.isbn ?? undefined,
     publisher: row.publisher ?? undefined, genres: parseJson(row.genres), annotation: row.annotation ?? "",
     pages: "", format: "Бумажная", durationHours: "", durationMinutes: "", rating: 0, review: "",
+    ratingCount: Number(row.rating_count ?? 0), averageRating: row.average_rating == null ? undefined : Math.round(Number(row.average_rating) * 10) / 10,
     isAdult: Boolean(row.is_adult), coverUrl: row.cover_path ?? undefined, coverTone: row.cover_tone ?? "blue",
     flipUrl: row.flip_url ?? undefined,
     links: catalogLinkRows.filter((link) => Number(link.book_id) === Number(row.id)).map((link) => ({ id: Number(link.id), action: link.action, label: link.label, url: link.url })),
