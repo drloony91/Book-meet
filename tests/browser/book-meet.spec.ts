@@ -88,6 +88,7 @@ test("library add-book CTA is full-width on mobile boundaries and does not regre
   const stats = page.getByRole("button", { name: "Статистика чтения", exact: true });
   await expect(addBook).toBeVisible();
   await expect(stats).toBeVisible();
+  await expect(page.getByRole("button", { name: /Импорт CSV \/ Excel/ })).toHaveCount(0);
   await expect(page.locator(".library-status-summary")).not.toContainText("книг");
   if (testInfo.project.name === "mobile") {
     for (const width of [390, 800]) {

@@ -2546,9 +2546,7 @@ router.get("/books/catalog", asyncRoute(async (request, response) => {
        FROM books b
        LEFT JOIN user_books ub ON ub.book_id = b.id
        LEFT JOIN users rating_user ON rating_user.id = ub.user_id
-       LEFT JOIN users creator_user ON creator_user.id = b.creator_user_id
        WHERE (? = 1 OR b.is_adult = 0)
-        AND (b.creator_user_id IS NULL OR (creator_user.deleted_at IS NULL AND creator_user.purged_at IS NULL))
         AND NOT EXISTS (SELECT 1 FROM user_blocks block WHERE (block.blocker_user_id = ? AND block.blocked_user_id = b.creator_user_id) OR (block.blocker_user_id = b.creator_user_id AND block.blocked_user_id = ?))
         AND (? IS NULL OR LOWER(CONCAT_WS(' ', b.title, b.author, COALESCE(b.annotation, ''), COALESCE(b.isbn, ''), COALESCE(b.publisher, ''))) LIKE ?)
        GROUP BY b.id

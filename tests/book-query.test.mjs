@@ -60,6 +60,7 @@ test("general catalogue book resolution keeps aggregate rating fields beside aut
 
 test("catalog route leaves the empty query uncapped while bounding searches", async () => {
   const api = await readFile(path.join(root, "server", "api.js"), "utf8");
+  const data = await readFile(path.join(root, "server", "data.js"), "utf8");
   const demo = await readFile(path.join(root, "server", "demo-api.js"), "utf8");
   const routeStart = api.indexOf('router.get("/books/catalog"');
   const routeEnd = api.indexOf('router.get("/books', routeStart + 1);
@@ -68,7 +69,18 @@ test("catalog route leaves the empty query uncapped while bounding searches", as
   assert.match(route, /const catalogLimit = needle === null \? "" : " LIMIT 100"/);
   assert.match(route, /ORDER BY b\.title_key, b\.author_key\$\{catalogLimit\}/);
   assert.doesNotMatch(route, /ORDER BY b\.title_key, b\.author_key\s+LIMIT 100/);
+  assert.doesNotMatch(route, /creator_user\.deleted_at/);
+  const bootstrapCatalog = data.slice(data.indexOf("const [catalogRows]"), data.indexOf("return {", data.indexOf("const [catalogRows]")));
+  assert.doesNotMatch(bootstrapCatalog, /creator_user\.deleted_at/);
+  assert.match(bootstrapCatalog, /hiddenUserIds\.has\(Number\(row\.creator_user_id\)\)/);
   assert.match(demo, /response\.json\(\{ books: needle \? sorted\.slice\(0, 100\) : sorted \}\)/);
+});
+
+test("personal library keeps the disabled spreadsheet import out of the UI", async () => {
+  const components = await readFile(path.join(root, "app", "components", "content", "ContentComponents.tsx"), "utf8");
+  assert.doesNotMatch(components, /readFirstWorksheetRows/);
+  assert.doesNotMatch(components, /t\("library\.import"\)/);
+  assert.doesNotMatch(components, /accept="\.csv,\.xls,\.xlsx"/);
 });
 
 test("library book editing stays on the canonical catalogue id", async () => {

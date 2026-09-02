@@ -21,7 +21,6 @@ import {
   userBookMatches,
 } from "../../lib/domain";
 import { isSpecialLocation, SPECIAL_LOCATIONS } from "../../lib/locations";
-import { readFirstWorksheetRows } from "../../services/spreadsheet";
 import { apiFetch } from "../../services/api";
 import type { ChatAttachment } from "../chat/types";
 import type {
@@ -1231,8 +1230,6 @@ export function LibraryTab({ books, setBooks, userId, users, catalog = [], initi
   const [editingBook, setEditingBook] = useState<LibraryBook | null | undefined>(() => initialEditId ? books.find((item) => canonicalBookId(item) === initialEditId) : initialAdd ? null : undefined);
   const [viewingBook, setViewingBook] = useState<LibraryBook | null>(null);
   const [statsOpen, setStatsOpen] = useState(false);
-  const [importing, setImporting] = useState(false);
-  const importInputRef = useRef<HTMLInputElement>(null);
   const now = new Date();
   const currentMonth = now.getMonth() + 1;
   const currentYear = now.getFullYear();
@@ -1241,31 +1238,6 @@ export function LibraryTab({ books, setBooks, userId, users, catalog = [], initi
   const wantCount = books.filter((book) => book.readingStatus === "want").length;
   const readingCount = books.filter((book) => book.readingStatus === "reading").length;
   const visibleBooks = sortLibraryBooks(books.filter((book) => (book.readingStatus ?? "read") === statusFilter));
-
-  async function importBooks(file?: File) {
-    if (!file) return;
-    setImporting(true);
-    try {
-      const rows = await readFirstWorksheetRows(file);
-      const existing = new Set(canonicalCatalog.map((book) => normalizeBookKey(`${book.author}|${book.title}`)));
-      const imported: LibraryBook[] = [];
-      for (const row of rows.slice(0, 1000)) {
-        const value = (keys: string[]) => String(keys.map((key) => row[key]).find(Boolean) ?? "").trim();
-        const author = value(["Автор", "автор", "Author", "author"]);
-        const title = value(["Название", "название", "Книга", "Title", "title"]);
-        const key = normalizeBookKey(`${author}|${title}`);
-        if (!author || !title || existing.has(key)) continue;
-        const response = await apiFetch("/api/books", { method: "POST", credentials: "same-origin", headers: { "content-type": "application/json" }, body: JSON.stringify({ userId, author, title, isbn: value(["ISBN", "isbn"]), publisher: value(["Издательство", "Publisher", "publisher"]), annotation: value(["Аннотация", "Описание", "Annotation", "annotation"]), coverUrl: value(["Обложка", "Cover", "coverUrl"]), genres: value(["Жанры", "Genres", "genres"]).split(/[,;]+/).map((item) => item.trim()).filter(Boolean), readingStatus: "read", rating: 0, shortReview: "", coverTone: "blue" }) });
-        if (!response.ok) continue;
-        const data = await response.json() as { book?: LibraryBook };
-        if (data.book) imported.push(data.book);
-        existing.add(key);
-      }
-      if (imported.length) setBooks((current) => [...imported, ...current]);
-      window.alert(t("library.importComplete", { count: imported.length }));
-    } catch (error) { console.warn(error); window.alert(t("library.importError")); }
-    finally { setImporting(false); }
-  }
 
   async function updateRating(id: number, rating: number) {
     const book = books.find((item) => canonicalBookId(item) === id);
@@ -1308,7 +1280,7 @@ export function LibraryTab({ books, setBooks, userId, users, catalog = [], initi
     <div className="library-tab">
       <div className="profile-title-row library-title-row">
          <div><h1>{t("profile.library")}</h1><div className="library-status-summary" aria-label={t("library.readingStats")}><span>{t("library.wantSummary", { count: wantCount })}</span><i aria-hidden="true" /><span>{t("library.readingSummary", { count: readingCount })}</span><i aria-hidden="true" /><span>{t("library.readSummary", { count: books.filter((book) => (book.readingStatus ?? "read") === "read").length })}</span></div><div className="library-stats-actions"><button className="outline-button" type="button" onClick={() => setStatsOpen(true)}>{t("library.openStats")}</button><button className="outline-button" type="button" disabled aria-disabled="true">{t("library.goals")}</button></div></div>
-        <div className="library-import-actions"><button className="outline-button library-import-button" type="button" disabled={importing} onClick={() => importInputRef.current?.click()}>{importing ? t("library.importing") : t("library.import")}</button><input ref={importInputRef} type="file" hidden accept=".csv,.xls,.xlsx" onChange={(event) => { void importBooks(event.target.files?.[0]); event.currentTarget.value = ""; }} /><button className="primary-button creation-action-button library-add-book-cta" type="button" onClick={() => { openMobileWorkflowRoute({ mode: "create", kind: "book" }); setEditingBook(null); }}>＋ {t("content.addBook")}</button></div>
+        <div className="library-import-actions"><button className="primary-button creation-action-button library-add-book-cta" type="button" onClick={() => { openMobileWorkflowRoute({ mode: "create", kind: "book" }); setEditingBook(null); }}>＋ {t("content.addBook")}</button></div>
       </div>
       <div className="library-toolbar">
         <div className="library-status-filter" role="group" aria-label={t("library.statusFilter")}><button className={statusFilter === "want" ? "active" : ""} type="button" onClick={() => setStatusFilter("want")}>{t("content.want")}</button><button className={statusFilter === "reading" ? "active" : ""} type="button" onClick={() => setStatusFilter("reading")}>{t("content.reading")}</button><button className={statusFilter === "read" ? "active" : ""} type="button" onClick={() => setStatusFilter("read")}>{t("content.readDone")}</button></div>

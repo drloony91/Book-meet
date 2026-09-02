@@ -609,7 +609,6 @@ export async function loadBootstrap(userId, options = {}) {
             b.annotation, b.is_adult, b.cover_path, b.cover_tone, b.flip_url,
             ratings.rating_count, ratings.average_rating
        FROM books b
-       LEFT JOIN users creator_user ON creator_user.id = b.creator_user_id
        LEFT JOIN (
          SELECT ub.book_id, COUNT(*) AS rating_count, AVG(ub.rating) AS average_rating
            FROM user_books ub
@@ -622,7 +621,6 @@ export async function loadBootstrap(userId, options = {}) {
           GROUP BY ub.book_id
        ) ratings ON ratings.book_id = b.id
       WHERE (? = 1 OR b.is_adult = 0)
-        AND (b.creator_user_id IS NULL OR (creator_user.deleted_at IS NULL AND creator_user.purged_at IS NULL))
       ORDER BY b.title_key, b.author_key`,
     [adultStatus === "adult" ? 1 : 0],
   ) : [[]];

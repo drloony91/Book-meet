@@ -29,6 +29,6 @@ test("frontend spreadsheet consumers load xlsx through the shared lazy helper", 
   assert.match(helper, /file\.arrayBuffer\(\)/);
   assert.match(helper, /sheet_to_json/);
   assert.doesNotMatch(frontendSources.join("\n"), /import\s+(?:\*\s+as\s+XLSX|XLSX\s+from|\{[^}]*\bXLSX\b[^}]*\})\s+from\s+["']xlsx["']/);
-  assert.match(content, /readFirstWorksheetRows\(file\)/);
+  assert.doesNotMatch(content, /readFirstWorksheetRows/);
   assert.match(profile, /readFirstWorksheetRows\(file\)/);
 });
