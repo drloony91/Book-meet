@@ -441,13 +441,14 @@ function demoCatalogOwner(book) {
 
 function demoViewerCanReadAttachment(user, attachment) {
   const kind = attachment?.kind; const id = Number(attachment?.id);
-  if (!Number.isInteger(id) || !["book", "review", "excerpt", "event", "occasion"].includes(kind)) return false;
+  if (!Number.isInteger(id) || !["book", "review", "excerpt", "event", "occasion", "publisher_news"].includes(kind)) return false;
   let material; let owner;
   if (kind === "book") { material = state.catalogBooks.find((item) => item.id === id); owner = material && demoCatalogOwner(material); }
   if (kind === "review") { owner = users.find((item) => item.reviews.some((review) => review.id === id)); material = owner?.reviews.find((review) => review.id === id); }
   if (kind === "excerpt") { owner = users.find((item) => item.excerpts.some((excerpt) => excerpt.id === id)); material = owner?.excerpts.find((excerpt) => excerpt.id === id); }
   if (kind === "event") { material = state.events.find((item) => item.id === id && item.status === "published"); owner = material && users.find((item) => item.id === material.creatorId); }
   if (kind === "occasion") { material = state.occasions.find((item) => item.id === id && item.status === "published"); owner = material && users.find((item) => item.id === material.creatorId); }
+  if (kind === "publisher_news") { owner = users.find((item) => ["Издатель", "Сообщество"].includes(item.profile.type) && item.profile.publisherStatus === "approved" && (item.publisherNews ?? []).some((news) => news.id === id)); material = owner?.publisherNews?.find((news) => news.id === id); }
   if (!material || owner?.deletedAt || owner?.purged || material.isAdult && !(user?.isAdmin || Number(user?.profile.age ?? -1) >= 18)) return false;
   return !owner || owner.id === user.id || !state.blocks.some((item) => [item.blockerId, item.blockedId].includes(user.id) && [item.blockerId, item.blockedId].includes(owner.id));
 }
@@ -1128,7 +1129,8 @@ router.get("/books/catalog", (request, response) => {
     const popularity = users.filter((user) => !user.deletedAt && !user.purged && user.books.some((item) => (item.catalogBookId ?? item.id) === (book.catalogBookId ?? book.id))).length;
     if (!current || popularity > current.popularity) unique.set(key, { ...book, addedAt: book.addedAt ?? new Date().toISOString(), popularity, ratingCount: ratings.length, averageRating: ratings.length ? Math.round(ratings.reduce((sum, value) => sum + value, 0) / ratings.length * 10) / 10 : undefined });
   }
-  response.json({ books: [...unique.values()].sort((first, second) => first.title.localeCompare(second.title, "ru") || first.author.localeCompare(second.author, "ru")).slice(0, 100) });
+  const sorted = [...unique.values()].sort((first, second) => first.title.localeCompare(second.title, "ru") || first.author.localeCompare(second.author, "ru"));
+  response.json({ books: needle ? sorted.slice(0, 100) : sorted });
 });
 
 router.get("/books", (request, response) => {

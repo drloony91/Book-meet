@@ -85,7 +85,10 @@ test("books directory and personal library are reachable", async ({ page }) => {
 test("library add-book CTA is full-width on mobile boundaries and does not regress desktop", async ({ page }, testInfo) => {
   await loginAs(page, 3, "/profile/library");
   const addBook = page.getByRole("button", { name: /Добавить книгу/ });
+  const stats = page.getByRole("button", { name: "Статистика чтения", exact: true });
   await expect(addBook).toBeVisible();
+  await expect(stats).toBeVisible();
+  await expect(page.locator(".library-status-summary")).not.toContainText("книг");
   if (testInfo.project.name === "mobile") {
     for (const width of [390, 800]) {
       await page.setViewportSize({ width, height: 844 });
@@ -96,6 +99,9 @@ test("library add-book CTA is full-width on mobile boundaries and does not regre
   } else {
     await page.setViewportSize({ width: 1280, height: 900 });
     expect((await addBook.boundingBox())?.width ?? 0).toBeLessThan(700);
+    const addBookBox = await addBook.boundingBox();
+    const statsBox = await stats.boundingBox();
+    expect(Math.abs((addBookBox?.y ?? 0) - (statsBox?.y ?? 0))).toBeLessThanOrEqual(2);
   }
 });
 
@@ -106,11 +112,15 @@ test("feed tabs, notification tabs and material share keep local viewer state", 
   await page.getByRole("tab", { name: "Все" }).click();
   await expect(page.getByRole("tab", { name: "Все" })).toHaveAttribute("aria-selected", "true");
   await page.goto("/notifications");
-  await page.getByRole("tab", { name: "Комментарии" }).click();
-  await expect(page.getByRole("tab", { name: "Комментарии" })).toHaveAttribute("aria-selected", "true");
+  const notificationCategory = page.getByRole("combobox", { name: "Категория" });
+  await notificationCategory.click();
+  await page.getByRole("option", { name: "Комментарии" }).click();
+  await expect(notificationCategory).toContainText("Комментарии");
   await page.goto("/");
   const share = page.getByRole("button", { name: "Отправить другу" }).first();
   await expect(share).toBeVisible();
+  await expect(share.locator("svg")).toBeVisible();
+  await expect(share).not.toContainText("✈");
   const response = page.waitForResponse((item) => item.url().endsWith("/api/social/messages") && item.request().method() === "POST");
   await share.click();
   await page.locator(".material-share-picker").getByRole("button", { name: /Издательство «Тест»/, exact: true }).click();

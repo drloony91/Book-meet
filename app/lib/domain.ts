@@ -160,13 +160,21 @@ export function excerptReadingItemById(users: DemoUser[], id: number, fallbackTi
 }
 
 export function resolveCanonicalBook(book: LibraryBook | AuthorBook, users: DemoUser[], catalog: Array<LibraryBook | AuthorBook> = []): LibraryBook | AuthorBook {
-  const sameBook = (item: LibraryBook | AuthorBook) => item.id === book.id || Boolean(book.isbn && item.isbn === book.isbn) || (item.title.toLowerCase() === book.title.toLowerCase() && item.author.toLowerCase() === book.author.toLowerCase());
+  const canonicalId = book.catalogBookId ?? book.id;
+  const sameBook = (item: LibraryBook | AuthorBook) => (item.catalogBookId ?? item.id) === canonicalId || Boolean(book.isbn && item.isbn === book.isbn) || (item.title.toLowerCase() === book.title.toLowerCase() && item.author.toLowerCase() === book.author.toLowerCase());
+  const authoritativeCatalogBook = catalog.find(sameBook);
   const writerBook = users.flatMap((user) => user.authorBooks ?? []).find(sameBook);
   if (writerBook) {
     const links = [...writerBook.links, ...(book.links ?? [])].filter((link, index, all) => all.findIndex((item) => item.url === link.url) === index);
-    return { ...book, ...writerBook, links } as LibraryBook & AuthorBook;
+    // Catalogue aggregates describe the book, not a particular owner's
+    // relation. Keep them authoritative when an author card is also present.
+    const aggregate = authoritativeCatalogBook ? {
+      ratingCount: authoritativeCatalogBook.ratingCount,
+      averageRating: authoritativeCatalogBook.averageRating,
+    } : {};
+    return { ...book, ...writerBook, ...aggregate, links } as LibraryBook & AuthorBook;
   }
-  return catalogFromSources(catalog, users).find(sameBook) ?? book;
+  return authoritativeCatalogBook ?? catalogFromSources(catalog, users).find(sameBook) ?? book;
 }
 
 export function formatKazakhstanPhone(value: string) {

@@ -68,3 +68,27 @@ test("production chat persistence, per-user clearing and notification boundaries
   assert.match(demo, /CROSS_AGE_INTERACTION_FORBIDDEN/);
   assert.doesNotMatch(demo, /notification\(targetId, request\.demoUserId, "new_message"/);
 });
+
+test("publisher and community news are readable share attachments in production and demo", async () => {
+  const [api, demo, types, controller, content, messages, routes] = await Promise.all([
+    readFile(path.join(root, "server/api.js"), "utf8"),
+    readFile(path.join(root, "server/demo-api.js"), "utf8"),
+    readFile(path.join(root, "app/components/chat/types.ts"), "utf8"),
+    readFile(path.join(root, "app/hooks/useBookMeetController.tsx"), "utf8"),
+    readFile(path.join(root, "app/components/content/ContentComponents.tsx"), "utf8"),
+    readFile(path.join(root, "app/i18n/messages.ts"), "utf8"),
+    readFile(path.join(root, "docs/codex/ROUTES_AND_API.md"), "utf8"),
+  ]);
+  assert.match(types, /ChatAttachmentKind = .*publisher_news/);
+  assert.match(controller, /kind: "publisher_news"/);
+  assert.match(controller, /openPersonalMaterial\("publisher_news", attachment\.id\)/);
+  assert.match(content, /shareAttachment=\{actions\.shareAttachment \?\? \{ kind: "publisher_news", id: item\.id \}\}/);
+  assert.match(content, /shareAttachment=\{\{ kind: "publisher_news", id: item\.id \}\}/);
+  assert.match(api, /publisher_news: "SELECT n\.id, n\.user_id AS owner_id FROM publisher_news/);
+  assert.match(api, /\["review", "excerpt", "event", "occasion", "publisher_news"\]\.includes\(kind\)/);
+  assert.match(demo, /\["book", "review", "excerpt", "event", "occasion", "publisher_news"\]\.includes\(kind\)/);
+  assert.match(demo, /publisherStatus === "approved".*publisherNews/);
+  assert.match(messages, /chat\.sharePublisherNews/);
+  assert.match(messages, /chat\.hintPublisherNews/);
+  assert.match(routes, /approved `publisher_news`/);
+});

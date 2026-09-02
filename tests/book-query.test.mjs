@@ -1,7 +1,11 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { matchesBookQuery, normalizeBookSearchText, resolveViewerBook } from "../app/lib/domain.ts";
+import { readFile } from "node:fs/promises";
+import path from "node:path";
+import { matchesBookQuery, normalizeBookSearchText, resolveCanonicalBook, resolveViewerBook } from "../app/lib/domain.ts";
 import { includesFollowingFeed } from "../app/lib/feed-filter.ts";
+
+const root = path.resolve(import.meta.dirname, "..");
 
 const book = {
   title: "«Мастер и Маргарита»",
@@ -30,7 +34,7 @@ test("book matcher covers every catalog search field and normalizes internal whi
 });
 
 test("viewer book resolution overlays only the viewer relation onto canonical metadata", () => {
-  const canonical = { id: 7, catalogBookId: 7, title: "Canonical", author: "Author", annotation: "Canonical annotation", genres: [], pages: "", format: "Бумажная", durationHours: "", durationMinutes: "", rating: 0, review: "", ratingCount: 3, coverTone: "blue" };
+  const canonical = { id: 7, catalogBookId: 7, title: "Canonical", author: "Author", annotation: "Canonical annotation", genres: [], pages: "", format: "Бумажная", durationHours: "", durationMinutes: "", rating: 0, review: "", ratingCount: 3, averageRating: 4.2, coverTone: "blue" };
   const viewer = { id: 1, books: [{ ...canonical, title: "Stale user title", rating: 4.5, review: "Short", readingStatus: "read", ratingCount: 0 }], profile: {} };
   const foreignOwner = { id: 2, books: [{ ...canonical, rating: 1, review: "Foreign", readingStatus: "want" }], profile: {} };
   const resolved = resolveViewerBook(canonical, [canonical], viewer);
@@ -39,8 +43,44 @@ test("viewer book resolution overlays only the viewer relation onto canonical me
   assert.equal(resolved.rating, 4.5);
   assert.equal(resolved.review, "Short");
   assert.equal(resolved.ratingCount, 3);
+  assert.equal(resolved.averageRating, 4.2);
   assert.notEqual(resolved.rating, foreignOwner.books[0].rating);
   assert.notEqual(resolved.review, foreignOwner.books[0].review);
+});
+
+test("general catalogue book resolution keeps aggregate rating fields beside author metadata", () => {
+  const catalogueBook = { id: 24, catalogBookId: 24, title: "Catalogue title", author: "Author", annotation: "Catalogue annotation", genres: [], pages: "", format: "Бумажная", durationHours: "", durationMinutes: "", rating: 0, review: "", ratingCount: 8, averageRating: 4.6, coverTone: "blue", links: [] };
+  const authorBook = { ...catalogueBook, ratingCount: 0, averageRating: undefined, annotation: "Author annotation" };
+  const canonical = resolveCanonicalBook(catalogueBook, [{ id: 2, authorBooks: [authorBook], books: [], profile: {} }], [catalogueBook]);
+  const resolved = resolveViewerBook(canonical, [catalogueBook], undefined);
+  assert.equal(resolved.annotation, "Catalogue annotation");
+  assert.equal(resolved.ratingCount, 8);
+  assert.equal(resolved.averageRating, 4.6);
+});
+
+test("catalog route leaves the empty query uncapped while bounding searches", async () => {
+  const api = await readFile(path.join(root, "server", "api.js"), "utf8");
+  const demo = await readFile(path.join(root, "server", "demo-api.js"), "utf8");
+  const routeStart = api.indexOf('router.get("/books/catalog"');
+  const routeEnd = api.indexOf('router.get("/books', routeStart + 1);
+  assert.ok(routeStart >= 0 && routeEnd > routeStart, "catalog route must be present");
+  const route = api.slice(routeStart, routeEnd);
+  assert.match(route, /const catalogLimit = needle === null \? "" : " LIMIT 100"/);
+  assert.match(route, /ORDER BY b\.title_key, b\.author_key\$\{catalogLimit\}/);
+  assert.doesNotMatch(route, /ORDER BY b\.title_key, b\.author_key\s+LIMIT 100/);
+  assert.match(demo, /response\.json\(\{ books: needle \? sorted\.slice\(0, 100\) : sorted \}\)/);
+});
+
+test("library book editing stays on the canonical catalogue id", async () => {
+  const components = await readFile(path.join(root, "app", "components", "content", "ContentComponents.tsx"), "utf8");
+  const controller = await readFile(path.join(root, "app", "hooks", "useBookMeetController.tsx"), "utf8");
+  assert.match(components, /const canonicalBookId = \(item: Pick<LibraryBook, "id"> & \{ catalogBookId\?: number \}\) => item\.catalogBookId \?\? item\.id/);
+  assert.match(components, /books\.find\(\(item\) => canonicalBookId\(item\) === initialEditId\)/);
+  assert.match(components, /apiFetch\(editingOwnedBook \? `\/api\/books\/\$\{canonicalId\}` : "\/api\/books"/);
+  assert.match(components, /current\.map\(\(item\) => canonicalBookId\(item\) === relationId/);
+  assert.match(controller, /const ownedCatalogId =/);
+  assert.match(controller, /\(book\.catalogBookId \?\? book\.id\) === id/);
+  assert.match(controller, /setProfileEditId\(id\)/);
 });
 
 test("following feed includes self, confirmed friends and explicit follows for every material group", () => {

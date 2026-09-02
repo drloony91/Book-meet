@@ -18,7 +18,7 @@ export type Friend = {
   avatarUrl?: string;
 };
 
-export type ChatAttachmentKind = "book" | "user" | "event" | "review" | "excerpt" | "occasion";
+export type ChatAttachmentKind = "book" | "user" | "event" | "review" | "excerpt" | "occasion" | "publisher_news";
 export type ChatAttachment = { kind: ChatAttachmentKind; id: number };
 export type ChatShareItem = ChatAttachment & {
   title: string;

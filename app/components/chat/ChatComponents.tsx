@@ -165,6 +165,7 @@ export function ChatView({
     { kind: "review", label: t("chat.shareReview"), hint: t("chat.hintReview") },
     { kind: "excerpt", label: t("chat.shareExcerpt"), hint: t("chat.hintExcerpt") },
     { kind: "occasion", label: t("chat.shareOccasion"), hint: t("chat.hintOccasion") },
+    { kind: "publisher_news", label: t("chat.sharePublisherNews"), hint: t("chat.hintPublisherNews") },
   ];
   const currentShareType = shareTypes.find((item) => item.kind === shareKind);
   const matchingItems = useMemo(() => {
@@ -174,7 +175,7 @@ export function ChatView({
   }, [shareItems, shareKind, shareQuery]);
 
   function itemFromUrl(text: string) {
-    const urlMatch = text.match(/https?:\/\/[^\s]+|\/(?:books|users|events|reviews|blog|meet)\/\d+/i)?.[0];
+    const urlMatch = text.match(/https?:\/\/[^\s]+|\/(?:books|users|events|reviews|blog|meet|publishing)\/\d+/i)?.[0];
     if (!urlMatch) return null;
     try {
       const url = new URL(urlMatch, window.location.origin);

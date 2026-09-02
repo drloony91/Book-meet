@@ -760,7 +760,7 @@ test("shared canonical books keep the current library viewer for overlay and own
   assert.match(content, /resolveViewerBook\(canonical, catalog, effectiveViewer\)/);
   assert.match(content, /const viewerBook = effectiveViewer\?\.books\.find/);
   assert.match(content, /onEdit=\{onEdit \?\? \(ownsLibraryRelation \? requestDefaultEdit : undefined\)\}/);
-  assert.match(content, /UnifiedBookModal book=\{openedBook\} viewer=\{viewer\} users=\{users\} nested/);
+  assert.match(content, /UnifiedBookModal book=\{openedBook\} viewer=\{viewer\} users=\{users\} catalog=\{catalog\}[^>]* nested/);
 });
 
 test("publisher profiles are moderated, private and separated from writer publications", async () => {

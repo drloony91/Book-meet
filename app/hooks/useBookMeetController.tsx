@@ -545,7 +545,11 @@ export function useBookMeetController() {
     const reviewItems: ChatShareItem[] = users.flatMap((user) => user.reviews.map((review) => ({ kind: "review" as const, id: review.id, title: review.bookTitle, subtitle: `${t("content.reviews")} · ${user.profile.name}`, preview: review.preview, imageUrl: catalog.find((book) => book.id === review.bookId)?.coverUrl, path: `/reviews/${review.id}` })));
     const excerptItems: ChatShareItem[] = users.flatMap((user) => (user.excerpts ?? []).map((excerpt) => ({ kind: "excerpt" as const, id: excerpt.id, title: excerpt.bookTitle || t("content.publications"), subtitle: user.profile.name, preview: excerpt.previewText, imageUrl: catalog.find((book) => book.id === excerpt.bookId)?.coverUrl, path: `/blog/${excerpt.id}` })));
     const occasionItems: ChatShareItem[] = occasions.filter((item) => item.status === "published").map((item) => ({ kind: "occasion", id: item.id, title: item.primaryText.slice(0, 72), subtitle: `${item.targetCities.join(", ")} · ${item.creatorName}`, preview: item.audienceText, path: `/meet/${item.id}` }));
-    return [...books, ...people, ...eventItems, ...reviewItems, ...excerptItems, ...occasionItems];
+    const publisherNewsItems: ChatShareItem[] = users.flatMap((user) => {
+      if (!["Издатель", "Сообщество"].includes(user.profile.type) || user.profile.publisherStatus !== "approved") return [];
+      return (user.publisherNews ?? []).map((news) => ({ kind: "publisher_news" as const, id: news.id, title: news.title, subtitle: `${t("content.publisherNews")} · ${user.profile.name}`, preview: news.previewText, path: `/publishing/${news.id}` }));
+    });
+    return [...books, ...people, ...eventItems, ...reviewItems, ...excerptItems, ...occasionItems, ...publisherNewsItems];
   }, [catalog, users, events, occasions]);
   const homeReviews = currentUser ? allReviews : [];
   const homeExcerpts = currentUser ? allExcerpts : [];
@@ -1337,6 +1341,7 @@ export function useBookMeetController() {
     else if (attachment.kind === "event") setSelectedEvent(events.find((item) => item.id === attachment.id) ?? null);
     else if (attachment.kind === "review") setSelectedMaterial(reviewReadingItemById(users, attachment.id));
     else if (attachment.kind === "excerpt") setSelectedMaterial(excerptReadingItemById(users, attachment.id, t("content.publications")));
+    else if (attachment.kind === "publisher_news") openPersonalMaterial("publisher_news", attachment.id);
     else setSelectedOccasion(occasions.find((item) => item.id === attachment.id) ?? null);
   };
   const openPersonalMaterial = (kind: MaterialActionRef["kind"], id: number) => {

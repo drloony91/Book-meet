@@ -993,12 +993,13 @@ async function validatedChatAttachment(connection, input, senderUserId, recipien
     review: "SELECT id FROM reviews WHERE id = ? LIMIT 1",
     excerpt: "SELECT id FROM excerpts WHERE id = ? LIMIT 1",
     occasion: "SELECT id FROM occasions WHERE id = ? AND status = 'published' LIMIT 1",
+    publisher_news: "SELECT n.id, n.user_id AS owner_id FROM publisher_news n JOIN profiles p ON p.user_id = n.user_id WHERE n.id = ? AND p.profile_type IN ('Издатель', 'Сообщество') AND p.publisher_status = 'approved' LIMIT 1",
   };
   if (!queries[kind]) throw Object.assign(new Error("Неизвестный тип вложения"), { statusCode: 400 });
   const [[item]] = await connection.query(queries[kind], [id]);
   if (!item) throw Object.assign(new Error("Материал для отправки не найден"), { statusCode: 404 });
   let materialOwnerId = Number(item.owner_id) || null;
-  if (["review", "excerpt", "event", "occasion"].includes(kind)) {
+  if (["review", "excerpt", "event", "occasion", "publisher_news"].includes(kind)) {
     // Both participants must be able to read the exact shared material, not
     // merely be permitted to message each other. This preserves block, status
     // and 18+ visibility at the attachment boundary.
@@ -2535,6 +2536,7 @@ router.get("/books/catalog", asyncRoute(async (request, response) => {
   if (query.length === 1) return response.json({ books: [] });
   if (query.length > 160) return response.status(400).json({ error: "Слишком длинный поисковый запрос" });
   const needle = query ? `%${query.toLocaleLowerCase("ru")}%` : null;
+  const catalogLimit = needle === null ? "" : " LIMIT 100";
   const [rows] = await getPool().query(
     `SELECT b.id, b.creator_user_id AS creatorUserId, b.author, b.title, b.isbn, b.publisher, b.genres, b.annotation,
             b.is_adult AS isAdult, b.cover_path AS coverUrl, b.cover_tone AS coverTone, b.flip_url AS flipUrl,
@@ -2549,9 +2551,8 @@ router.get("/books/catalog", asyncRoute(async (request, response) => {
         AND (b.creator_user_id IS NULL OR (creator_user.deleted_at IS NULL AND creator_user.purged_at IS NULL))
         AND NOT EXISTS (SELECT 1 FROM user_blocks block WHERE (block.blocker_user_id = ? AND block.blocked_user_id = b.creator_user_id) OR (block.blocker_user_id = b.creator_user_id AND block.blocked_user_id = ?))
         AND (? IS NULL OR LOWER(CONCAT_WS(' ', b.title, b.author, COALESCE(b.annotation, ''), COALESCE(b.isbn, ''), COALESCE(b.publisher, ''))) LIKE ?)
-      GROUP BY b.id
-      ORDER BY b.title_key, b.author_key
-      LIMIT 100`,
+       GROUP BY b.id
+       ORDER BY b.title_key, b.author_key${catalogLimit}`,
     [adultViewer ? 1 : 0, request.bookMeetUser.id, request.bookMeetUser.id, needle, needle],
   );
   response.json({ books: rows.map((row) => ({ ...row, id: Number(row.id), creatorUserId: row.creatorUserId ? Number(row.creatorUserId) : undefined, isAdult: Boolean(row.isAdult), genres: JSON.parse(row.genres || "[]"), popularity: Number(row.popularity || 0), ratingCount: Number(row.ratingCount || 0), averageRating: row.averageRating == null ? undefined : Math.round(Number(row.averageRating) * 10) / 10, addedAt: new Date(row.addedAt).toISOString() })) });
