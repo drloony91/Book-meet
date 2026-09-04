@@ -16,7 +16,7 @@ test("mobile entities and long workflows own full-page routed surfaces", async (
   ]);
 
   assert.match(routes, /MobileWorkflowKind/);
-  assert.match(routes, /\^\\\/\(create\|edit\)\\\/\(review\|publication\|event\|occasion\|book\|news\)/);
+  assert.match(routes, /\^\\\/\(create\|edit\)\\\/\(review\|publication\|event\|occasion\|book\|book-status\|news\)/);
   assert.match(routes, /MobileWorkflowRouteState/);
   assert.match(routes, /"publisher-news"/);
   assert.match(routes, /pattern: \/\^\\\/publishing\\\/\(\\d\+\)\$\/, kind: "publisher-news"/);

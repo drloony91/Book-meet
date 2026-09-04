@@ -1579,6 +1579,28 @@ select option {
   box-shadow: none;
 }
 
+/* Five reading states use the same compact control without inheriting the
+   historical three-column indicator assumptions. */
+.library-status-filter { grid-template-columns: repeat(5, minmax(0, 1fr)); }
+.library-status-filter::before { width: calc((100% - 6px) / 5); }
+.library-status-filter:has(button:nth-child(2).active)::before { transform: translateX(100%); }
+.library-status-filter:has(button:nth-child(3).active)::before { transform: translateX(200%); }
+.library-status-filter:has(button:nth-child(4).active)::before { transform: translateX(300%); }
+.library-status-filter:has(button:nth-child(5).active)::before { transform: translateX(400%); }
+.reading-state-fields { display: grid; gap: 12px; margin-top: 10px; }
+.reading-unit-tabs { display: inline-flex; gap: 4px; margin: 0 0 8px; }
+.reading-unit-tabs button { border: 1px solid var(--line); border-radius: 7px; padding: 5px 8px; background: #fff; cursor: pointer; }
+.reading-unit-tabs button.active { border-color: var(--blue); color: var(--blue); font-weight: 700; }
+.book-personal-state { display: grid; gap: 8px; margin: 14px 0; padding: 12px; border: 1px solid var(--line); border-radius: 12px; background: #fafcff; }
+.book-personal-state-heading { display: flex; justify-content: space-between; gap: 10px; }
+.reading-autosave-status { min-height: 1.2em; color: #65788b; font-size: 12px; }
+.reading-progress-badge { position: absolute; left: 8px; bottom: 8px; z-index: 2; display: inline-block; padding: 4px 7px; border-radius: 999px; background: rgba(255,255,255,.92); color: var(--blue); font-weight: 700; box-shadow: 0 2px 8px rgba(23,42,74,.16); }
+.postponed-overdue { color: #a23838; font-weight: 700; }
+.postponed-overdue-fields .form-row label { color: #a23838; }
+.postponed-overdue-fields .form-row input { border-color: #a23838; color: #a23838; }
+.book-status-action { width: auto; max-width: 120px; padding-inline: 8px; font-size: 11px; }
+.book-status-dialog { width: min(520px, calc(100vw - 32px)); max-height: calc(100vh - 40px); overflow: auto; padding: 22px; border-radius: 16px; background: #fff; }
+
 .brand-header-logo {
   width: 286px;
   height: 54px;

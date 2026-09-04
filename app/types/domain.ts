@@ -84,7 +84,7 @@ export type MaterialComment = { id: number; userId: number; text: string; create
 
 export type ProfileTab = "main" | "author-books" | "excerpts" | "publisher-news" | "library" | "wishlist" | "communities" | "reviews" | "events" | "occasions" | "friends" | "admin";
 export type LibraryView = "grid" | "list";
-export type ReadingStatus = "want" | "reading" | "read";
+export type ReadingStatus = "want" | "reading" | "read" | "abandoned" | "postponed";
 export type BookFormat = "Бумажная" | "Электронная" | "Аудио";
 
 export type LibraryBook = {
@@ -111,6 +111,16 @@ export type LibraryBook = {
   topRank?: 1 | 2 | 3;
   lastReadChapter?: number;
   readingComment?: string;
+  chaptersCurrent?: number | null;
+  chaptersTotal?: number | null;
+  pagesCurrent?: number | null;
+  pagesTotal?: number | null;
+  progressUnit?: "chapters" | "pages";
+  progressPercent?: number | null;
+  postponedMonth?: number | null;
+  postponedYear?: number | null;
+  postponedOverdue?: boolean;
+  hasCompletedReading?: boolean;
   isAdult?: boolean;
   flipUrl?: string;
   links?: BookLink[];
@@ -206,7 +216,8 @@ export type SafetyReport = {
   materialId?: number;
   conversationMessages?: Message[];
 };
-export type DemoUser = { id: number; username: string; usernameIsTemporary?: boolean; profileCompleted?: boolean; initials: string; color: string; avatarUrl?: string; joined: string; joinedAt?: string; online?: boolean; lastSeenAt?: string; isAdmin?: boolean; blockedByMe?: boolean; friendCount?: number; followerCount?: number; friendIds?: number[]; followerIds?: number[]; memberCount?: number; memberIds?: number[]; suspension?: UserSuspension; deletedAt?: string; deletionExpiresAt?: string; purged?: boolean; profile: UserProfileData; books: LibraryBook[]; communityBooks?: CommunityBook[]; reviews: UserReview[]; authorBooks?: AuthorBook[]; excerpts?: UserExcerpt[]; publisherNews?: PublisherNews[]; wishBooks?: WishBook[] };
+export type ReadingHistoryEntry = { id: number; bookId: number; completedMonth?: number; completedYear?: number; book: Pick<LibraryBook, "id" | "author" | "title" | "coverUrl" | "coverTone"> };
+export type DemoUser = { id: number; username: string; usernameIsTemporary?: boolean; profileCompleted?: boolean; initials: string; color: string; avatarUrl?: string; joined: string; joinedAt?: string; online?: boolean; lastSeenAt?: string; isAdmin?: boolean; blockedByMe?: boolean; friendCount?: number; followerCount?: number; friendIds?: number[]; followerIds?: number[]; memberCount?: number; memberIds?: number[]; suspension?: UserSuspension; deletedAt?: string; deletionExpiresAt?: string; purged?: boolean; profile: UserProfileData; books: LibraryBook[]; readingHistory?: ReadingHistoryEntry[]; communityBooks?: CommunityBook[]; reviews: UserReview[]; authorBooks?: AuthorBook[]; excerpts?: UserExcerpt[]; publisherNews?: PublisherNews[]; wishBooks?: WishBook[] };
 
 export type AdultMaterialKind = "book" | "review" | "excerpt" | "event" | "occasion";
 export type AdultAccess = { status: "adult" | "minor" | "missing"; restricted: Partial<Record<AdultMaterialKind, number[]>> };

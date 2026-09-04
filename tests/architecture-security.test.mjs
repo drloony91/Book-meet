@@ -243,6 +243,7 @@ test("дата рождения, спойлеры и материалы 18+ за
   const data = await readFile(path.join(root, "server", "data.js"), "utf8");
   const profile = await readFile(path.join(root, "app", "screens", "ProfileScreens.tsx"), "utf8");
   const content = await readFile(path.join(root, "app", "components", "content", "ContentComponents.tsx"), "utf8");
+  const readingFields = await readFile(path.join(root, "app", "components", "books", "ReadingStateFields.tsx"), "utf8");
   assert.match(migration, /birth_date DATE/);
   assert.match(migration, /profile_tab_order LONGTEXT/);
   assert.match(migration, /last_read_chapter INT/);
@@ -254,7 +255,7 @@ test("дата рождения, спойлеры и материалы 18+ за
   assertLocalized(profile, "profile.birthVisibility");
   assert.doesNotMatch(profile, /t\("settings\.changeOrder"\)/);
   assertLocalized(content, "editor.spoiler");
-  assertLocalized(content, "library.chaptersRead");
+  assertLocalized(readingFields, "library.chaptersRead");
 });
 
 test("участие в сообществе не является дружбой, а реакции читают только доступные материалы", async () => {

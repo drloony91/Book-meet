@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { readdir, readFile } from "node:fs/promises";
+import { copyFile, mkdtemp, readdir, readFile, rm } from "node:fs/promises";
 import path from "node:path";
 import test, { after } from "node:test";
 import { fileURLToPath } from "node:url";
@@ -123,6 +123,9 @@ test("MySQL production migrations, seed and critical relational behavior", async
     "telegram_alert_outbox.actor_user_id",
     "material_saves.material_kind",
     "chat_history_clears.cleared_through_message_id",
+    "user_books.chapters_current",
+    "user_books.postponed_timezone",
+    "reading_cycles.active_slot",
   ]) assert.ok(columns.has(column), `missing late-schema column ${column}`);
 
   const [foreignKeys] = await rootPool.query(
@@ -135,6 +138,13 @@ test("MySQL production migrations, seed and critical relational behavior", async
   for (const rule of ["profiles->users:CASCADE", "messages->users:SET NULL", "chat_history_clears->users:CASCADE", "legal_acceptances->legal_documents:RESTRICT"]) {
     assert.ok(rules.has(rule), `missing foreign-key rule ${rule}`);
   }
+
+  const cycleUserId = await insertUser("reading-cycle-user");
+  const [cycleBook] = await rootPool.query("INSERT INTO books (author, author_key, title, title_key, genres, annotation) VALUES ('Cycle', 'cycle', 'Cycle', 'cycle', '[]', '')");
+  await rootPool.query("INSERT INTO reading_cycles (user_id, book_id, status) VALUES (?, ?, 'active')", [cycleUserId, cycleBook.insertId]);
+  await assert.rejects(rootPool.query("INSERT INTO reading_cycles (user_id, book_id, status) VALUES (?, ?, 'active')", [cycleUserId, cycleBook.insertId]), /duplicate/i, "generated active slot must permit only one active cycle");
+  await rootPool.query("UPDATE reading_cycles SET status = 'completed', completed_month = NULL, completed_year = NULL WHERE user_id = ? AND book_id = ?", [cycleUserId, cycleBook.insertId]);
+  await rootPool.query("INSERT INTO reading_cycles (user_id, book_id, status) VALUES (?, ?, 'active')", [cycleUserId, cycleBook.insertId]);
 
   assertSucceeded(runNode("scripts/seed.js"), "first seed run");
   assertSucceeded(runNode("scripts/seed.js"), "second idempotent seed run");
@@ -202,6 +212,46 @@ test("MySQL production migrations, seed and critical relational behavior", async
   await rootPool.query("DELETE FROM users WHERE id = ?", [setNullUserId]);
   const [[setNullBook]] = await rootPool.query("SELECT creator_user_id FROM books WHERE id = ?", [bookResult.insertId]);
   assert.equal(setNullBook.creator_user_id, null, "ON DELETE SET NULL must preserve canonical books");
+  assertSucceeded(runNode("tests/reading-http-mysql.mjs"), "TZ2 authenticated HTTP transaction and privacy matrix");
+});
+
+test("039 upgrades populated legacy libraries without losing unknown completion dates", async () => {
+  await resetDatabase();
+  const fixturesRoot = path.resolve(root, "tests", "fixtures", "mysql-migrations");
+  const legacyDirectory = await mkdtemp(path.join(fixturesRoot, "tz2-upgrade-"));
+  try {
+    const migrations = await productionMigrationNames();
+    for (const name of migrations.filter((name) => Number.parseInt(name, 10) < 39)) await copyFile(path.join(migrationsDir, name), path.join(legacyDirectory, name));
+    assertSucceeded(runNode("scripts/migrate.js", { MYSQL_MIGRATIONS_DIR: legacyDirectory }), "legacy schema through 038");
+    const reader = await insertUser("tz2-legacy-reader");
+    const community = await insertUser("tz2-legacy-community");
+    for (const [userId, type] of [[reader, "Читатель"], [community, "Сообщество"]]) await rootPool.query("INSERT INTO profiles (user_id, display_name, profile_type, bio, weekend, joy, talk, stranger_message, favorite_genres, disliked_genres) VALUES (?, 'Legacy', ?, '', '', '', '', '', '[]', '[]')", [userId, type]);
+    const ids = [];
+    for (const name of ["known", "unknown", "invalid", "reading-zero", "reading-number", "community"]) {
+      const [created] = await rootPool.query("INSERT INTO books (author, author_key, title, title_key, genres, annotation) VALUES ('TZ2 Legacy', 'tz2 legacy', ?, ?, '[]', '')", [name, name]);
+      ids.push(Number(created.insertId));
+    }
+    await rootPool.query("INSERT INTO user_books (user_id, book_id, reading_status, read_month, read_year) VALUES (?, ?, 'read', 5, 2024), (?, ?, 'read', NULL, NULL), (?, ?, 'read', 13, 1)", [reader, ids[0], reader, ids[1], reader, ids[2]]);
+    await rootPool.query("INSERT INTO user_books (user_id, book_id, reading_status, last_read_chapter) VALUES (?, ?, 'reading', 0), (?, ?, 'reading', 7)", [reader, ids[3], reader, ids[4]]);
+    await rootPool.query("INSERT INTO user_books (user_id, book_id, reading_status) VALUES (?, ?, 'read')", [community, ids[5]]);
+    assertSucceeded(runNode("scripts/migrate.js"), "populated legacy upgrade to 039");
+    const [cycles] = await rootPool.query("SELECT book_id, status, completed_month, completed_year, completed_at FROM reading_cycles WHERE user_id = ? ORDER BY book_id", [reader]);
+    assert.equal(cycles.length, 5);
+    assert.deepEqual(cycles.slice(0, 3).map((row) => [row.status, row.completed_month, row.completed_year, row.completed_at]), [["completed", 5, 2024, null], ["completed", null, null, null], ["completed", null, null, null]]);
+    const [progress] = await rootPool.query("SELECT chapters_current, chapters_total, progress_unit FROM user_books WHERE user_id = ? AND reading_status = 'reading' ORDER BY book_id", [reader]);
+    assert.deepEqual(progress.map((row) => [row.chapters_current, row.chapters_total, row.progress_unit]), [[0, null, "chapters"], [7, null, "chapters"]]);
+    const [[organizationCycles]] = await rootPool.query("SELECT COUNT(*) AS count FROM reading_cycles WHERE user_id = ?", [community]);
+    assert.equal(organizationCycles.count, 0);
+    assertSucceeded(runNode("scripts/migrate.js"), "repeat legacy upgrade is a no-op");
+    assert.deepEqual(await appliedMigrationNames(), migrations);
+    const [[afterRepeat]] = await rootPool.query("SELECT COUNT(*) AS count FROM reading_cycles WHERE user_id = ?", [reader]);
+    assert.equal(afterRepeat.count, 5);
+  } finally {
+    const resolved = path.resolve(legacyDirectory);
+    assert.equal(path.dirname(resolved), fixturesRoot);
+    assert.ok(path.basename(resolved).startsWith("tz2-upgrade-"));
+    await rm(resolved, { recursive: true, force: true });
+  }
 });
 
 test("A-01 fixture blocks blind rerun until explicit schema reconciliation and marker retry", async () => {

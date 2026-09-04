@@ -8,6 +8,7 @@ import { BookMeetHeader, MobileBottomNavigation, MobileNavigationDrawer, Workspa
 import { NotificationDetail, NotificationsMenu, NotificationsPage } from "../components/notifications/Notifications";
 import {
   appRouteFromPathname,
+  restoreGuardedRouteAfterNavigation,
   initialMainView,
   mainViewTitle,
   mainViewPaths,
@@ -67,6 +68,7 @@ import {
   userBookMatches,
 } from "../lib/domain";
 import { apiFetch } from "../services/api";
+import { announceLibraryMutation, announceLibraryMutationStart, applyLibraryMutation, buildReadingPatch, isLibraryMutationResponse } from "../services/library-mutations";
 import { BootstrapRequestError, loadApplicationData } from "../services/bootstrap";
 import { conversationKey, finishMinimumLoading } from "./controller-utils";
 import type {
@@ -164,7 +166,7 @@ export function useBookMeetController() {
   const [editingOccasion, setEditingOccasion] = useState<Occasion | null>(null);
   const [selectedOccasion, setSelectedOccasion] = useState<Occasion | null>(null);
   const [selectedPublisherNews, setSelectedPublisherNews] = useState<PublisherNews | null>(null);
-  const [profileAction, setProfileAction] = useState<"review" | "excerpt" | "book" | null>(null);
+  const [profileAction, setProfileAction] = useState<"review" | "excerpt" | "book" | "book-status" | null>(null);
   const [quickMaterialAction, setQuickMaterialAction] = useState<"review" | "excerpt" | null>(null);
   const [quickMaterialEditId, setQuickMaterialEditId] = useState<number | null>(null);
   const [profileEditId, setProfileEditId] = useState<number | null>(null);
@@ -178,8 +180,27 @@ export function useBookMeetController() {
   const [adultRestrictionNotice, setAdultRestrictionNotice] = useState<"minor" | "missing" | null>(null);
   const [deletedRecovery, setDeletedRecovery] = useState<{ daysRemaining: number } | null>(null);
   const profileSaveQueue = useRef<Promise<void>>(Promise.resolve());
+  // A bootstrap/SSE response that began before a library write must not put a
+  // stale personal relation (or its completion history) back into the UI.
+  const libraryMutationEpoch = useRef(0);
   const currentUser = users.find((user) => user.id === activeUserId) ?? null;
   const profileIncomplete = Boolean(accessGate && !accessGate.profileComplete);
+  useEffect(() => {
+    const start = (event: Event) => {
+      const viewerId = (event as CustomEvent<{ viewerId?: unknown }>).detail?.viewerId;
+      if (viewerId === activeUserId) libraryMutationEpoch.current += 1;
+    };
+    const apply = (event: Event) => {
+      const detail = (event as CustomEvent<{ viewerId?: unknown; result?: unknown }>).detail;
+      const result = detail?.result;
+      if (!Number.isInteger(detail?.viewerId) || detail.viewerId !== activeUserId || !isLibraryMutationResponse(result) || !activeUserId) return;
+      libraryMutationEpoch.current += 1;
+      setUsers((current) => current.map((user) => user.id === activeUserId ? applyLibraryMutation(user, result) : user));
+    };
+    window.addEventListener("bookmeet:library-mutation-start", start);
+    window.addEventListener("bookmeet:library-mutation", apply);
+    return () => { window.removeEventListener("bookmeet:library-mutation-start", start); window.removeEventListener("bookmeet:library-mutation", apply); };
+  }, [activeUserId]);
   useEffect(() => {
     const show = () => setCompletionNotice(true);
     window.addEventListener("bookmeet:profile-completion-required", show);
@@ -274,9 +295,11 @@ export function useBookMeetController() {
       if (refreshing || document.hidden) return;
       refreshing = true;
       try {
+        const startedAtMutationEpoch = libraryMutationEpoch.current;
         const data = await loadApplicationData(["catalog", "social", "moderation"]);
         if (!active) return;
-        setUsers(data.users);
+        if (startedAtMutationEpoch === libraryMutationEpoch.current) setUsers(data.users);
+        else setUsers((current) => data.users.map((incoming) => incoming.id === activeUserId ? current.find((user) => user.id === incoming.id) ?? incoming : incoming));
         setCatalogBooks(data.books ?? []);
         setActiveOrganizationIds(data.activeOrganizationIds ?? []);
         setMessages(data.messages ?? {});
@@ -315,6 +338,7 @@ export function useBookMeetController() {
 
   useEffect(() => {
     const restoreRoute = () => {
+      if (restoreGuardedRouteAfterNavigation()) return;
       const route = appRouteFromPathname(window.location.pathname);
       const routeData = routeDataRef.current;
       if (route.view === "search" && window.matchMedia("(min-width: 801px)").matches) {
@@ -344,7 +368,7 @@ export function useBookMeetController() {
       setProfileEditId(null);
       if (route.workflow) {
         const state = (window.history.state ?? {}) as MobileWorkflowRouteState;
-        const fallbackPath = state.backgroundPath || (route.workflow.kind === "excerpt" ? "/blog" : route.workflow.kind === "publisher-news" || route.workflow.kind === "book" ? "/profile" : `/${route.workflow.kind === "occasion" ? "meet" : `${route.workflow.kind}s`}`);
+        const fallbackPath = state.backgroundPath || (route.workflow.kind === "excerpt" ? "/blog" : route.workflow.kind === "publisher-news" || route.workflow.kind === "book" || route.workflow.kind === "book-status" ? "/profile/library" : `/${route.workflow.kind === "occasion" ? "meet" : `${route.workflow.kind}s`}`);
         if (window.matchMedia("(min-width: 801px)").matches && route.workflow.kind !== "publisher-news") {
           const fallbackRoute = appRouteFromPathname(fallbackPath);
           setView(fallbackRoute.view);
@@ -370,7 +394,7 @@ export function useBookMeetController() {
         const approvedOrganization = !["Издатель", "Сообщество"].includes(viewer.profile.type) || viewer.profile.publisherStatus === "approved";
         if (workflow.mode === "create") {
           if (workflow.kind === "review" && !mayCreateReview || workflow.kind === "excerpt" && !mayCreateExcerpt || workflow.kind === "event" && !approvedOrganization || workflow.kind === "occasion" && !["Читатель", "Писатель", "Блогер"].includes(viewer.profile.type) || workflow.kind === "book" && ["Издатель", "Сообщество"].includes(viewer.profile.type) || workflow.kind === "publisher-news" && (!approvedOrganization || !["Издатель", "Сообщество"].includes(viewer.profile.type))) { denyWorkflow(); return; }
-          setView(workflow.kind === "book" || workflow.kind === "publisher-news" ? "profile" : workflow.kind === "excerpt" ? "publications" : workflow.kind === "occasion" ? "occasions" : workflow.kind === "event" ? "events" : "reviews");
+          setView(workflow.kind === "book" || workflow.kind === "book-status" || workflow.kind === "publisher-news" ? "profile" : workflow.kind === "excerpt" ? "publications" : workflow.kind === "occasion" ? "occasions" : workflow.kind === "event" ? "events" : "reviews");
           if (workflow.kind === "review" || workflow.kind === "excerpt") setQuickMaterialAction(workflow.kind);
           if (workflow.kind === "event") setEventFormOpen(true);
           if (workflow.kind === "occasion") setOccasionFormOpen(true);
@@ -384,9 +408,9 @@ export function useBookMeetController() {
           setQuickMaterialEditId(workflow.id);
           return;
         }
-        if (workflow.kind === "book" && viewer.books.some((item) => item.id === workflow.id) || workflow.kind === "publisher-news" && (viewer.publisherNews ?? []).some((item) => item.id === workflow.id)) {
+        if ((workflow.kind === "book" || workflow.kind === "book-status") && viewer.books.some((item) => (item.catalogBookId ?? item.id) === workflow.id) || workflow.kind === "publisher-news" && (viewer.publisherNews ?? []).some((item) => item.id === workflow.id)) {
           setView("profile");
-          setProfileAction(workflow.kind === "publisher-news" ? null : workflow.kind);
+          setProfileAction(workflow.kind === "publisher-news" ? null : workflow.kind === "book-status" ? "book-status" : "book");
           setProfileEditId(workflow.id);
           return;
         }
@@ -597,8 +621,8 @@ export function useBookMeetController() {
     return () => document.removeEventListener("pointerdown", closeOnOutsideInteraction, true);
   }, [selectedFriend, chatExpanded, view]);
 
-  function applyBootstrap(data: BootstrapData) {
-    setUsers(data.users);
+  function applyBootstrap(data: BootstrapData, preserveCurrentLibrary = false) {
+    setUsers(preserveCurrentLibrary ? (current) => data.users.map((incoming) => incoming.id === activeUserId ? current.find((user) => user.id === incoming.id) ?? incoming : incoming) : data.users);
     setCatalogBooks(data.books ?? []);
     setActiveOrganizationIds(data.activeOrganizationIds ?? []);
     setActiveUserId(data.activeUserId);
@@ -625,7 +649,8 @@ export function useBookMeetController() {
 
   async function refreshBootstrap() {
     try {
-      applyBootstrap(await loadApplicationData());
+      const startedAtMutationEpoch = libraryMutationEpoch.current;
+      applyBootstrap(await loadApplicationData(), startedAtMutationEpoch !== libraryMutationEpoch.current);
     } catch (error) {
       if (!(error instanceof BootstrapRequestError) || error.status !== 423) throw error;
       setSuspension({ permanent: Boolean(error.data.permanent), until: typeof error.data.until === "string" ? error.data.until : undefined, reason: typeof error.data.reason === "string" ? error.data.reason : "" });
@@ -696,16 +721,18 @@ export function useBookMeetController() {
 
   async function saveCatalogBookToLibrary(book: LibraryBook) {
     if (!currentUser) return;
+    const requestViewerId = currentUser.id;
+    announceLibraryMutationStart(requestViewerId);
     const catalogBookId = book.catalogBookId ?? book.id;
-    const payload = { rating: book.rating, shortReview: book.review, readMonth: book.readMonth, readYear: book.readYear, readingStatus: book.readingStatus ?? "read", lastReadChapter: book.lastReadChapter, readingComment: book.readingComment, top3: Boolean(book.topRank), useExistingId: catalogBookId };
+    const payload = { ...buildReadingPatch(book), top3: Boolean(book.topRank), useExistingId: catalogBookId };
     const response = await apiFetch("/api/books", { method: "POST", body: JSON.stringify(payload) });
     const data = await response.json().catch(() => ({})) as { bookId?: number; topRank?: 1 | 2 | 3; error?: string; code?: string };
     if (!response.ok) {
       window.alert(data.code === "TOP3_LIMIT" ? t("book.top3Limit") : localizedApiError(data.error, t("book.addLibraryError")));
       return;
     }
-    const savedBook = { ...book, id: Number(data.bookId ?? catalogBookId), catalogBookId, topRank: data.topRank };
-    setUsers((current) => current.map((user) => user.id === currentUser.id ? { ...user, books: user.books.some((item) => (item.catalogBookId ?? item.id) === catalogBookId) ? user.books.map((item) => (item.catalogBookId ?? item.id) === catalogBookId ? savedBook : item) : [savedBook, ...user.books] } : user));
+    if (!isLibraryMutationResponse(data)) { window.alert(t("book.addLibraryError")); return; }
+    announceLibraryMutation(data, requestViewerId);
     setCatalogBookToAdd(null);
   }
 

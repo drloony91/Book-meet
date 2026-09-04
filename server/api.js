@@ -6,7 +6,7 @@ import { createPublicKey, randomBytes, verify as verifySignature } from "node:cr
 import https from "node:https";
 import { fileURLToPath } from "node:url";
 import { getPool, withTransaction } from "./db.js";
-import { ageFromBirthDate, loadBootstrap, resolveBook } from "./data.js";
+import { ageFromBirthDate, loadBootstrap, loadUsers, resolveBook } from "./data.js";
 import { createBootstrapRouter } from "./modules/bootstrap-router.js";
 import { searchBootstrapMaterials } from "./modules/material-search.js";
 import { plainTextFromHtml, validateRichHtml } from "./modules/content-security.js";
@@ -22,6 +22,8 @@ import { loadPublicCatalog } from "./modules/public-catalog.js";
 import { nextTopRank, top3Eligibility } from "./modules/top3.js";
 import { LoginAttemptTracker } from "./modules/login-attempts.js";
 import { normalizeUsername, usernameStem, usernameValidationError } from "./modules/username.js";
+import { normalizeReadingState, postponedOverdue, readingStateStorage, validTimezone } from "./modules/reading-state.js";
+import { deliverDuePostponedBookReminders as deliverDuePostponedBooks } from "./modules/postponed-reminders.js";
 import { LEGAL_DOCUMENT_TYPES, REQUIRED_LEGAL_DOCUMENT_TYPES, REPORT_STATUSES, REPORT_TARGET_KINDS, activeLegalDocuments, assertAgeCompatible, assertLegalDocumentDeletable, legalAccessState, legalConsentRequired, legalDocumentWriteMode, logModerationAction, logSecurityEvent, profileAccessState, recordLegalAcceptances, removeCrossAgeRelationships, requestAuditMetadata, validateLegalAcceptance } from "./modules/compliance.js";
 import { clearSessionCookie, clearTransientCookie, createSessionToken, generateRecoveryCodes, generateTotpSecret, hashPassword, hashRecoveryCode, hashSessionToken, isValidEmail, normalizeEmail, normalizeIdentity, readCookie, recoveryCodeIndex, sessionCookie, transientCookie, verifyPassword, verifyTotp } from "./security.js";
 
@@ -73,6 +75,7 @@ async function purgeDeletedProfile(connection, userId) {
   await connection.query("DELETE FROM event_reminders WHERE user_id = ?", [userId]);
   await connection.query("DELETE FROM wishlist_items WHERE user_id = ?", [userId]);
   await connection.query("DELETE FROM user_books WHERE user_id = ? AND is_author = 0", [userId]);
+  await connection.query("DELETE FROM reading_cycles WHERE user_id = ?", [userId]);
   await connection.query("DELETE FROM material_likes WHERE user_id = ?", [userId]);
   await connection.query("DELETE FROM material_saves WHERE user_id = ?", [userId]);
   await connection.query("DELETE FROM notifications WHERE user_id = ? OR actor_user_id = ?", [userId, userId]);
@@ -164,9 +167,18 @@ async function deliverDueEventReminders() {
   }
 }
 
+async function deliverDuePostponedBookReminders() {
+  try { return await deliverDuePostponedBooks({ withTransaction, broadcast: broadcastRealtime }); } catch (error) { console.warn("Не удалось проверить отложенные книги:", error.message); return 0; }
+}
+
 const reminderTimer = setInterval(deliverDueEventReminders, 5 * 60 * 1000);
 reminderTimer.unref?.();
 setTimeout(deliverDueEventReminders, 15_000).unref?.();
+if (process.env.NODE_ENV !== "test") {
+  const postponedBookReminderTimer = setInterval(deliverDuePostponedBookReminders, 60 * 1000);
+  postponedBookReminderTimer.unref?.();
+  setTimeout(deliverDuePostponedBookReminders, 20_000).unref?.();
+}
 
 async function purgeExpiredDeletedProfiles() {
   try {
@@ -2690,25 +2702,22 @@ router.post("/books", asyncRoute(async (request, response) => {
   if (flipUrl) marketplaceFromUrl(flipUrl);
   const links = readerUsesExistingCanonical ? null : validatedBookLinks(payload.links, !payload.isAuthor);
   if (!readerUsesExistingCanonical && (!author || !title)) return response.status(400).json({ error: "Автор и название обязательны" });
-  const rating = Number(payload.rating);
-  const readingStatus = ["want", "reading", "read"].includes(payload.readingStatus) ? payload.readingStatus : "read";
+  const timezone = validTimezone(request.get("X-BookMeet-Timezone") || "UTC");
+  let readerState = payload.isAuthor ? null : { readingStatus: payload.readingStatus ?? "read" };
+  let rating = Number(payload.rating);
+  let readingStatus = readerState?.readingStatus ?? "read";
   const top3Specified = typeof payload.top3 === "boolean" || payload.topRank !== undefined;
   const top3Requested = payload.top3 === true || Number(payload.topRank) > 0;
-  const readMonth = Number(payload.readMonth) || null;
-  const readYear = Number(payload.readYear) || null;
-  const featuredDate = organizationMonthYear(payload, "featured", "книги месяца");
-  const publicationDate = organizationMonthYear(payload, "publication", "даты издания", 1900);
-  const lastReadChapter = readingStatus === "reading" && Number(payload.lastReadChapter) > 0 ? Math.floor(Number(payload.lastReadChapter)) : null;
-  const readingComment = readingStatus === "reading" ? String(payload.readingComment ?? "").trim().slice(0, 3000) : null;
-  if (!payload.isAuthor && ((readMonth && (readMonth < 1 || readMonth > 12)) || (readYear && (readYear < 1900 || readYear > new Date().getFullYear())))) {
-    return response.status(400).json({ error: "Укажите корректную дату прочтения" });
-  }
-  if (!payload.isAuthor && readingStatus === "read" && (!Number.isInteger(rating * 2) || rating < 0.5 || rating > 5 || !String(payload.shortReview ?? "").trim())) {
-    return response.status(400).json({ error: "Для книги в библиотеке обязательны оценка от 0,5 до 5 с шагом 0,5 и краткий отзыв" });
-  }
+  let readMonth = readerState?.readMonth ?? null;
+  let readYear = readerState?.readYear ?? null;
   const authorKey = normalizeIdentity(author);
   const titleKey = normalizeIdentity(title);
   const result = await withTransaction(async (connection) => {
+    await connection.query("SELECT id FROM users WHERE id = ? FOR UPDATE", [userId]);
+    if (!payload.isAuthor) {
+      const [[readerProfile]] = await connection.query("SELECT profile_type FROM profiles WHERE user_id = ?", [userId]);
+      if (!["Читатель", "Писатель", "Блогер"].includes(readerProfile?.profile_type)) throw Object.assign(new Error("Личное состояние чтения доступно только личному профилю"), { statusCode: 403 });
+    }
     await assertAdultMaterialAllowed(connection, userId, Boolean(payload.isAdult));
     const access = await publisherAccess(connection, userId);
     let organizationDates = { featuredMonth: null, featuredYear: null, publicationMonth: null, publicationYear: null };
@@ -2716,8 +2725,14 @@ router.post("/books", asyncRoute(async (request, response) => {
       const [[profile]] = await connection.query("SELECT profile_type, publisher_status FROM profiles WHERE user_id = ?", [userId]);
       const canPublishBook = ["Писатель", "Издатель", "Сообщество"].includes(profile?.profile_type);
       if (!canPublishBook) throw Object.assign(new Error("Добавлять книги могут только писатели и организации"), { statusCode: 403 });
-      if (profile.profile_type === "Сообщество") organizationDates = { ...organizationDates, featuredMonth: featuredDate.month, featuredYear: featuredDate.year };
-      if (profile.profile_type === "Издатель") organizationDates = { ...organizationDates, publicationMonth: publicationDate.month, publicationYear: publicationDate.year };
+      if (profile.profile_type === "Сообщество") {
+        const date = organizationMonthYear(payload, "featured", "книги месяца");
+        organizationDates = { ...organizationDates, featuredMonth: date.month, featuredYear: date.year };
+      }
+      if (profile.profile_type === "Издатель") {
+        const date = organizationMonthYear(payload, "publication", "даты издания", 1900);
+        organizationDates = { ...organizationDates, publicationMonth: date.month, publicationYear: date.year };
+      }
     } else if (access.isPublisher) {
       throw Object.assign(new Error("Книги организации добавляются в специальной вкладке профиля"), { statusCode: 403 });
     }
@@ -2771,16 +2786,26 @@ router.post("/books", asyncRoute(async (request, response) => {
         await connection.query("UPDATE books SET annotation = ? WHERE id = ? AND (annotation IS NULL OR annotation = '')", [String(payload.annotation).trim(), bookId]);
       }
     }
-    const [[existingUserBook]] = await connection.query("SELECT user_id, is_author, top_rank FROM user_books WHERE user_id = ? AND book_id = ? FOR UPDATE", [userId, bookId]);
+    const [[existingUserBook]] = await connection.query("SELECT * FROM user_books WHERE user_id = ? AND book_id = ? FOR UPDATE", [userId, bookId]);
+    if (!payload.isAuthor) {
+      readerState = normalizeReadingState(payload, existingUserBook ?? {}, { timezone, defaultStatus: existingUserBook?.reading_status ?? "read" });
+      rating = readerState.rating ?? Number(payload.rating); readingStatus = readerState.readingStatus;
+      readMonth = readerState.readMonth ?? null; readYear = readerState.readYear ?? null;
+    }
     if (top3Requested && !top3Eligibility({ isAuthor: Boolean(payload.isAuthor || existingUserBook?.is_author), readingStatus }).allowed) {
       throw Object.assign(new Error("В TOP3 можно добавлять только прочитанные книги из своей библиотеки"), { statusCode: 400 });
     }
+    const storage = payload.isAuthor ? null : readingStateStorage(readerState, existingUserBook ?? {});
     await connection.query(
-      `INSERT INTO user_books (user_id, book_id, rating, short_review, read_month, read_year, reading_status, last_read_chapter, reading_comment, is_author, featured_month, featured_year, publication_month, publication_year)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-       ON DUPLICATE KEY UPDATE rating = VALUES(rating), short_review = VALUES(short_review), read_month = VALUES(read_month), read_year = VALUES(read_year), reading_status = VALUES(reading_status), last_read_chapter = VALUES(last_read_chapter), reading_comment = VALUES(reading_comment), is_author = VALUES(is_author), featured_month = VALUES(featured_month), featured_year = VALUES(featured_year), publication_month = VALUES(publication_month), publication_year = VALUES(publication_year)`,
-      [userId, bookId, payload.isAuthor || readingStatus !== "read" ? null : rating, payload.isAuthor || readingStatus !== "read" ? null : String(payload.shortReview ?? "").trim(), payload.isAuthor || readingStatus !== "read" ? null : readMonth, payload.isAuthor || readingStatus !== "read" ? null : readYear, payload.isAuthor ? "read" : readingStatus, payload.isAuthor ? null : lastReadChapter, payload.isAuthor ? null : readingComment, payload.isAuthor ? 1 : 0, organizationDates.featuredMonth, organizationDates.featuredYear, organizationDates.publicationMonth, organizationDates.publicationYear],
+      `INSERT INTO user_books (user_id, book_id, rating, short_review, read_month, read_year, reading_status, last_read_chapter, chapters_current, chapters_total, pages_current, pages_total, progress_unit, reading_comment, postponed_month, postponed_year, postponed_timezone, is_author, featured_month, featured_year, publication_month, publication_year)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+       ON DUPLICATE KEY UPDATE rating = VALUES(rating), short_review = VALUES(short_review), read_month = VALUES(read_month), read_year = VALUES(read_year), reading_status = VALUES(reading_status), last_read_chapter = VALUES(last_read_chapter), chapters_current = VALUES(chapters_current), chapters_total = VALUES(chapters_total), pages_current = VALUES(pages_current), pages_total = VALUES(pages_total), progress_unit = VALUES(progress_unit), reading_comment = VALUES(reading_comment), postponed_month = VALUES(postponed_month), postponed_year = VALUES(postponed_year), postponed_timezone = VALUES(postponed_timezone), is_author = VALUES(is_author), featured_month = VALUES(featured_month), featured_year = VALUES(featured_year), publication_month = VALUES(publication_month), publication_year = VALUES(publication_year)`,
+      [userId, bookId, payload.isAuthor || readingStatus !== "read" ? null : rating, payload.isAuthor || readingStatus === "want" || readingStatus === "reading" || readingStatus === "postponed" ? null : readerState?.shortReview ?? null, payload.isAuthor || readingStatus !== "read" ? null : readMonth, payload.isAuthor || readingStatus !== "read" ? null : readYear, payload.isAuthor ? "read" : readingStatus, payload.isAuthor ? null : storage.lastReadChapter, payload.isAuthor ? null : storage.chaptersCurrent, payload.isAuthor ? null : storage.chaptersTotal, payload.isAuthor ? null : storage.pagesCurrent, payload.isAuthor ? null : storage.pagesTotal, payload.isAuthor ? null : storage.progressUnit, payload.isAuthor ? null : storage.readingComment, payload.isAuthor ? null : storage.postponedMonth, payload.isAuthor ? null : storage.postponedYear, timezone, payload.isAuthor ? 1 : 0, organizationDates.featuredMonth, organizationDates.featuredYear, organizationDates.publicationMonth, organizationDates.publicationYear],
     );
+    if (!payload.isAuthor) {
+      await syncReadingCycle(connection, { userId, bookId, previousStatus: existingUserBook?.reading_status ?? null, state: readerState, isAuthor: false });
+      await syncPostponedReminder(connection, { userId, bookId, state: readerState, previous: existingUserBook ?? {}, timezone });
+    }
     let topRank = existingUserBook?.top_rank ? Number(existingUserBook.top_rank) : null;
     if (payload.isAuthor || readingStatus !== "read" || top3Specified && !top3Requested) {
       await connection.query("UPDATE user_books SET top_rank = NULL WHERE user_id = ? AND book_id = ?", [userId, bookId]);
@@ -2822,7 +2847,8 @@ router.post("/books", asyncRoute(async (request, response) => {
     return { bookId, topRank: topRank ?? undefined };
   });
   if (result.conflict) return response.status(409).json({ match: result.conflict });
-  response.status(201).json(result);
+  const owner = await ownerBookResponse(userId, result.bookId);
+  response.status(201).json({ ...result, ...owner });
 }));
 
 function organizationMonthYear(payload, prefix, label, minYear = 2000) {
@@ -2833,6 +2859,50 @@ function organizationMonthYear(payload, prefix, label, minYear = 2000) {
     throw Object.assign(new Error(`Укажите корректные месяц и год ${label}`), { statusCode: 400 });
   }
   return { month, year };
+}
+
+async function syncReadingCycle(connection, { userId, bookId, previousStatus, state, isAuthor }) {
+  if (isAuthor) return;
+  const [activeRows] = await connection.query("SELECT id, status FROM reading_cycles WHERE user_id = ? AND book_id = ? AND status = 'active' FOR UPDATE", [userId, bookId]);
+  const active = activeRows[0];
+  if (state.readingStatus === "reading") {
+    if (!active) await connection.query("INSERT INTO reading_cycles (user_id, book_id, status) VALUES (?, ?, 'active')", [userId, bookId]);
+    return;
+  }
+  if (state.readingStatus === "read") {
+    if (active) {
+      await connection.query("UPDATE reading_cycles SET status = 'completed', completed_month = ?, completed_year = ?, completed_at = UTC_TIMESTAMP() WHERE id = ?", [state.readMonth, state.readYear, active.id]);
+    } else if (previousStatus === "read") {
+      const [[latest]] = await connection.query("SELECT id FROM reading_cycles WHERE user_id = ? AND book_id = ? AND status = 'completed' ORDER BY id DESC LIMIT 1 FOR UPDATE", [userId, bookId]);
+      if (latest) await connection.query("UPDATE reading_cycles SET completed_month = ?, completed_year = ? WHERE id = ?", [state.readMonth, state.readYear, latest.id]);
+      else await connection.query("INSERT INTO reading_cycles (user_id, book_id, completed_month, completed_year, completed_at, status) VALUES (?, ?, ?, ?, UTC_TIMESTAMP(), 'completed')", [userId, bookId, state.readMonth, state.readYear]);
+    } else await connection.query("INSERT INTO reading_cycles (user_id, book_id, completed_month, completed_year, completed_at, status) VALUES (?, ?, ?, ?, UTC_TIMESTAMP(), 'completed')", [userId, bookId, state.readMonth, state.readYear]);
+    return;
+  }
+  if (active) await connection.query("UPDATE reading_cycles SET status = ? WHERE id = ?", [state.readingStatus === "postponed" ? "postponed" : "abandoned", active.id]);
+  if (state.readingStatus === "want") await connection.query("UPDATE reading_cycles SET status = 'abandoned' WHERE user_id = ? AND book_id = ? AND status IN ('active', 'postponed')", [userId, bookId]);
+}
+
+async function syncPostponedReminder(connection, { userId, bookId, state, previous, timezone = "UTC" }) {
+  if (state.readingStatus !== "postponed") return;
+  const changed = previous.reading_status !== "postponed" || Number(previous.postponed_month ?? 0) !== Number(state.postponedMonth ?? 0) || Number(previous.postponed_year ?? 0) !== Number(state.postponedYear ?? 0);
+  if (changed) await connection.query("UPDATE user_books SET postponed_notified_at = NULL WHERE user_id = ? AND book_id = ?", [userId, bookId]);
+  if (!state.postponedYear) return;
+  const due = postponedOverdue(state.postponedMonth, state.postponedYear, timezone);
+  if (!due) return;
+  const [[locked]] = await connection.query("SELECT postponed_notified_at FROM user_books WHERE user_id = ? AND book_id = ? FOR UPDATE", [userId, bookId]);
+  if (locked?.postponed_notified_at) return;
+  await connection.query("INSERT INTO notifications (user_id, actor_user_id, notification_type, title, body, material_kind, material_id, group_key) VALUES (?, NULL, 'postponed_book', 'Пора вернуться к книге', 'Срок отложенной книги уже наступил.', 'book', ?, NULL)", [userId, bookId]);
+  await connection.query("UPDATE user_books SET postponed_notified_at = UTC_TIMESTAMP() WHERE user_id = ? AND book_id = ? AND postponed_notified_at IS NULL", [userId, bookId]);
+}
+
+async function ownerBookResponse(userId, bookId) {
+  const users = await loadUsers(getPool(), userId);
+  const owner = users.find((user) => user.id === Number(userId));
+  const book = owner?.books?.find((item) => item.id === Number(bookId));
+  // Reuse the same age-filtered owner history as bootstrap. A second raw
+  // query here would bypass the privacy projection after an age change.
+  return { book, readingHistory: owner?.readingHistory ?? [] };
 }
 
 function communityFeaturedDate(payload) {
@@ -2889,9 +2959,11 @@ router.delete("/books/:id", asyncRoute(async (request, response) => {
   const bookId = Number(request.params.id);
   if (!bookId) return response.status(400).json({ error: "Некорректная книга" });
   await withTransaction(async (connection) => {
+    await connection.query("SELECT id FROM users WHERE id = ? FOR UPDATE", [userId]);
     const [[owned]] = await connection.query("SELECT is_author FROM user_books WHERE user_id = ? AND book_id = ? FOR UPDATE", [userId, bookId]);
     if (!owned) throw Object.assign(new Error("Книга не найдена в вашем профиле"), { statusCode: 404 });
     await connection.query("DELETE FROM user_books WHERE user_id = ? AND book_id = ?", [userId, bookId]);
+    await connection.query("DELETE FROM reading_cycles WHERE user_id = ? AND book_id = ? AND status <> 'completed'", [userId, bookId]);
     if (owned.is_author) {
       await connection.query("DELETE FROM book_links WHERE owner_user_id = ? AND book_id = ?", [userId, bookId]);
       await connection.query("UPDATE books SET creator_user_id = NULL WHERE id = ? AND creator_user_id = ?", [bookId, userId]);
@@ -2903,15 +2975,22 @@ router.delete("/books/:id", asyncRoute(async (request, response) => {
 router.patch("/books/:id", asyncRoute(async (request, response) => {
   const userId = request.bookMeetUser.id; const bookId = Number(request.params.id); const payload = request.body ?? {};
   if (!bookId) return response.status(400).json({ error: "Некорректная книга" });
+  const timezone = validTimezone(request.get("X-BookMeet-Timezone") || "UTC");
   const result = await withTransaction(async (connection) => {
-    const [[owned]] = await connection.query("SELECT is_author, top_rank FROM user_books WHERE user_id = ? AND book_id = ? FOR UPDATE", [userId, bookId]);
+    await connection.query("SELECT id FROM users WHERE id = ? FOR UPDATE", [userId]);
+    const [[owned]] = await connection.query("SELECT * FROM user_books WHERE user_id = ? AND book_id = ? FOR UPDATE", [userId, bookId]);
     if (!owned) throw Object.assign(new Error("Книга не найдена в вашей библиотеке"), { statusCode: 404 });
-    const readingStatus = ["want", "reading", "read"].includes(payload.readingStatus) ? payload.readingStatus : "read";
-    const rating = Number(payload.rating ?? 0);
-    if (!owned.is_author && readingStatus === "read" && (!Number.isInteger(rating * 2) || rating < .5 || rating > 5 || !String(payload.shortReview ?? payload.review ?? "").trim())) throw Object.assign(new Error("Заполните оценку и краткий отзыв"), { statusCode: 400 });
+    const [[canonical]] = await connection.query("SELECT is_adult FROM books WHERE id = ?", [bookId]);
+    await assertAdultMaterialAllowed(connection, userId, Boolean(canonical?.is_adult));
+    if (owned.is_author) throw Object.assign(new Error("Авторские книги редактируются в авторском разделе"), { statusCode: 409 });
+    const [[readerProfile]] = await connection.query("SELECT profile_type FROM profiles WHERE user_id = ?", [userId]);
+    if (!["Читатель", "Писатель", "Блогер"].includes(readerProfile?.profile_type)) throw Object.assign(new Error("Личное состояние чтения доступно только личному профилю"), { statusCode: 403 });
+    const state = normalizeReadingState(payload, owned, { timezone, defaultStatus: owned.reading_status });
+    const readingStatus = state.readingStatus;
+    const top3Specified = Object.hasOwn(payload, "top3") || Object.hasOwn(payload, "topRank");
     const top3Requested = payload.top3 === true || Number(payload.topRank) > 0;
-    if (top3Requested && !top3Eligibility({ isAuthor: Boolean(owned.is_author), readingStatus }).allowed) throw Object.assign(new Error("В TOP3 можно добавлять только прочитанные книги из своей библиотеки"), { statusCode: 400 });
-    let topRank = null;
+    if (top3Requested && !top3Eligibility({ isAuthor: false, readingStatus }).allowed) throw Object.assign(new Error("В TOP3 можно добавлять только прочитанные книги из своей библиотеки"), { statusCode: 400 });
+    let topRank = owned.top_rank ? Number(owned.top_rank) : null;
     if (top3Requested) {
       const [topBooks] = await connection.query(
         "SELECT book_id, top_rank FROM user_books WHERE user_id = ? AND top_rank IS NOT NULL ORDER BY top_rank FOR UPDATE",
@@ -2920,10 +2999,22 @@ router.patch("/books/:id", asyncRoute(async (request, response) => {
       topRank = nextTopRank(topBooks, bookId);
       if (!topRank) throw Object.assign(new Error("В TOP3 уже добавлены три книги. Сначала снимите отметку с одной из них."), { statusCode: 409, code: "TOP3_LIMIT" });
     }
-    await connection.query("UPDATE user_books SET rating = ?, short_review = ?, read_month = ?, read_year = ?, reading_status = ?, last_read_chapter = ?, reading_comment = ?, top_rank = ? WHERE user_id = ? AND book_id = ?", [owned.is_author || readingStatus !== "read" ? null : rating, owned.is_author || readingStatus !== "read" ? null : String(payload.shortReview ?? payload.review ?? "").trim(), owned.is_author || readingStatus !== "read" ? null : payload.readMonth || null, owned.is_author || readingStatus !== "read" ? null : payload.readYear || null, owned.is_author ? "read" : readingStatus, !owned.is_author && readingStatus === "reading" ? payload.lastReadChapter || null : null, !owned.is_author && readingStatus === "reading" ? payload.readingComment ?? "" : "", topRank, userId, bookId]);
-    return { bookId, topRank };
+    if (readingStatus !== "read" || top3Specified && !top3Requested) topRank = null;
+    const storage = readingStateStorage(state, owned);
+    const next = {
+      rating: readingStatus === "read" ? state.rating : null,
+      shortReview: readingStatus === "read" || readingStatus === "abandoned" ? state.shortReview : null,
+      readMonth: readingStatus === "read" ? state.readMonth : null,
+      readYear: readingStatus === "read" ? state.readYear : null,
+      ...storage,
+    };
+    await connection.query("UPDATE user_books SET rating = ?, short_review = ?, read_month = ?, read_year = ?, reading_status = ?, last_read_chapter = ?, chapters_current = ?, chapters_total = ?, pages_current = ?, pages_total = ?, progress_unit = ?, reading_comment = ?, postponed_month = ?, postponed_year = ?, postponed_timezone = ?, top_rank = ? WHERE user_id = ? AND book_id = ?", [next.rating, next.shortReview, next.readMonth, next.readYear, readingStatus, next.chaptersCurrent, next.chaptersCurrent, next.chaptersTotal, next.pagesCurrent, next.pagesTotal, next.progressUnit, next.readingComment, next.postponedMonth, next.postponedYear, timezone, topRank, userId, bookId]);
+    await syncReadingCycle(connection, { userId, bookId, previousStatus: owned.reading_status, state, isAuthor: false });
+    await syncPostponedReminder(connection, { userId, bookId, state, previous: owned, timezone });
+    return { bookId, topRank: topRank ?? undefined };
   });
-  response.json(result);
+  const owner = await ownerBookResponse(userId, bookId);
+  response.json({ ...result, ...owner });
 }));
 
 // Editors use these owner-scoped routes instead of replacing an entire profile

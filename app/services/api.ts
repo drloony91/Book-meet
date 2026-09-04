@@ -2,7 +2,8 @@ import { currentLocale } from "../i18n";
 
 export async function apiFetch(input: RequestInfo | URL, init: RequestInit = {}) {
   const locale = currentLocale();
-  const localeHeaders = { "Accept-Language": locale, "X-BookMeet-Locale": locale };
+  const timezone = Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC";
+  const localeHeaders = { "Accept-Language": locale, "X-BookMeet-Locale": locale, "X-BookMeet-Timezone": timezone };
   const response = await fetch(input, {
     credentials: "same-origin",
     ...init,

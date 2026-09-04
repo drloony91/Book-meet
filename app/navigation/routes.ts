@@ -23,7 +23,7 @@ export type MainView =
 // Search is a mobile-only nested screen, never a desktop main-navigation view.
 export type RoutableMainView = Exclude<MainView, "profile" | "search">;
 export type OverlayRouteKind = "user" | "book" | "event" | "review" | "excerpt" | "occasion" | "publisher-news" | "chat" | "notification" | "report";
-export type MobileWorkflowKind = "review" | "excerpt" | "event" | "occasion" | "book" | "publisher-news";
+export type MobileWorkflowKind = "review" | "excerpt" | "event" | "occasion" | "book" | "book-status" | "publisher-news";
 export type MobileWorkflowRoute = { mode: "create" | "edit"; kind: MobileWorkflowKind; id?: number };
 export type ParsedAppRoute = { view: MainView; overlay?: { kind: OverlayRouteKind; id: number }; workflow?: MobileWorkflowRoute };
 export type ChatRouteState = {
@@ -147,21 +147,21 @@ export function mainViewFromPathname(pathname: string): RoutableMainView {
   if (/^\/meet\/\d+$/.test(normalized)) return "occasions";
   if (/^\/publishing\/\d+$/.test(normalized)) return "publishing";
   if (/^\/chat\/\d+$/.test(normalized)) return "chat";
-  if (/^\/(?:create|edit)\/(?:review|publication|event|occasion|book|news)(?:\/\d+)?$/.test(normalized)) return "home";
+  if (/^\/(?:create|edit)\/(?:review|publication|event|occasion|book|book-status|news)(?:\/\d+)?$/.test(normalized)) return "home";
   return "home";
 }
 
 export function appRouteFromPathname(pathname: string): ParsedAppRoute {
   const normalized = normalizedPathname(pathname);
   if (normalized === "/search") return { view: "search" };
-  const workflowMatch = normalized.match(/^\/(create|edit)\/(review|publication|event|occasion|book|news)(?:\/(\d+))?$/);
+  const workflowMatch = normalized.match(/^\/(create|edit)\/(review|publication|event|occasion|book|book-status|news)(?:\/(\d+))?$/);
   if (workflowMatch) {
     const mode = workflowMatch[1] as MobileWorkflowRoute["mode"];
     const routeKind = workflowMatch[2];
     const kind: MobileWorkflowKind = routeKind === "publication" ? "excerpt" : routeKind === "news" ? "publisher-news" : routeKind as MobileWorkflowKind;
     const id = workflowMatch[3] ? Number(workflowMatch[3]) : undefined;
-    if ((mode === "create" && !id) || (mode === "edit" && id)) {
-      return { view: ["book", "publisher-news"].includes(kind) ? "profile" : kind === "excerpt" ? "publications" : kind === "occasion" ? "occasions" : kind === "event" ? "events" : "reviews", workflow: { mode, kind, id } };
+    if ((mode === "create" && !id && kind !== "book-status") || (mode === "edit" && id)) {
+      return { view: ["book", "book-status", "publisher-news"].includes(kind) ? "profile" : kind === "excerpt" ? "publications" : kind === "occasion" ? "occasions" : kind === "event" ? "events" : "reviews", workflow: { mode, kind, id } };
     }
   }
   if (normalized === "/profile" || normalized === "/profile/settings" || mobileProfileSocialRouteFromPathname(normalized) || Object.values(profileTabPaths).includes(normalized as typeof profileTabPaths[RoutableProfileTab])) return { view: "profile" };
@@ -226,6 +226,46 @@ export function notifyAppNavigation() {
   window.dispatchEvent(new CustomEvent(APP_NAVIGATION_EVENT));
 }
 
+type RouteLeaveGuard = { path: string; confirm: () => boolean };
+const routeLeaveGuards: RouteLeaveGuard[] = [];
+const releasedGuardPaths = new Set<string>();
+
+export function registerRouteLeaveGuard(guard: RouteLeaveGuard) {
+  releasedGuardPaths.delete(guard.path);
+  routeLeaveGuards.push(guard);
+  if (normalizedPathname(window.location.pathname) === normalizedPathname(guard.path) && (window.history.state as { bookMeetDraftGuard?: string } | null)?.bookMeetDraftGuard !== guard.path) {
+    window.history.pushState({ ...(window.history.state ?? {}), bookMeetDraftGuard: guard.path }, "", guard.path);
+  }
+  return () => {
+    const index = routeLeaveGuards.lastIndexOf(guard);
+    if (index >= 0) routeLeaveGuards.splice(index, 1);
+    const state = window.history.state as { bookMeetDraftGuard?: string } | null;
+    if (!routeLeaveGuards.some((item) => item.path === guard.path) && state?.bookMeetDraftGuard === guard.path && normalizedPathname(window.location.pathname) === normalizedPathname(guard.path)) releasedGuardPaths.add(guard.path);
+  };
+}
+
+function handleGuardedSameRouteNavigation(routePath: string) {
+  const guard = [...routeLeaveGuards].reverse().find((item) => normalizedPathname(item.path) === routePath);
+  if (!guard && releasedGuardPaths.delete(routePath)) {
+    window.history.back();
+    return true;
+  }
+  if (!guard || (window.history.state as { bookMeetDraftGuard?: string } | null)?.bookMeetDraftGuard === guard.path) return false;
+  if (guard.confirm()) window.history.back();
+  else window.history.forward();
+  return true;
+}
+
+export function restoreGuardedRouteAfterNavigation() {
+  const blocked = [...routeLeaveGuards].reverse().find((guard) => !guard.confirm());
+  if (!blocked) return false;
+  // registerRouteLeaveGuard places a same-URL sentinel in front of the real
+  // background entry. Moving forward restores it without dispatching another
+  // application navigation that could unmount the draft-holding component.
+  window.history.forward();
+  return true;
+}
+
 export function openOverlayRoute(routePath: string) {
   const normalizedRoute = normalizedPathname(routePath);
   const currentPath = normalizedPathname(window.location.pathname);
@@ -281,7 +321,20 @@ export function useRoutedPopup(routePath: string, fallbackPath: string, onClose:
     };
     const closeAfterHistoryNavigation = () => {
       const matches = normalizedPathname(window.location.pathname) === normalizedRoute;
+      if (matches && handleGuardedSameRouteNavigation(normalizedRoute)) {
+        wasActiveRef.current = true;
+        setActive(true);
+        return;
+      }
       const shouldClose = wasActiveRef.current && !matches;
+      // Child popup effects can receive popstate before the application-level
+      // route restorer. Give the shared draft guard the first chance to put
+      // the route back before local state is cleared and the popup unmounts.
+      if (shouldClose && restoreGuardedRouteAfterNavigation()) {
+        wasActiveRef.current = true;
+        setActive(true);
+        return;
+      }
       wasActiveRef.current = matches;
       setActive(matches);
       if (matches) document.title = title;

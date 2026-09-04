@@ -140,6 +140,16 @@ export function resolveViewerBook(source: LibraryBook | AuthorBook, catalog: Arr
     topRank: relation.topRank,
     lastReadChapter: relation.lastReadChapter,
     readingComment: relation.readingComment,
+    chaptersCurrent: relation.chaptersCurrent,
+    chaptersTotal: relation.chaptersTotal,
+    pagesCurrent: relation.pagesCurrent,
+    pagesTotal: relation.pagesTotal,
+    progressUnit: relation.progressUnit,
+    progressPercent: relation.progressPercent,
+    postponedMonth: relation.postponedMonth,
+    postponedYear: relation.postponedYear,
+    postponedOverdue: relation.postponedOverdue,
+    hasCompletedReading: relation.hasCompletedReading,
   } as LibraryBook;
 }
 

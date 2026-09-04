@@ -1,4 +1,5 @@
 import { getPool } from "./db.js";
+import { readingStateDto } from "./modules/reading-state.js";
 import { legalAccessState, profileAccessState } from "./modules/compliance.js";
 import { normalizeIdentity } from "./security.js";
 
@@ -64,11 +65,17 @@ export async function loadUsers(connection = getPool(), viewerId = null) {
   const [allFollowRows] = await connection.query("SELECT follower_user_id, target_user_id FROM follows");
   const [allCommunityMembershipRows] = await connection.query("SELECT community_user_id, member_user_id FROM community_memberships");
   const [bookRows] = await connection.query(
-    `SELECT ub.user_id, ub.rating, ub.short_review, ub.read_month, ub.read_year, ub.reading_status, ub.top_rank, ub.last_read_chapter, ub.reading_comment, ub.featured_month, ub.featured_year, ub.publication_month, ub.publication_year, ub.is_author,
+    `SELECT ub.user_id, ub.rating, ub.short_review, ub.read_month, ub.read_year, ub.reading_status, ub.top_rank, ub.last_read_chapter, ub.chapters_current, ub.chapters_total, ub.pages_current, ub.pages_total, ub.progress_unit, ub.reading_comment, ub.postponed_month, ub.postponed_year, ub.postponed_timezone, ub.featured_month, ub.featured_year, ub.publication_month, ub.publication_year, ub.is_author,
              b.id, b.creator_user_id, b.author, b.title, b.isbn, b.publisher, b.genres, b.annotation, b.is_adult, b.cover_path, b.cover_tone, b.flip_url, b.created_at AS book_created_at
        FROM user_books ub
        JOIN books b ON b.id = ub.book_id
       ORDER BY (ub.top_rank IS NULL), ub.top_rank, ub.created_at DESC, ub.book_id`,
+  );
+  const [cycleRows] = await connection.query(
+    `SELECT c.id, c.user_id, c.book_id, c.completed_month, c.completed_year, c.completed_at, c.status,
+            b.author, b.title, b.cover_path, b.cover_tone, b.is_adult
+       FROM reading_cycles c JOIN books b ON b.id = c.book_id
+      WHERE c.status = 'completed' ORDER BY c.completed_at DESC, c.id DESC`,
   );
   const [linkRows] = await connection.query(
     `SELECT id, book_id, owner_user_id, action, label, url
@@ -118,8 +125,13 @@ export async function loadUsers(connection = getPool(), viewerId = null) {
       || Number(row.id) === Number(viewerId)
       || !blockRows.some((block) => Number(block.blocker_user_id) === Number(row.id) && Number(block.blocked_user_id) === Number(viewerId)))
     .map((row) => {
+    const isOwner = Number(row.id) === Number(viewerId);
+    const blockedPair = !isOwner && blockRows.some((block) => (Number(block.blocker_user_id) === Number(viewerId) && Number(block.blocked_user_id) === Number(row.id)) || (Number(block.blocked_user_id) === Number(viewerId) && Number(block.blocker_user_id) === Number(row.id)));
+    const targetAge = ageFromBirthDate(row.birth_date);
+    const crossAge = !isOwner && viewerAge !== null && targetAge !== null && (viewerAge < 18) !== (targetAge < 18);
     const userBooks = bookRows.filter((book) => Number(book.user_id) === Number(row.id) && (!hideAdultMaterials || !book.is_adult));
-    const library = userBooks.filter((book) => !book.is_author).map((book) => ({
+    const visibleUserBooks = blockedPair || crossAge ? [] : userBooks;
+    const library = visibleUserBooks.filter((book) => !book.is_author).map((book) => ({
       id: Number(book.id),
       catalogBookId: Number(book.id),
       creatorUserId: book.creator_user_id ? Number(book.creator_user_id) : undefined,
@@ -137,10 +149,9 @@ export async function loadUsers(connection = getPool(), viewerId = null) {
       review: book.short_review ?? "",
       readMonth: book.read_month ? Number(book.read_month) : undefined,
       readYear: book.read_year ? Number(book.read_year) : undefined,
-      readingStatus: book.reading_status || "read",
+      ...readingStateDto(book, { owner: Number(row.id) === Number(viewerId) }),
+      hasCompletedReading: cycleRows.some((cycle) => Number(cycle.user_id) === Number(row.id) && Number(cycle.book_id) === Number(book.id)),
       topRank: book.top_rank ? Number(book.top_rank) : undefined,
-      lastReadChapter: book.last_read_chapter ? Number(book.last_read_chapter) : undefined,
-      readingComment: book.reading_comment ?? "",
       isAdult: Boolean(book.is_adult),
       coverUrl: book.cover_path ?? undefined,
       coverTone: book.cover_tone ?? "blue",
@@ -150,7 +161,7 @@ export async function loadUsers(connection = getPool(), viewerId = null) {
       })),
       createdAtValue: book.book_created_at ? new Date(book.book_created_at).toISOString() : undefined,
     }));
-    const authorBooks = userBooks.filter((book) => book.is_author).map((book) => ({
+    const authorBooks = visibleUserBooks.filter((book) => book.is_author).map((book) => ({
       id: Number(book.id),
       creatorUserId: book.creator_user_id ? Number(book.creator_user_id) : undefined,
       author: book.author,
@@ -177,12 +188,11 @@ export async function loadUsers(connection = getPool(), viewerId = null) {
       createdAtValue: book.book_created_at ? new Date(book.book_created_at).toISOString() : undefined,
     }));
     const communityBooks = row.profile_type === "Сообщество" ? [...library, ...authorBooks].map((book) => {
-      const association = userBooks.find((entry) => Number(entry.id) === Number(book.id));
+      const association = visibleUserBooks.find((entry) => Number(entry.id) === Number(book.id));
       return { ...book, rating: Number("rating" in book ? book.rating ?? 0 : 0), review: "review" in book ? book.review ?? "" : "", featuredMonth: association?.featured_month ? Number(association.featured_month) : undefined, featuredYear: association?.featured_year ? Number(association.featured_year) : undefined };
     }) : undefined;
     const deletedView = Boolean(row.deleted_at || row.purged_at);
     // Memberships never grant friendship-scoped visibility.
-    const isOwner = Number(row.id) === Number(viewerId);
     const isCommunity = row.profile_type === "Сообщество";
     const isPublisher = row.profile_type === "Издатель";
     const isPersonal = ["Читатель", "Писатель", "Блогер"].includes(row.profile_type);
@@ -265,6 +275,7 @@ export async function loadUsers(connection = getPool(), viewerId = null) {
         communityIsClosed: !deletedView && row.profile_type === "Сообщество" ? Boolean(row.community_is_closed) : false,
       },
       books: row.profile_type === "Сообщество" ? [] : library,
+      readingHistory: isOwner ? cycleRows.filter((cycle) => Number(cycle.user_id) === Number(row.id) && (!hideAdultMaterials || !cycle.is_adult)).map((cycle) => ({ id: Number(cycle.id), bookId: Number(cycle.book_id), completedMonth: cycle.completed_month ?? undefined, completedYear: cycle.completed_year ?? undefined, book: { id: Number(cycle.book_id), author: cycle.author, title: cycle.title, coverUrl: cycle.cover_path ?? undefined, coverTone: cycle.cover_tone ?? "blue" } })) : undefined,
       authorBooks,
       communityBooks,
       reviews: reviewRows.filter((review) => Number(review.user_id) === Number(row.id) && (!hideAdultMaterials || !review.is_adult)).map((review) => ({

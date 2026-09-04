@@ -19,6 +19,18 @@
 - [x] Подготовлен и, где безопасно, отрепетирован rollback кода/process; для DB указано, где возможен только restore backup, включая partial DDL.
 - [ ] Production deployment отдельно и явно разрешён пользователем после итогового verdict.
 
+## Reading state (queue 2) — 2026-09-04, release candidate
+
+Verdict: **LOCAL RELEASE GATES PASS; STAGING AND PRODUCTION DEPLOYMENT AUTHORIZED AND PENDING**. Publication proceeds only with the exact committed artifact, coordinated backups, migration stop gates and post-restart smoke.
+
+- Candidate schema: append-only `039_reading_state_cycles.sql`, five reading statuses, private chapter/page progress, timezone-aware postponed periods and retained completion cycles. No production migration or restart has been performed for this candidate at the time this release document is committed.
+- Local evidence: `pnpm verify` passed build and 159/159 tests. `pnpm verify:db` passed 3/3 top-level tests, including the production HTTP transition/privacy/transaction matrix and an actual populated 038-to-039 upgrade; disposable MySQL resources were removed afterward. The final repeated `pnpm test:e2e` passed 59 scenarios with one expected desktop-only skip after the isolated rerun of one transient SSE fetch failure also passed. `pnpm audit --audit-level high` passed with four moderate findings and no high/critical finding; `git diff --check` passed.
+- Read-only production preflight: Node `22.23.2`, pnpm `11.9.0`, MariaDB `10.6.27`; repository and ledger both contain 38 migrations, with zero unresolved attempts. The observed database contains 14 canonical books and 23 library relations. Uploads are outside the application release directory.
+- Plesk's command runner does not inherit the web-process environment. The existing private `.env` has a retired origin, while the active Plesk environment has the canonical production origin. Before the read-only DB check, DB host/port/name/user and upload settings were compared against the active Plesk settings; only the short-lived runner process received the verified canonical origin. No persistent environment settings or credential values were changed or recorded.
+- Telegram and SMTP are configured in the active Plesk environment; the Telegram outbox had zero pending rows at preflight. No external messages were sent. Recheck this condition at the actual restart gate.
+- The prior `da686a4` release archive remains available locally and its SHA-256 was reverified as `CA8F2A116359D4E17BAB1763E54931D48EE318DB9A2D2BB2A64026013D9CD6C1`.
+- Still required after this commit: bind the candidate to an exact artifact and checksum; isolated staging verification; coordinated production DB/uploads/release/config backup with off-host proof; migration/status/no-op checks; restart and authenticated production smoke/log review. Do not seed, rotate credentials, send integration messages or clean unrelated legacy paths as part of this update.
+
 ## Chat, notifications and deleted organizations release candidate — 2026-08-30
 
 Verdict: **READY FOR USER-MANAGED PLESK UPLOAD WITH PRE-RESTART MIGRATION**. Codex prepares and verifies the exact local artifact; upload, production migration and restart remain user-managed.

@@ -32,6 +32,8 @@ Browser
 
 `app/navigation/routes.ts` — единственный route parser/history owner: main views (`/`, `/users`, `/books`, `/events`, `/meet`, `/blog`, `/publishing`, `/communities`, `/chat`, `/liked`, `/saved`, `/notifications`), profile tabs, dynamic overlays and mobile workflows. `openOverlayRoute()`/`closeOverlayRoute()` используют History API; не добавляйте независимый `popstate` listener для обхода этого ownership.
 
+Личная связь читателя с книгой обновляется только через `app/services/library-mutations.ts`: проверенный owner DTO (`book` + `readingHistory`) рассылается контроллеру как событие с captured viewer id. Epoch защищает этот DTO от запоздалого bootstrap/SSE snapshot при сохранении или переключении аккаунта. `MyProfile` не отправляет `books` обратно через profile PUT.
+
 ## Authorization and data boundary
 
 UI visibility does not grant access. `authenticatedUser`/server handlers, `server/modules/social-permissions.js`, `server/modules/compliance.js`, age/material helpers and ownership checks enforce access. Community membership is separate from friendship; friendship-only privacy, chat and wishlist rules must not be broadened by membership. Legal documents are managed separately from registration consent. `withTransaction()` is required for multi-row state transitions; applied migrations are append-only.

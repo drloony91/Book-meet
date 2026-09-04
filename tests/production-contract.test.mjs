@@ -264,7 +264,8 @@ test("каталожная книга открывает единый BookEditor
   assert.match(content, /bookmeet:add-catalog-book/);
   assert.match(controller, /catalogBookToAdd && <BookEditor/);
   assert.match(controller, /useExistingId: catalogBookId/);
-  assert.match(controller, /user\.books\.some\(\(item\) => \(item\.catalogBookId \?\? item\.id\) === catalogBookId\)/);
+  assert.match(controller, /isLibraryMutationResponse\(data\)/);
+  assert.match(controller, /announceLibraryMutation\(data, requestViewerId\)/);
   assert.match(api, /ON DUPLICATE KEY UPDATE rating = VALUES\(rating\)/);
 });
 
@@ -283,8 +284,8 @@ test("zero-owner canonical books stay available across routes, profiles and safe
   assert.match(profile, /<LibraryTab[^>]*catalog=\{catalog\}/);
   assert.match(profile, /<ReviewsTab[^>]*catalog=\{catalog\}/);
   assert.match(profile, /<MyEventsTab[\s\S]{0,500}catalog=\{catalog\}/);
-  assert.match(controller, /const payload = \{ rating: book\.rating,[^}]*useExistingId: catalogBookId \}/);
-  assert.doesNotMatch(controller.match(/const payload = \{ rating: book\.rating,[^;]+;/)?.[0] ?? "", /author:|title:|links:|coverUrl:/);
+  assert.match(controller, /const payload = \{ \.\.\.buildReadingPatch\(book\), top3: Boolean\(book\.topRank\), useExistingId: catalogBookId \}/);
+  assert.match(controller, /buildReadingPatch/);
   assert.match(api, /readerUsesExistingCanonical/);
   assert.match(api, /const links = readerUsesExistingCanonical \? null : validatedBookLinks/);
   assert.match(demo, /readerUsesExistingCanonical[\s\S]*?\{ \.\.\.canonical, \.\.\.ownerFields, id, catalogBookId: id \}/);
@@ -721,11 +722,15 @@ test("library reading status stays in the library and drives book audiences", as
   assert.match(content, /aria-label=\{t\("library\.bookStatus"\)\}/);
   assertLocalized(content, "library.bookStatus");
   assert.match(content, /readingStatus \?\? "read"\) === "read" && form\.rating === 0/);
-  assert.match(content, /item\.readingStatus \?\? "read"\) !== "want"/);
-  assert.match(content, /item\.readingStatus === "want"/);
+  assert.match(content, /sortBookReaders/);
+  assert.match(content, /\["want", "reading", "read", "abandoned", "postponed"\]/);
+  assert.doesNotMatch(content, /book-reader-note.*readingComment/);
   assert.doesNotMatch(content, /onReadingStatusChange/);
-  assert.match(api, /readingStatus === "read" && \(!Number\.isInteger\(rating \* 2\)/);
-  assert.match(api, /readingStatus !== "read" \? null : rating/);
+  // Conditional validation moved from duplicated route expressions to the
+  // shared normalizer when abandoned/postponed and separate progress pairs
+  // became valid reading states.
+  assert.match(api, /normalizeReadingState\(payload, owned/);
+  assert.match(api, /syncReadingCycle\(connection/);
 });
 
 test("chat attachments keep the composer visible and profile cards are fully clickable", async () => {
@@ -759,7 +764,7 @@ test("shared canonical books keep the current library viewer for overlay and own
   assert.match(content, /const effectiveViewer = viewer \?\? users\.find\(\(user\) => user\.id === Number\(document\.documentElement\.dataset\.bookMeetUserId\)\)/);
   assert.match(content, /resolveViewerBook\(canonical, catalog, effectiveViewer\)/);
   assert.match(content, /const viewerBook = effectiveViewer\?\.books\.find/);
-  assert.match(content, /onEdit=\{onEdit \?\? \(ownsLibraryRelation \? requestDefaultEdit : undefined\)\}/);
+  assert.match(content, /onEdit=\{ownsLibraryRelation \? \(\) => guardedOwnerAction\(onEdit \?\? requestDefaultEdit\) : undefined\}/);
   assert.match(content, /UnifiedBookModal book=\{openedBook\} viewer=\{viewer\} users=\{users\} catalog=\{catalog\}[^>]* nested/);
 });
 

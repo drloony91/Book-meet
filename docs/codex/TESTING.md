@@ -76,6 +76,16 @@ Use these gates after the corresponding changes:
 
 The fixture fails on page errors, console errors and non-React unexpected warnings, failed requests, broken local assets, and unexpected HTTP 4xx/5xx responses. The demo realtime endpoint is a valid SSE connection; it is not globally ignored. Chromium's generic negative-response console message is tolerated only when its observed status and source path match an explicit allowance in the current test; other negative responses must be allowed by the individual test. This suite checks deterministic in-memory demo behavior and does not replace real-DB, production-auth, multi-process, email, storage, or Plesk checks.
 
+## Reading state (queue 2)
+
+- `tests/reading-state.test.mjs` exercises conditional server validation, progress calculations, active-unit semantics and timezone-aware postponed periods.
+- `tests/reading-client.test.mjs` exercises deterministic reader ordering, unknown versus zero progress, and paused viewers with or without completed history.
+- `tests/reading-demo-http.test.mjs` runs the demo router over HTTP and checks five statuses, authoritative mutation DTOs, canonical-ID consistency, history retention, notification deduplication and private-field isolation.
+- `tests/reading-http-mysql.mjs` is launched only by the guarded disposable-MySQL integration suite. It runs the production API with real cookie sessions and relational data: transitions, partial updates, explicit nulls, rereads, Top-3, aggregate ratings, notification concurrency/timezones, owner/friend/stranger/blocked/minor matrix, deliberate transaction failures and account-finalization cleanup. It must never be pointed at staging or production.
+- `tests/mysql-integration.test.mjs` also applies migration 039 to populated pre-039 libraries, preserving zero chapters and unknown completion dates, excluding organization books, and proving the second migration pass is a no-op.
+
+Before release, run the complete canonical Node, disposable-MySQL and desktop/mobile browser suites; a passing demo adapter alone is not evidence of production transaction behavior.
+
 ## Change-type checklist
 
 | Change | Minimum evidence |

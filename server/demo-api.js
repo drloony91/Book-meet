@@ -11,6 +11,7 @@ import { authText, requestLocale } from "./modules/i18n.js";
 import { LoginAttemptTracker } from "./modules/login-attempts.js";
 import { normalizeUsername, usernameValidationError } from "./modules/username.js";
 import { searchBootstrapMaterials } from "./modules/material-search.js";
+import { normalizeReadingState, postponedOverdue, readingStateDto, readingStateStorage, validTimezone } from "./modules/reading-state.js";
 
 const router = Router();
 const sessions = new Map();
@@ -218,8 +219,9 @@ const users = [
       dislikedGenres: [],
     },
     books: [
-      { id: 301, catalogBookId: 24, author: "Айгерим Жансугурова", title: "Точки на карте", genres: ["Современная проза"], annotation: "Личная запись читателя для проверки библиотеки.", pages: "", format: "Бумажная", durationHours: "", durationMinutes: "", rating: 4.5, review: "", readingStatus: "read", readMonth: 8, readYear: 2026, coverTone: "mint", links: [] },
+      { id: 24, catalogBookId: 24, author: "Айгерим Жансугурова", title: "Точки на карте", genres: ["Современная проза"], annotation: "Личная запись читателя для проверки библиотеки.", pages: "", format: "Бумажная", durationHours: "", durationMinutes: "", rating: 4.5, review: "", readingStatus: "read", readMonth: 8, readYear: 2026, coverTone: "mint", links: [] },
     ],
+    readingHistory: [{ id: 901, bookId: 24, status: "completed", completedMonth: 8, completedYear: 2026, book: { id: 24, author: "Айгерим Жансугурова", title: "Точки на карте", coverTone: "mint" } }],
     authorBooks: [],
     reviews: [],
     excerpts: [],
@@ -230,10 +232,10 @@ const users = [
 const state = {
   linkedProfiles: [],
   // Demo keeps the catalogue separately from personal libraries as production does.
-  catalogBooks: [
+  catalogBooks: [...new Map([
     ...users.flatMap((user) => [...(user.books ?? []), ...(user.authorBooks ?? [])]),
     { id: 24, catalogBookId: 24, author: "Айгерим Жансугурова", title: "Точки на карте", genres: ["Современная проза"], annotation: "Каталожная книга без записи в личной библиотеке.", pages: "", format: "Бумажная", durationHours: "", durationMinutes: "", rating: 0, review: "", coverTone: "mint", links: [] },
-  ],
+  ].map((book) => [book.catalogBookId ?? book.id, demoCanonicalBookDto(book)])).values()],
   messages: {},
   chatHistoryClears: {},
   friendRequests: [],
@@ -284,6 +286,51 @@ function resetDemoState() {
   for (const key of Object.keys(state)) delete state[key];
   Object.assign(state, structuredClone(demoInitialState));
   nextId = 100;
+}
+
+function demoApplyReadingMutation(user, book, payload, timezone = "UTC", previous = book) {
+  const state = normalizeReadingState(payload, previous ?? {}, { timezone, defaultStatus: previous?.readingStatus ?? "read" });
+  const storage = readingStateStorage(state, previous ?? {});
+  const history = user.readingHistory ??= [];
+  const previousStatus = previous?.readingStatus;
+  if (state.readingStatus === "reading" && previousStatus !== "reading" && !history.some((entry) => entry.bookId === book.id && entry.status === "active")) history.push({ id: nextId++, bookId: book.id, status: "active" });
+  if (state.readingStatus === "read") {
+    const entry = history.find((item) => item.bookId === book.id && item.status === "active") ?? (previousStatus === "read" ? history.filter((item) => item.bookId === book.id && item.status === "completed").at(-1) : null) ?? { id: nextId++, bookId: book.id };
+    Object.assign(entry, { status: "completed", completedMonth: state.readMonth, completedYear: state.readYear, book: { id: book.id, author: book.author, title: book.title, coverUrl: book.coverUrl, coverTone: book.coverTone } });
+    if (!history.includes(entry)) history.push(entry);
+  } else if (["want", "abandoned", "postponed"].includes(state.readingStatus)) for (const entry of history.filter((item) => item.bookId === book.id && item.status === "active")) entry.status = state.readingStatus === "postponed" ? "postponed" : "abandoned";
+  const changedSchedule = previous?.readingStatus !== "postponed" || Number(previous?.postponedMonth ?? 0) !== Number(state.postponedMonth ?? 0) || Number(previous?.postponedYear ?? 0) !== Number(state.postponedYear ?? 0);
+  storage.postponedTimezone = timezone;
+  storage.postponedNotifiedAt = changedSchedule ? undefined : previous.postponedNotifiedAt;
+  const due = state.readingStatus === "postponed" && postponedOverdue(state.postponedMonth, state.postponedYear, timezone);
+  if (due && !storage.postponedNotifiedAt) { notification(user.id, null, "postponed_book", "Пора вернуться к книге", "Срок отложенной книги уже наступил.", { materialKind: "book", materialId: book.id }); storage.postponedNotifiedAt = new Date().toISOString(); }
+  return { state, storage, readingHistory: history.filter((entry) => entry.status === "completed") };
+}
+
+function demoCanonicalBookDto(book) {
+  return { id: book.catalogBookId ?? book.id, catalogBookId: book.catalogBookId ?? book.id, creatorUserId: book.creatorUserId, author: book.author ?? "", title: book.title ?? "", isbn: book.isbn, publisher: book.publisher, genres: book.genres ?? [], annotation: book.annotation ?? "", isAdult: book.isAdult, coverUrl: book.coverUrl, coverTone: book.coverTone ?? "blue", links: book.links ?? [], flipUrl: book.flipUrl, createdAtValue: book.createdAtValue, pages: "", durationHours: "", durationMinutes: "", format: "Бумажная", rating: 0, review: "", ratingCount: Number(book.ratingCount ?? 0), averageRating: book.averageRating };
+}
+
+function demoOwnerBookDto(book, history = []) {
+  const dto = { ...book, ...readingStateDto(book, { owner: true }) };
+  dto.id = book.catalogBookId ?? book.id;
+  dto.catalogBookId = dto.id;
+  dto.rating = Number(book.rating ?? 0);
+  dto.review = book.review ?? "";
+  dto.ratingCount = Number(book.ratingCount ?? 0);
+  dto.hasCompletedReading = history.some((entry) => entry.bookId === dto.id && entry.status === "completed");
+  delete dto.postponedNotifiedAt;
+  delete dto.postponedTimezone;
+  if (dto.readingStatus !== "reading" && dto.readingStatus !== "postponed") delete dto.readingComment;
+  if (dto.readingStatus !== "postponed") { delete dto.postponedMonth; delete dto.postponedYear; delete dto.postponedOverdue; }
+  return dto;
+}
+
+function demoViewerBookDto(book, owner, history = []) {
+  const dto = owner ? demoOwnerBookDto(book, history) : { ...book, ...readingStateDto(book, { owner: false }) };
+  dto.hasCompletedReading = history.some((entry) => entry.bookId === book.id && entry.status === "completed");
+  if (!owner) for (const key of ["readingComment", "chaptersCurrent", "chaptersTotal", "pagesCurrent", "pagesTotal", "progressUnit", "lastReadChapter", "postponedMonth", "postponedYear", "postponedOverdue", "postponedNotifiedAt", "postponedTimezone"]) delete dto[key];
+  return dto;
 }
 
 function cookieValue(request, name) {
@@ -358,7 +405,11 @@ function bootstrap(userId) {
     if (user.profile.type === "Сообщество") Object.assign(profile, { followersVisibility: undefined, friendsVisibility: undefined, wishlistVisibility: undefined, canViewFollowers: true, canViewFriends: true, canViewWishlist: false });
     if (user.profile.type === "Издатель") Object.assign(profile, { wishlistVisibility: undefined, canViewWishlist: false });
     const memberIds = user.profile.type === "Сообщество" ? state.communityMemberships.filter((entry) => entry.communityId === user.id).map((entry) => entry.memberId) : undefined;
-    return { ...user, books: user.profile.type === "Сообщество" ? [] : (user.books ?? []).filter((item) => adultStatus === "adult" || !item.isAdult), authorBooks: (user.authorBooks ?? []).filter((item) => adultStatus === "adult" || !item.isAdult), communityBooks: user.profile.type === "Сообщество" ? (user.communityBooks ?? []).filter((item) => adultStatus === "adult" || !item.isAdult) : undefined, memberIds, memberCount: memberIds?.length, reviews: (user.reviews ?? []).filter((item) => adultStatus === "adult" || !item.isAdult), excerpts: (user.excerpts ?? []).filter((item) => adultStatus === "adult" || !item.isAdult), blockedByMe: relatedBlocks.some((block) => block.blockerId === userId && block.blockedId === user.id), profile, wishBooks: canViewWishlist ? (user.wishBooks ?? []).map((item) => privateVisible ? { ...item, productUrl: user.id === userId ? item.productUrl : undefined, privateVisible: true } : { id: item.id, ownerId: item.ownerId, catalogBookId: item.catalogBookId, author: item.author, title: item.title, genres: item.genres, annotation: item.annotation, coverUrl: item.coverUrl, coverTone: item.coverTone, marketplace: item.marketplace, reservedByUserId: item.reservedByUserId, privateVisible: false }) : undefined };
+    const isOwner = user.id === userId;
+    const readerBlocked = relatedBlocks.some((block) => block.blockerId === user.id || block.blockedId === user.id);
+    const readerSameAgeGroup = (Number(user.profile.age ?? -1) >= 18) === (adultStatus === "adult");
+    const safeBooks = (isOwner || !readerBlocked && (viewer?.isAdmin || readerSameAgeGroup) ? user.books ?? [] : []).filter((item) => adultStatus === "adult" || !item.isAdult).map((item) => demoViewerBookDto(item, isOwner, user.readingHistory ?? []));
+    return { ...user, books: user.profile.type === "Сообщество" ? [] : safeBooks, readingHistory: isOwner ? structuredClone((user.readingHistory ?? []).filter((entry) => entry.status === "completed")) : undefined, authorBooks: (user.authorBooks ?? []).filter((item) => adultStatus === "adult" || !item.isAdult), communityBooks: user.profile.type === "Сообщество" ? (user.communityBooks ?? []).filter((item) => adultStatus === "adult" || !item.isAdult) : undefined, memberIds, memberCount: memberIds?.length, reviews: (user.reviews ?? []).filter((item) => adultStatus === "adult" || !item.isAdult), excerpts: (user.excerpts ?? []).filter((item) => adultStatus === "adult" || !item.isAdult), blockedByMe: relatedBlocks.some((block) => block.blockerId === userId && block.blockedId === user.id), profile, wishBooks: canViewWishlist ? (user.wishBooks ?? []).map((item) => privateVisible ? { ...item, productUrl: user.id === userId ? item.productUrl : undefined, privateVisible: true } : { id: item.id, ownerId: item.ownerId, catalogBookId: item.catalogBookId, author: item.author, title: item.title, genres: item.genres, annotation: item.annotation, coverUrl: item.coverUrl, coverTone: item.coverTone, marketplace: item.marketplace, reservedByUserId: item.reservedByUserId, privateVisible: false }) : undefined };
   });
   const link = state.linkedProfiles.find((item) => item.personalUserId === userId || item.communityUserId === userId);
   const previewOnlyUsers = !profileGate.complete ? visibleUsers.map((entry) => ({ ...entry, reviews: (entry.reviews ?? []).map((review) => ({ ...review, fullText: "", bodyHtml: "" })), excerpts: (entry.excerpts ?? []).map((excerpt) => ({ ...excerpt, text: "", bodyHtml: "" })), publisherNews: (entry.publisherNews ?? []).map((news) => ({ ...news, body: "", bodyHtml: "" })) })) : visibleUsers;
@@ -1150,8 +1201,13 @@ router.post("/books", (request, response) => {
   const readerUsesExistingCanonical = Number(payload.useExistingId || 0) > 0 && !payload.isAuthor;
   if (payload.isAuthor && user.profile.type !== "Писатель" && !["Издатель", "Сообщество"].includes(user.profile.type)) return response.status(403).json({ error: "Добавлять книги могут только писатели и организации" });
   if (!payload.isAuthor && ["Издатель", "Сообщество"].includes(user.profile.type)) return response.status(403).json({ error: "Книги организации добавляются в специальной вкладке профиля" });
-  const rating = Number(payload.rating);
-  if (!payload.isAuthor && (payload.readingStatus ?? "read") === "read" && (!Number.isInteger(rating * 2) || rating < 0.5 || rating > 5)) return response.status(400).json({ error: "Оценка должна быть от 0,5 до 5 с шагом 0,5" });
+  const timezone = validTimezone(request.get("X-BookMeet-Timezone") || "UTC");
+  let existingReaderBook = user.books.find((item) => (item.catalogBookId ?? item.id) === Number(payload.useExistingId || payload.id || 0));
+  let readerState = null;
+  if (!payload.isAuthor) {
+    try { readerState = normalizeReadingState(payload, existingReaderBook ?? {}, { timezone, defaultStatus: existingReaderBook?.readingStatus ?? "read" }); } catch (error) { return response.status(error.statusCode ?? 400).json({ error: error.message, code: error.code }); }
+  }
+  const rating = readerState?.rating ?? Number(payload.rating);
   if (!payload.isAuthor && !readerUsesExistingCanonical) {
     try {
       for (const link of (payload.links ?? []).filter((item) => item?.label?.trim() && item?.url?.trim())) {
@@ -1169,17 +1225,22 @@ router.post("/books", (request, response) => {
     || (item.links ?? []).some((link) => sourceUrls.includes(link.url))
     || Boolean(payload.flipUrl && item.flipUrl === payload.flipUrl));
   const id = Number(payload.useExistingId || exact?.id || payload.id || nextId++);
+  existingReaderBook = user.books.find((item) => (item.catalogBookId ?? item.id) === id);
+  if (!payload.isAuthor) {
+    try { readerState = normalizeReadingState(payload, existingReaderBook ?? {}, { timezone, defaultStatus: existingReaderBook?.readingStatus ?? "read" }); } catch (error) { return response.status(error.statusCode ?? 400).json({ error: error.message, code: error.code }); }
+  }
   const top3Requested = payload.top3 === true || Number(payload.topRank) > 0;
-  if (top3Requested && !top3Eligibility({ isAuthor: (user.authorBooks ?? []).some((item) => item.id === id), readingStatus: payload.readingStatus ?? "read" }).allowed) return response.status(400).json({ error: "В TOP3 можно добавлять только прочитанные книги из своей библиотеки" });
-  let topRank;
-  if (!payload.isAuthor && (payload.readingStatus ?? "read") === "read" && top3Requested) {
+  if (top3Requested && !top3Eligibility({ isAuthor: (user.authorBooks ?? []).some((item) => item.id === id), readingStatus: readerState?.readingStatus ?? "read" }).allowed) return response.status(400).json({ error: "В TOP3 можно добавлять только прочитанные книги из своей библиотеки" });
+  let topRank = readerState?.readingStatus === "read" && !Object.hasOwn(payload, "top3") && !Object.hasOwn(payload, "topRank") ? existingReaderBook?.topRank : undefined;
+  if (!payload.isAuthor && readerState?.readingStatus === "read" && top3Requested) {
     const topBooks = user.books.filter((item) => item.topRank && item.id !== id);
     if (topBooks.length >= 3) return response.status(409).json({ error: "В TOP3 уже добавлены три книги. Сначала снимите отметку с одной из них.", code: "TOP3_LIMIT" });
     topRank = nextTopRank(topBooks, id);
   }
   const canonical = allBooks.find((item) => item.id === id);
   if (readerUsesExistingCanonical && !canonical) return response.status(404).json({ error: "Выбранная книга не найдена" });
-  const ownerFields = { rating, review: String(payload.shortReview ?? payload.review ?? ""), readMonth: payload.readMonth, readYear: payload.readYear, readingStatus: payload.readingStatus ?? "read", lastReadChapter: payload.lastReadChapter, readingComment: payload.readingComment, topRank };
+  if ((canonical?.isAdult || !canonical && payload.isAdult) && !user.isAdmin && Number(user.profile.age ?? -1) < 18) return response.status(403).json({ error: "Материал доступен только совершеннолетним пользователям", code: "ADULT_CONTENT_RESTRICTED" });
+  const ownerFields = { rating, review: readerState?.shortReview ?? "", readMonth: readerState?.readMonth, readYear: readerState?.readYear, readingStatus: readerState?.readingStatus ?? "read", ...readingStateStorage(readerState ?? { readingStatus: "read" }, existingReaderBook ?? {}), topRank };
   let organizationDates = {};
   try {
     if (payload.isAuthor && user.profile.type === "Сообщество") { const date = demoOrganizationMonthYear(payload, "featured", "книги месяца"); organizationDates = { featuredMonth: date.month, featuredYear: date.year }; }
@@ -1191,15 +1252,19 @@ router.post("/books", (request, response) => {
       : { ...canonical, ...payload, id, catalogBookId: id, topRank, author: canonical.author, title: canonical.title, isbn: canonical.isbn || payload.isbn, publisher: canonical.publisher || payload.publisher, annotation: canonical.annotation, coverUrl: canonical.coverUrl || payload.coverUrl, links: [...(canonical.links ?? []), ...(payload.links ?? [])].filter((link, index, list) => list.findIndex((item) => item.url === link.url) === index) }
     : { ...payload, id, catalogBookId: id, topRank, links: payload.links ?? [] };
   Object.assign(book, organizationDates);
+  if (!payload.isAuthor) {
+    const mutation = demoApplyReadingMutation(user, book, payload, timezone, existingReaderBook ?? {});
+    Object.assign(book, { rating: readerState.readingStatus === "read" ? readerState.rating : undefined, review: readerState.readingStatus === "read" || readerState.readingStatus === "abandoned" ? readerState.shortReview : "", readingStatus: readerState.readingStatus, readMonth: readerState.readingStatus === "read" ? readerState.readMonth : undefined, readYear: readerState.readingStatus === "read" ? readerState.readYear : undefined, ...mutation.storage });
+  }
   if (payload.isAuthor && user.profile.type === "Сообщество") Object.assign(book, { rating: 0, review: "" });
   const target = payload.isAuthor ? user.profile.type === "Сообщество" ? (user.communityBooks ??= []) : (user.authorBooks ??= []) : user.books;
-  const index = target.findIndex((item) => item.id === id);
+  const index = target.findIndex((item) => (item.catalogBookId ?? item.id) === id);
   if (index >= 0) target[index] = book; else target.unshift(book);
   const catalogIndex = state.catalogBooks.findIndex((item) => item.id === id);
   if (catalogIndex >= 0) {
-    if (!readerUsesExistingCanonical) state.catalogBooks[catalogIndex] = { ...state.catalogBooks[catalogIndex], ...book, rating: 0, review: "", readingStatus: undefined, topRank: undefined, featuredMonth: undefined, featuredYear: undefined, publicationMonth: undefined, publicationYear: undefined };
-  } else state.catalogBooks.push({ ...book, rating: 0, review: "", readingStatus: undefined, topRank: undefined, featuredMonth: undefined, featuredYear: undefined, publicationMonth: undefined, publicationYear: undefined });
-  response.json({ ok: true, bookId: id, topRank });
+    if (!readerUsesExistingCanonical) state.catalogBooks[catalogIndex] = demoCanonicalBookDto({ ...state.catalogBooks[catalogIndex], ...book });
+  } else state.catalogBooks.push(demoCanonicalBookDto(book));
+  response.status(201).json({ ok: true, bookId: id, topRank, book: payload.isAuthor ? undefined : demoOwnerBookDto(book, user.readingHistory), readingHistory: payload.isAuthor ? undefined : structuredClone((user.readingHistory ?? []).filter((entry) => entry.status === "completed")) });
 });
 
 function saveDemoReadingMaterial(request, response, kind, id = 0) {
@@ -1264,28 +1329,36 @@ router.delete("/community-books/:id", (request, response) => {
 
 router.patch("/books/:id", (request, response) => {
   const user = users.find((item) => item.id === request.demoUserId); const id = Number(request.params.id); const payload = request.body ?? {};
-  const book = user?.books.find((item) => item.id === id);
+  const book = user?.books.find((item) => (item.catalogBookId ?? item.id) === id);
   if (!book) return response.status(404).json({ error: "Книга не найдена в вашей библиотеке" });
-  const readingStatus = payload.readingStatus ?? book.readingStatus ?? "read";
-  const rating = Number(payload.rating ?? book.rating);
-  if (readingStatus === "read" && (!Number.isInteger(rating * 2) || rating < .5 || rating > 5 || !String(payload.shortReview ?? payload.review ?? "").trim())) return response.status(400).json({ error: "Заполните оценку и краткий отзыв" });
+  if (!["Читатель", "Писатель", "Блогер"].includes(user.profile.type)) return response.status(403).json({ error: "Личное состояние чтения доступно только личному профилю" });
+  if (book.isAdult && !user.isAdmin && Number(user.profile.age ?? -1) < 18) return response.status(403).json({ error: "Материал доступен только совершеннолетним пользователям", code: "ADULT_CONTENT_RESTRICTED" });
+  const timezone = validTimezone(request.get("X-BookMeet-Timezone") || "UTC");
+  let state;
+  try { state = normalizeReadingState(payload, book, { timezone, defaultStatus: book.readingStatus ?? "read" }); } catch (error) { return response.status(error.statusCode ?? 400).json({ error: error.message, code: error.code }); }
+  const readingStatus = state.readingStatus;
   const top3Requested = payload.top3 === true || Number(payload.topRank) > 0;
   if (top3Requested && !top3Eligibility({ isAuthor: false, readingStatus }).allowed) return response.status(400).json({ error: "В TOP3 можно добавлять только прочитанные книги из своей библиотеки" });
   const topBooks = user.books.filter((item) => item.topRank);
-  const topRank = top3Requested ? nextTopRank(topBooks, id) : undefined;
+  const top3Specified = Object.hasOwn(payload, "top3") || Object.hasOwn(payload, "topRank");
+  let topRank = top3Requested ? nextTopRank(topBooks, id) : book.topRank;
   if (top3Requested && !topRank) return response.status(409).json({ error: "В TOP3 уже добавлены три книги. Сначала снимите отметку с одной из них.", code: "TOP3_LIMIT" });
-  Object.assign(book, { rating, review: String(payload.shortReview ?? payload.review ?? book.review), readingStatus, readMonth: readingStatus === "read" ? payload.readMonth : undefined, readYear: readingStatus === "read" ? payload.readYear : undefined, lastReadChapter: readingStatus === "reading" ? payload.lastReadChapter : undefined, readingComment: readingStatus === "reading" ? payload.readingComment : "", topRank });
-  response.json({ bookId: id, topRank });
+  if (readingStatus !== "read" || top3Specified && !top3Requested) topRank = undefined;
+  const mutation = demoApplyReadingMutation(user, book, payload, timezone);
+  const { storage, readingHistory } = mutation;
+  Object.assign(book, { rating: readingStatus === "read" ? state.rating : undefined, review: readingStatus === "read" || readingStatus === "abandoned" ? state.shortReview : "", readingStatus, readMonth: readingStatus === "read" ? state.readMonth : undefined, readYear: readingStatus === "read" ? state.readYear : undefined, ...storage, topRank });
+  response.json({ bookId: id, topRank, book: demoOwnerBookDto(book, user.readingHistory), readingHistory: structuredClone(readingHistory) });
 });
 router.delete("/books/:id", (request, response) => {
   const user = users.find((item) => item.id === request.demoUserId); const id = Number(request.params.id);
   if (!user || !id) return response.status(404).json({ error: "Книга не найдена в вашем профиле" });
   const before = (user.books?.length ?? 0) + (user.authorBooks?.length ?? 0) + (user.communityBooks?.length ?? 0);
-  user.books = (user.books ?? []).filter((item) => item.id !== id);
+  user.books = (user.books ?? []).filter((item) => (item.catalogBookId ?? item.id) !== id);
   user.authorBooks = (user.authorBooks ?? []).filter((item) => item.id !== id);
   user.communityBooks = (user.communityBooks ?? []).filter((item) => item.id !== id);
   const after = user.books.length + user.authorBooks.length + user.communityBooks.length;
   if (before === after) return response.status(404).json({ error: "Книга не найдена в вашем профиле" });
+  user.readingHistory = (user.readingHistory ?? []).filter((entry) => entry.bookId !== id || entry.status === "completed");
   response.json({ ok: true });
 });
 

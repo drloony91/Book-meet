@@ -3,7 +3,7 @@ import { CustomSelect } from "../common/CustomSelect";
 import { ModalIconActions, ResponsiveModalCloseButton } from "../modals/ModalIconActions";
 import { openReportDialog } from "../safety/SafetyCenter";
 import { SpoilerText, SpoilerTextarea } from "./text/SpoilerText";
-import { closeActiveMobileWorkflow, openMobileWorkflowRoute, useRoutedPopup } from "../../navigation/routes";
+import { closeActiveMobileWorkflow, openMobileWorkflowRoute, openOverlayRoute, registerRouteLeaveGuard, useRoutedPopup } from "../../navigation/routes";
 import {
   catalogFromUsers,
   excerptReadingItemById,
@@ -22,6 +22,16 @@ import {
 } from "../../lib/domain";
 import { isSpecialLocation, SPECIAL_LOCATIONS } from "../../lib/locations";
 import { apiFetch } from "../../services/api";
+import { announceLibraryMutation, announceLibraryMutationStart, buildReadingPatch, isLibraryMutationResponse, saveLibraryBook } from "../../services/library-mutations";
+import { ReadingStateFields, ReadingStatusSelector, readingProgressIsValid, readingStatusLabel } from "../books/ReadingStateFields";
+import { readingPercent, sortBookReaders } from "../../lib/reading-state";
+
+type CachedReadingDraft = { book: LibraryBook; state: "idle" | "saving" | "saved" | "error"; revision: number };
+const personalReadingDrafts = new Map<string, CachedReadingDraft>();
+function publishReadingDraft(key: string, draft: CachedReadingDraft | null) {
+  if (draft) personalReadingDrafts.set(key, draft); else personalReadingDrafts.delete(key);
+  window.dispatchEvent(new CustomEvent("bookmeet:reading-draft", { detail: { key, draft } }));
+}
 import type { ChatAttachment } from "../chat/types";
 import type {
   AdminCatalogItem,
@@ -758,51 +768,172 @@ export function UserProfileModal({ user, viewer, users, catalog, profileFriends 
   );
 }
 
-export function UnifiedBookModal({ book: sourceBook, users, catalog = [], viewer, events = [], onClose, onOpenUser, onOpenReview, onOpenEvent, onEdit, onDelete, onReport, nested = false, retainWhenInactive = false }: { book: LibraryBook | AuthorBook; users: DemoUser[]; catalog?: (LibraryBook | AuthorBook)[]; viewer?: DemoUser; events?: BookEvent[]; onClose: () => void; onOpenUser?: (userId: number) => void; onOpenReview?: (review: UserReview, user: DemoUser) => void; onOpenEvent?: (event: BookEvent) => void; onEdit?: () => void; onDelete?: () => void; onReport?: () => void; nested?: boolean; retainWhenInactive?: boolean }) {
+export function UnifiedBookModal({ book: sourceBook, users, catalog = [], viewer, events = [], onClose, onOpenUser, onOpenReview, onOpenEvent, onEdit, onDelete, onReport, nested = false, retainWhenInactive = false, initialStatusDialog = false }: { book: LibraryBook | AuthorBook; users: DemoUser[]; catalog?: (LibraryBook | AuthorBook)[]; viewer?: DemoUser; events?: BookEvent[]; onClose: () => void; onOpenUser?: (userId: number) => void; onOpenReview?: (review: UserReview, user: DemoUser) => void; onOpenEvent?: (event: BookEvent) => void; onEdit?: () => void; onDelete?: () => void; onReport?: () => void; nested?: boolean; retainWhenInactive?: boolean; initialStatusDialog?: boolean }) {
   const { locale, t } = useI18n();
   const effectiveViewer = viewer ?? users.find((user) => user.id === Number(document.documentElement.dataset.bookMeetUserId));
   const canonical = resolveCanonicalBook(sourceBook, users, catalog);
   const book = resolveViewerBook(canonical, catalog, effectiveViewer);
   const viewerBook = effectiveViewer?.books.find((item) => (item.catalogBookId ?? item.id) === (canonical.catalogBookId ?? canonical.id));
+  const readingDraftKey = `${effectiveViewer?.id ?? 0}:${canonical.catalogBookId ?? canonical.id}`;
+  const initialCachedDraft = personalReadingDrafts.get(readingDraftKey);
   const bookAuthorProfile = book.creatorUserId ? users.find((user) => user.id === book.creatorUserId) : undefined;
-  const routedPopup = useRoutedPopup(`/books/${book.id}`, "/", onClose, `${book.title} — Book Meet`);
-  const routedClose = routedPopup.close;
-  const [tab, setTab] = useState<"about" | "readers" | "reviews" | "wishers">("about");
+  // The routing hook owns the history mechanics.  Keep its close callback in a
+  // ref so a browser Back can use the same dirty-draft decision as the close
+  // button and backdrop once the inline state below has been initialized.
+  const routeCloseRef = useRef(onClose);
+  const closeAlreadyApproved = useRef(false);
+  const routedPopup = useRoutedPopup(`/books/${book.id}`, "/", () => routeCloseRef.current(), `${book.title} — Book Meet`, !initialStatusDialog);
+  const [tab, setTab] = useState<"about" | "readers" | "reviews">("about");
   const [warningLink, setWarningLink] = useState<BookLink | null>(null);
   const [openedReview, setOpenedReview] = useState<{ review: UserReview; reviewer: DemoUser } | null>(null);
+  const [inlineDraft, setInlineDraft] = useState<LibraryBook | null>(initialCachedDraft?.book ?? viewerBook ?? null);
+  const [inlineSaveState, setInlineSaveState] = useState<"idle" | "saving" | "saved" | "error">(initialCachedDraft?.state ?? "idle");
+  const [statusDialog, setStatusDialog] = useState(initialStatusDialog);
+  const [statusDraft, setStatusDraft] = useState<LibraryBook | null>(viewerBook ?? null);
+  const inlineSaveQueue = useRef<Promise<void>>(Promise.resolve());
+  const inlineDraftRevision = useRef(initialCachedDraft?.revision ?? 0);
+  const inlineSavedRevision = useRef(0);
   const sameBook = (title: string, author: string) => title.toLowerCase() === book.title.toLowerCase() && author.toLowerCase() === book.author.toLowerCase();
-  const readers = users.flatMap((reader) => reader.books.filter((item) => sameBook(item.title, item.author) && (item.readingStatus ?? "read") !== "want").map((item) => ({ reader, item })));
-  const bookReviews = users.flatMap((reviewer) => reviewer.reviews.filter((review) => sameBook(review.bookTitle, review.bookAuthor)).map((review) => ({ reviewer, review })));
-  const wishers = users.filter((user) => user.books.some((item) => sameBook(item.title, item.author) && item.readingStatus === "want") || (user.wishBooks ?? []).some((item) => item.catalogBookId === book.id || sameBook(item.title, item.author)));
+  const canonicalId = canonical.catalogBookId ?? canonical.id;
+  const readers = sortBookReaders(users.flatMap((reader) => reader.books.filter((item) => (item.catalogBookId ?? item.id) === canonicalId).map((item) => ({ reader, item }))), viewerBook);
+  const bookReviews = users.flatMap((reviewer) => reviewer.reviews.filter((review) => review.bookId === canonicalId || sameBook(review.bookTitle, review.bookAuthor)).map((review) => ({ reviewer, review })));
   const relatedEvents = events.filter((event) => event.status === "published" && (event.linkedBookIds?.includes(book.id) || event.linkedBookId === book.id) && eventTimestamp(event) > Date.now()).sort((a, b) => eventTimestamp(a) - eventTimestamp(b));
   const catalogBookId = book.catalogBookId ?? book.id;
   const ownsLibraryRelation = Boolean(viewerBook);
   const canAddToLibrary = Boolean(effectiveViewer && !["Издатель", "Сообщество"].includes(effectiveViewer.profile.type) && !ownsLibraryRelation);
   const requestDefaultEdit = () => window.dispatchEvent(new CustomEvent("bookmeet:edit-owned-book", { detail: { bookId: catalogBookId } }));
   const requestDefaultDelete = () => window.dispatchEvent(new CustomEvent("bookmeet:delete-owned-book", { detail: { bookId: catalogBookId, title: book.title } }));
+  useEffect(() => {
+    const receive = (event: Event) => {
+      const detail = (event as CustomEvent<{ key?: string; draft?: CachedReadingDraft | null }>).detail;
+      if (detail?.key !== readingDraftKey || !detail.draft) return;
+      inlineDraftRevision.current = detail.draft.revision;
+      setInlineDraft(detail.draft.book);
+      setInlineSaveState(detail.draft.state);
+    };
+    window.addEventListener("bookmeet:reading-draft", receive);
+    return () => window.removeEventListener("bookmeet:reading-draft", receive);
+  }, [readingDraftKey]);
+  useEffect(() => {
+    // A successful earlier request emits a fresh owner DTO. Do not let it
+    // replace text typed while that request was in flight.
+    if (!personalReadingDrafts.has(readingDraftKey) && inlineDraftRevision.current === inlineSavedRevision.current) setInlineDraft(viewerBook ?? null);
+    if (!statusDialog) setStatusDraft(viewerBook ?? null);
+  }, [viewerBook, statusDialog, readingDraftKey]);
+  useEffect(() => {
+    if (!inlineDraft || !viewerBook) return;
+    const keys: Array<keyof LibraryBook> = inlineDraft.readingStatus === "reading" ? ["chaptersCurrent", "chaptersTotal", "pagesCurrent", "pagesTotal", "progressUnit", "readingComment"] : inlineDraft.readingStatus === "read" ? ["rating", "review", "readMonth", "readYear"] : inlineDraft.readingStatus === "abandoned" ? ["review"] : inlineDraft.readingStatus === "postponed" ? ["readingComment", "postponedMonth", "postponedYear"] : [];
+    if (!keys.length) return;
+    if (keys.every((key) => inlineDraft[key] === viewerBook[key])) return;
+    const timezone = Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC";
+    const currentYear = Number(new Intl.DateTimeFormat("en-US", { timeZone: timezone, year: "numeric" }).format(new Date()));
+    if ((inlineDraft.readingStatus === "reading" && !readingProgressIsValid(inlineDraft)) || (inlineDraft.readingStatus === "read" && (!(inlineDraft.rating >= 0.5 && inlineDraft.rating <= 5 && Math.abs(inlineDraft.rating * 2 - Math.round(inlineDraft.rating * 2)) < 0.00001) || !inlineDraft.review.trim() || !Number.isInteger(inlineDraft.readMonth) || !Number.isInteger(inlineDraft.readYear) || (inlineDraft.readMonth ?? 0) < 1 || (inlineDraft.readMonth ?? 0) > 12 || (inlineDraft.readYear ?? 0) < 1900 || (inlineDraft.readYear ?? 0) > currentYear))) { setInlineSaveState("error"); publishReadingDraft(readingDraftKey, { book: inlineDraft, state: "error", revision: inlineDraftRevision.current }); return; }
+    setInlineSaveState("saving");
+    const revision = inlineDraftRevision.current;
+    publishReadingDraft(readingDraftKey, { book: inlineDraft, state: "saving", revision });
+    const timer = window.setTimeout(() => {
+      const payload = Object.fromEntries(keys.map((key) => [key, inlineDraft[key] === undefined ? null : inlineDraft[key]]));
+      inlineSaveQueue.current = inlineSaveQueue.current.catch(() => undefined).then(async () => {
+        try {
+          const result = await saveLibraryBook(`/api/books/${catalogBookId}`, "PATCH", payload);
+          if (inlineDraftRevision.current === revision) { inlineSavedRevision.current = revision; setInlineDraft(result.book); setInlineSaveState("saved"); publishReadingDraft(readingDraftKey, null); }
+        } catch { setInlineSaveState("error"); publishReadingDraft(readingDraftKey, { book: inlineDraft, state: "error", revision }); }
+      });
+    }, 800);
+    return () => window.clearTimeout(timer);
+  }, [inlineDraft, viewerBook, catalogBookId, readingDraftKey]);
+  const openStatusDialog = () => {
+    if (closeNeedsConfirmation && !window.confirm(discardPrompt)) return;
+    if (window.matchMedia("(max-width: 800px)").matches && openMobileWorkflowRoute({ mode: "edit", kind: "book-status", id: catalogBookId })) {
+      window.dispatchEvent(new PopStateEvent("popstate", { state: window.history.state }));
+      return;
+    }
+    setStatusDraft(viewerBook ?? null); setStatusDialog(true);
+  };
+  const saveStatus = async () => {
+    if (!statusDraft) return;
+    setInlineSaveState("saving");
+    try {
+      const result = await saveLibraryBook(`/api/books/${catalogBookId}`, "PATCH", buildReadingPatch(statusDraft));
+      setInlineDraft(result.book); setStatusDraft(result.book); setInlineSaveState("saved"); setStatusDialog(false); if (initialStatusDialog) onClose();
+    } catch { setInlineSaveState("error"); }
+  };
+  const closeStatusDialog = () => { setStatusDialog(false); if (initialStatusDialog) onClose(); };
+  useEffect(() => {
+    if (!statusDialog) return;
+    const onKeyDown = (event: KeyboardEvent) => { if (event.key === "Escape") { event.preventDefault(); closeStatusDialog(); } };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [statusDialog, initialStatusDialog, onClose]);
+  const userTimezone = Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC";
+  const localCurrentYear = Number(new Intl.DateTimeFormat("en-US", { timeZone: userTimezone, year: "numeric" }).format(new Date()));
+  const statusSaveValid = Boolean(statusDraft) && (statusDraft?.readingStatus !== "reading" || readingProgressIsValid(statusDraft)) && (statusDraft?.readingStatus !== "read" || (statusDraft.rating >= 0.5 && statusDraft.rating <= 5 && Math.abs(statusDraft.rating * 2 - Math.round(statusDraft.rating * 2)) < 0.00001 && Number.isInteger(statusDraft.readMonth) && (statusDraft.readMonth ?? 0) >= 1 && (statusDraft.readMonth ?? 0) <= 12 && Number.isInteger(statusDraft.readYear) && (statusDraft.readYear ?? 0) >= 1900 && (statusDraft.readYear ?? 0) <= localCurrentYear && Boolean(statusDraft.review.trim())));
+  const autosaveText = inlineSaveState === "saving" ? (locale === "ru" ? "Сохранение…" : locale === "kk" ? "Сақталуда…" : "Saving…") : inlineSaveState === "saved" ? (locale === "ru" ? "Сохранено" : locale === "kk" ? "Сақталды" : "Saved") : inlineSaveState === "error" ? (locale === "ru" ? "Не удалось сохранить" : locale === "kk" ? "Сақтау мүмкін болмады" : "Could not save") : "";
+  const inlineHasUnsavedChanges = Boolean(inlineDraft && viewerBook && ["chaptersCurrent", "chaptersTotal", "pagesCurrent", "pagesTotal", "progressUnit", "readingComment", "rating", "review", "readMonth", "readYear", "postponedMonth", "postponedYear"].some((key) => inlineDraft[key as keyof LibraryBook] !== viewerBook[key as keyof LibraryBook]));
+  const closeNeedsConfirmation = inlineHasUnsavedChanges || inlineSaveState === "saving";
+  const discardPrompt = locale === "ru" ? "Есть несохранённые изменения. Закрыть?" : locale === "kk" ? "Сақталмаған өзгерістер бар. Жабу керек пе?" : "There are unsaved changes. Close?";
+  useEffect(() => {
+    if (!closeNeedsConfirmation) return;
+    return registerRouteLeaveGuard({
+      path: `/books/${book.id}`,
+      confirm: () => {
+        if (closeAlreadyApproved.current) return true;
+        const allowed = window.confirm(discardPrompt);
+        if (allowed) closeAlreadyApproved.current = true;
+        return allowed;
+      },
+    });
+  }, [book.id, closeNeedsConfirmation, discardPrompt]);
+  const guardedOwnerAction = (action: () => void) => {
+    if (closeNeedsConfirmation && !window.confirm(discardPrompt)) return;
+    publishReadingDraft(readingDraftKey, null);
+    action();
+  };
+  routeCloseRef.current = () => {
+    if (closeAlreadyApproved.current || !closeNeedsConfirmation) {
+      closeAlreadyApproved.current = false;
+      publishReadingDraft(readingDraftKey, null);
+      onClose();
+      return;
+    }
+    if (window.confirm(discardPrompt)) {
+      publishReadingDraft(readingDraftKey, null);
+      onClose();
+      return;
+    }
+    // Back already changed the address; restoring it through the shared route
+    // helper keeps the draft mounted instead of silently throwing it away.
+    openOverlayRoute(`/books/${book.id}`);
+  };
+  const guardedClose = () => {
+    if (closeNeedsConfirmation && !window.confirm(discardPrompt)) return;
+    publishReadingDraft(readingDraftKey, null);
+    closeAlreadyApproved.current = true;
+    routedPopup.close();
+  };
   if (!routedPopup.active && !openedReview && !retainWhenInactive) return null;
   return (
-    <div className={`${nested ? "nested-modal-backdrop" : "modal-backdrop"} entity-page-backdrop`} onMouseDown={routedClose}>
+    <div className={`${nested ? "nested-modal-backdrop" : "modal-backdrop"} entity-page-backdrop`} onMouseDown={guardedClose}>
       <section className="unified-book-modal" onMouseDown={(event) => event.stopPropagation()}>
-        <ModalIconActions onEdit={onEdit ?? (ownsLibraryRelation ? requestDefaultEdit : undefined)} onDelete={onDelete ?? (ownsLibraryRelation ? requestDefaultDelete : undefined)} onReport={ownsLibraryRelation ? undefined : onReport} onClose={routedClose} />
+        <ModalIconActions leading={ownsLibraryRelation ? <button data-testid="book-status-action" className="modal-tool-button book-status-action" type="button" onClick={openStatusDialog} aria-label={t("library.bookStatus")}>{readingStatusLabel(viewerBook?.readingStatus ?? "read", locale)}</button> : undefined} onEdit={ownsLibraryRelation ? () => guardedOwnerAction(onEdit ?? requestDefaultEdit) : undefined} onDelete={ownsLibraryRelation ? () => guardedOwnerAction(onDelete ?? requestDefaultDelete) : undefined} onReport={ownsLibraryRelation ? undefined : onReport} onClose={guardedClose} />
         <div className="unified-book-layout">
-          <div className={`library-book-cover library-cover-${book.coverTone}`} data-i18n-skip style={book.coverUrl ? { backgroundImage: `url(${book.coverUrl})` } : undefined}>{!book.coverUrl && <><em>{book.author}</em><strong>{book.title}</strong><span>Book Meet</span></>}</div>
+          <div className={`library-book-cover library-cover-${book.coverTone}`} data-i18n-skip style={book.coverUrl ? { backgroundImage: `url(${book.coverUrl})` } : undefined}>{!book.coverUrl && <><em>{book.author}</em><strong>{book.title}</strong><span>Book Meet</span></>}{ownsLibraryRelation && viewerBook?.readingStatus === "reading" && readingPercent(viewerBook) !== null && <small className="reading-progress-badge">{locale === "ru" ? "Прочитано" : locale === "kk" ? "Оқылды" : "Read"} {readingPercent(viewerBook)}%</small>}</div>
           <div className="unified-book-copy">
             <span className="section-subtitle">{t("book.card")}{book.isAdult ? " · 18+" : ""}</span><h2 data-i18n-skip>{book.title}</h2>{bookAuthorProfile && onOpenUser ? <button className="book-author-profile" data-i18n-skip type="button" onClick={() => onOpenUser(bookAuthorProfile.id)}><span className={`avatar avatar-sm avatar-${bookAuthorProfile.color} ${bookAuthorProfile.avatarUrl ? "has-photo" : ""}`} style={bookAuthorProfile.avatarUrl ? { backgroundImage: `url(${bookAuthorProfile.avatarUrl})` } : undefined}>{!bookAuthorProfile.avatarUrl && bookAuthorProfile.initials}</span><span>{book.author}</span></button> : <p className="library-author" data-i18n-skip>{book.author}</p>}{book.ratingCount ? <p className="catalogue-rating" aria-label={t("book.ratingAria", { title: book.title })}>★ {book.averageRating?.toLocaleString(locale === "ru" ? "ru-RU" : locale === "kk" ? "kk-KZ" : "en-US", { minimumFractionDigits: 1, maximumFractionDigits: 1 })} ({book.ratingCount})</p> : null}
             <div className="profile-tags" data-i18n-skip>{book.genres.map((genre) => <span key={genre}>{genre}</span>)}</div>
+            {ownsLibraryRelation && inlineDraft && <section data-testid="book-personal-state" className="book-personal-state" aria-label={t("library.bookStatus")}><div className="book-personal-state-heading"><strong>{readingStatusLabel(inlineDraft.readingStatus ?? "read", locale)}</strong>{inlineDraft.readingStatus === "reading" && readingPercent(inlineDraft) !== null && <span>{readingPercent(inlineDraft)}%</span>}{inlineDraft.readingStatus === "postponed" && inlineDraft.postponedOverdue && <span className="postponed-overdue">{locale === "ru" ? "Срок наступил" : locale === "kk" ? "Мерзімі келді" : "Due"}</span>}</div>{inlineDraft.readingStatus !== "want" && <ReadingStateFields value={inlineDraft} onChange={(next) => { const revision = inlineDraftRevision.current + 1; inlineDraftRevision.current = revision; setInlineDraft(next); publishReadingDraft(readingDraftKey, { book: next, state: "idle", revision }); }} />}<output data-testid="reading-autosave-status" aria-live="polite" className="reading-autosave-status">{autosaveText}</output>{inlineSaveState === "error" && <button type="button" onClick={() => { const revision = inlineDraftRevision.current + 1; inlineDraftRevision.current = revision; const next = { ...inlineDraft }; setInlineDraft(next); publishReadingDraft(readingDraftKey, { book: next, state: "idle", revision }); }}>{locale === "ru" ? "Повторить" : locale === "kk" ? "Қайталау" : "Retry"}</button>}</section>}
             <button className="book-share-action" type="button" aria-label={t("share.action")} title={t("share.action")} onClick={(event) => { event.stopPropagation(); window.dispatchEvent(new CustomEvent("bookmeet:share-material", { detail: { attachment: { kind: "book", id: catalogBookId } } })); }}><ShareArrowIcon />{t("share.action")}</button><nav className="book-detail-tabs">
               <button className={tab === "about" ? "active" : ""} type="button" onClick={() => setTab("about")}>{t("book.about")}</button>
               <button className={tab === "readers" ? "active" : ""} type="button" onClick={() => setTab("readers")}>{t("book.readers")}</button>
               <button className={tab === "reviews" ? "active" : ""} type="button" onClick={() => setTab("reviews")}>{t("content.reviews")}</button>
-              <button className={tab === "wishers" ? "active" : ""} type="button" onClick={() => setTab("wishers")}>{t("book.wishers")}</button>
             </nav>
             {tab === "about" && <div className="unified-book-section">{(book.isbn || book.publisher) && <dl className="book-edition-details">{book.isbn && <><dt>ISBN</dt><dd data-i18n-skip>{book.isbn}</dd></>}{book.publisher && <><dt>{t("content.publisher")}</dt><dd data-i18n-skip>{book.publisher}</dd></>}</dl>}<p data-i18n-skip={Boolean(book.annotation)}>{book.annotation || t("book.noAnnotation")}</p>{relatedEvents.length > 0 && <div className="book-related-events">{relatedEvents.map((event) => <button type="button" data-i18n-skip key={event.id} onClick={() => onOpenEvent?.(event)}><strong>{event.title}</strong><span>{new Date(`${event.date}T00:00:00`).toLocaleDateString(locale === "kk" ? "kk-KZ" : locale === "en" ? "en-US" : "ru-RU")} · {event.time} · {event.city}</span></button>)}</div>}<div className="writer-book-links book-primary-actions">{book.flipUrl && <button type="button" onClick={() => setWarningLink({ id: -1, label: "Flip", url: book.flipUrl!, action: "Купить" })}>{t("book.buyOnFlip")}</button>}{(book.links ?? []).filter((link) => link.url !== book.flipUrl).map((link) => <button type="button" key={link.id} onClick={() => setWarningLink(link)}>{t(link.action === "Читать" ? "content.read" : link.action === "Слушать" ? "content.listen" : "content.buy")} · <span data-i18n-skip>{link.label}</span></button>)}{canAddToLibrary && <button className="primary-button add-catalog-to-library" type="button" onClick={() => window.dispatchEvent(new CustomEvent("bookmeet:add-catalog-book", { detail: { bookId: catalogBookId } }))}>{t("content.addLibrary")}</button>}</div></div>}
-            {tab === "readers" && <div className="book-readers-list">{readers.length ? readers.map(({ reader, item }) => <button type="button" className="book-reader-row" key={`${reader.id}-${item.id}`} onClick={() => onOpenUser?.(reader.id)}><span data-i18n-skip className={`avatar avatar-sm avatar-${reader.color} ${reader.avatarUrl ? "has-photo" : ""}`} style={reader.avatarUrl ? { backgroundImage: `url(${reader.avatarUrl})` } : undefined}>{!reader.avatarUrl && reader.initials}</span><span><span className="inline-user-link" data-i18n-skip>{reader.profile.name}</span>{(item.readingStatus ?? "read") === "read" && item.rating > 0 && <strong> · ★ {item.rating}</strong>}<small className="book-reader-status">{item.readingStatus === "reading" ? t("book.readingNow", { chapter: item.lastReadChapter ? ` · ${t("book.chapter", { chapter: item.lastReadChapter })}` : "" }) : t("content.readDone")}</small>{item.readingStatus === "reading" && item.readingComment && <span className="book-reader-note" data-i18n-skip>«{item.readingComment}»</span>}{item.review && <span className="book-reader-note" data-i18n-skip>«{item.review}»</span>}</span></button>) : <p>{t("book.noReaders")}</p>}</div>}
+            {tab === "readers" && <div className="book-readers-list">{readers.length ? readers.map(({ reader, item }) => { const progress = readingPercent(item); const status = item.readingStatus ?? "read"; const label = status === "reading" ? `${t("book.readingNow", { chapter: "" })}${progress === null ? "" : ` · ${progress}%`}` : status === "want" ? (locale === "ru" ? "Хочет прочитать" : locale === "kk" ? "Оқығысы келеді" : "Wants to read") : status === "read" ? t("content.readDone") : item.hasCompletedReading ? t("content.readDone") : status === "abandoned" ? "Abandoned" : "Postponed"; return <button type="button" className="book-reader-row" key={`${reader.id}-${item.id}`} onClick={() => onOpenUser?.(reader.id)}><span data-i18n-skip className={`avatar avatar-sm avatar-${reader.color} ${reader.avatarUrl ? "has-photo" : ""}`} style={reader.avatarUrl ? { backgroundImage: `url(${reader.avatarUrl})` } : undefined}>{!reader.avatarUrl && reader.initials}</span><span><span className="inline-user-link" data-i18n-skip>{reader.profile.name}</span>{status === "read" && item.rating > 0 && <strong> · ★ {item.rating}</strong>}<small className="book-reader-status">{label}</small></span></button>; }) : <p>{t("book.noReaders")}</p>}</div>}
             {tab === "reviews" && <div className="book-review-results">{bookReviews.length ? bookReviews.map(({ reviewer, review }) => <button type="button" data-i18n-skip key={`${reviewer.id}-${review.id}`} onClick={() => onOpenReview ? onOpenReview(review, reviewer) : setOpenedReview({ review, reviewer })}><strong>★ {review.rating} · {review.createdAt}</strong><p>{review.preview}</p><span className="inline-user-link">{reviewer.profile.name}</span></button>) : <div><p>{t("book.noReviews")}</p><button className="primary-button" type="button" onClick={() => window.dispatchEvent(new CustomEvent("bookmeet:create-review"))}>{t("book.firstReview")}</button></div>}</div>}
-            {tab === "wishers" && <div className="book-readers-list">{wishers.length ? wishers.map((user) => <button type="button" className="book-reader-row" key={user.id} onClick={() => onOpenUser?.(user.id)}><span data-i18n-skip className={`avatar avatar-sm avatar-${user.color} ${user.avatarUrl ? "has-photo" : ""}`} style={user.avatarUrl ? { backgroundImage: `url(${user.avatarUrl})` } : undefined}>{!user.avatarUrl && user.initials}</span><span data-i18n-skip><span className="inline-user-link">{user.profile.name}</span><span className="book-reader-note">{user.profile.type} · {user.profile.city}</span></span></button>) : <p>{t("book.noWishers")}</p>}</div>}
           </div>
         </div>
         {warningLink && <div className="nested-modal-backdrop" onMouseDown={() => setWarningLink(null)}><section className="external-warning" onMouseDown={(event) => event.stopPropagation()}><h2>{t("book.externalSite")}</h2><p data-i18n-skip>{warningLink.url}</p><div className="form-actions"><button type="button" onClick={() => setWarningLink(null)}>{t("common.cancel")}</button><button className="primary-button" type="button" onClick={() => window.open(warningLink.url, "_blank", "noopener,noreferrer")}>{t("book.continue")}</button></div></section></div>}
+        {statusDialog && statusDraft && <div className="nested-modal-backdrop" onMouseDown={closeStatusDialog}><section data-testid="book-status-dialog" className="book-status-dialog" role="dialog" aria-modal="true" aria-label={t("library.bookStatus")} onMouseDown={(event) => event.stopPropagation()}><h2>{t("library.bookStatus")}</h2><ReadingStateFields includeStatus value={statusDraft} onChange={setStatusDraft} /><div className="form-actions"><button type="button" onClick={closeStatusDialog}>{t("common.cancel")}</button><button className="primary-button" type="button" onClick={() => void saveStatus()} disabled={inlineSaveState === "saving" || !statusSaveValid}>{inlineSaveState === "saving" ? autosaveText : t("book.save")}</button></div></section></div>}
         {openedReview && <ReadingModal item={{ id: openedReview.review.id, kind: "review", title: openedReview.review.bookTitle, author: openedReview.reviewer.profile.name, text: openedReview.review.fullText, bodyHtml: openedReview.review.bodyHtml, linkedBookId: openedReview.review.bookId, ownerId: openedReview.reviewer.id, createdAt: openedReview.review.createdAt, preview: openedReview.review.preview, bookAuthor: openedReview.review.bookAuthor, rating: openedReview.review.rating, isAdult: openedReview.review.isAdult }} currentUser={effectiveViewer} users={users} catalog={catalog} onOpenUser={onOpenUser} onClose={() => setOpenedReview(null)} />}
       </section>
     </div>
@@ -1079,6 +1210,12 @@ export function BookEditor({ book, catalog, top3Count = 0, mode = "library", onC
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState("");
   const organizationMode = mode !== "library";
+  const userTimezone = Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC";
+  const userCurrentYear = Number(new Intl.DateTimeFormat("en-US", { timeZone: userTimezone, year: "numeric" }).format(new Date()));
+  const readingFormValid = organizationMode || form.readingStatus === "want" || form.readingStatus === "abandoned"
+    || form.readingStatus === "reading" && readingProgressIsValid(form)
+    || form.readingStatus === "read" && form.rating >= 0.5 && form.rating <= 5 && Number.isInteger(form.rating * 2) && Boolean(form.review.trim()) && Number.isInteger(form.readMonth) && (form.readMonth ?? 0) >= 1 && (form.readMonth ?? 0) <= 12 && Number.isInteger(form.readYear) && (form.readYear ?? 0) >= 1900 && (form.readYear ?? 0) <= userCurrentYear
+    || form.readingStatus === "postponed" && (form.postponedMonth == null || Number.isInteger(form.postponedMonth) && form.postponedMonth >= 1 && form.postponedMonth <= 12) && (form.postponedYear == null || Number.isInteger(form.postponedYear) && form.postponedYear >= 1900 && form.postponedYear <= 2100);
   const selectedCatalogBook = catalog.find((item) => canonicalBookId(item) === selectedCatalogId);
   const coverLocked = Boolean(selectedCatalogBook?.coverUrl);
   const fieldLocked = (canonicalValue: unknown, currentValue: unknown) => selectedCatalogBook ? Boolean(canonicalValue) : sourceFieldsLocked && Boolean(currentValue);
@@ -1105,11 +1242,16 @@ export function BookEditor({ book, catalog, top3Count = 0, mode = "library", onC
 
   async function submit(event: FormEvent) {
     event.preventDefault();
+    if (!readingFormValid) { setRatingError(true); return; }
     if ((form.links ?? []).some((link) => Boolean(libraryLinkError(link)))) {
       setLinksError(true);
       return;
     }
     if (!organizationMode && (form.readingStatus ?? "read") === "read" && form.rating === 0) {
+      setRatingError(true);
+      return;
+    }
+    if (!organizationMode && (form.readingStatus ?? "read") === "read" && (!form.review.trim() || !form.readMonth || !form.readYear)) {
       setRatingError(true);
       return;
     }
@@ -1136,7 +1278,7 @@ export function BookEditor({ book, catalog, top3Count = 0, mode = "library", onC
             <label className={`cover-upload-button ${coverLocked ? "is-disabled" : ""}`}>{coverLocked ? t("book.coverSaved") : t("book.uploadCover")}<input type="file" accept="image/*" disabled={coverLocked} onChange={uploadCover} /></label>
           </div>
           <div className="book-fields">
-            {!organizationMode && <div className="book-reading-status library-editor-status" role="group" aria-label={t("library.bookStatus")}><button className={(form.readingStatus ?? "read") === "want" ? "active" : ""} type="button" onClick={() => { setForm((current) => ({ ...current, readingStatus: "want", rating: 0, review: "", readMonth: undefined, readYear: undefined, lastReadChapter: undefined, readingComment: "" })); setRatingError(false); }}>{t("content.want")}</button><button className={form.readingStatus === "reading" ? "active" : ""} type="button" onClick={() => { setForm((current) => ({ ...current, readingStatus: "reading", rating: 0, review: "", readMonth: undefined, readYear: undefined })); setRatingError(false); }}>{t("content.reading")}</button><button className={(form.readingStatus ?? "read") === "read" ? "active" : ""} type="button" onClick={() => setForm((current) => ({ ...current, readingStatus: "read", lastReadChapter: undefined, readingComment: "" }))}>{t("content.readDone")}</button></div>}
+            {!organizationMode && <div className="book-reading-status library-editor-status"><ReadingStatusSelector value={form.readingStatus ?? "read"} onChange={(readingStatus) => { setForm((current) => ({ ...current, readingStatus, topRank: readingStatus === "read" ? current.topRank : undefined })); setRatingError(false); }} /></div>}
             <BookAutofillField hidePlaceholder value={autofillUrl} onChange={(value) => { setAutofillUrl(value); if (!value.trim()) setSourceFieldsLocked(false); }} onProduct={(product) => {
               const match = catalog.find((item) => canonicalBookId(item) === product.catalogBookId)
                 ?? catalog.find((item) => product.isbn && item.isbn?.replace(/\D/g, "") === product.isbn.replace(/\D/g, ""))
@@ -1160,7 +1302,7 @@ export function BookEditor({ book, catalog, top3Count = 0, mode = "library", onC
               <label>{t("content.annotation")}<textarea rows={3} readOnly={fieldLocked(selectedCatalogBook?.annotation, form.annotation)} value={form.annotation} onChange={(event) => setForm({ ...form, annotation: event.target.value })} /></label>
             </div>
             {organizationMode && <fieldset className="reading-date-field organization-book-date-field"><legend>{t(mode === "community" ? "book.communityMonth" : "book.publicationDate")}</legend><label>{t("library.month")}<CustomSelect ariaLabel={t("library.readMonth")} value={(mode === "community" ? form.featuredMonth : form.publicationMonth) ?? 0} onChange={(month) => setForm(mode === "community" ? { ...form, featuredMonth: month || undefined } : { ...form, publicationMonth: month || undefined })} options={[{ value: 0, label: t("domain.unspecified") }, ...readingMonths.map((month, index) => ({ value: index + 1, label: t(month) }))]} /></label><label>{t("library.year")}<CustomSelect ariaLabel={t("library.readYear")} value={(mode === "community" ? form.featuredYear : form.publicationYear) ?? 0} onChange={(year) => setForm(mode === "community" ? { ...form, featuredYear: year || undefined } : { ...form, publicationYear: year || undefined })} options={[{ value: 0, label: t("domain.unspecified") }, ...Array.from({ length: new Date().getFullYear() + 3 - 1900 }, (_, index) => new Date().getFullYear() + 2 - index).map((year) => ({ value: year, label: String(year) }))]} /></label></fieldset>}
-            {!organizationMode && form.readingStatus === "reading" && <div className="library-reading-progress"><label>{t("library.chaptersRead")}<input min={1} step={1} type="number" inputMode="numeric" value={form.lastReadChapter ?? ""} onChange={(event) => setForm({ ...form, lastReadChapter: event.target.value ? Math.max(1, Math.floor(Number(event.target.value))) : undefined })} /></label><label>{t("material.comment")}<textarea rows={4} placeholder={t("library.readingImpressions")} value={form.readingComment ?? ""} onChange={(event) => setForm({ ...form, readingComment: event.target.value })} /></label></div>}
+            {!organizationMode && form.readingStatus === "reading" && <ReadingStateFields value={form} onChange={setForm} />}
             {!organizationMode && (form.readingStatus ?? "read") === "read" && <div className="library-reading-details">
               <div className="book-rating-field top3-rating-row"><span>{t("content.rating")} *</span><RatingStars allowHalf value={form.rating} onChange={(rating) => { setForm({ ...form, rating }); setRatingError(false); }} /><label className="top3-checkbox"><input type="checkbox" checked={Boolean(form.topRank)} onChange={(event) => setForm({ ...form, topRank: event.target.checked ? form.topRank ?? 1 : undefined })} />{t("content.top3")}</label>{ratingError && <small>{t("library.ratingRequired")}</small>}</div>
               <label>{t("library.shortReview")} *<textarea required rows={4} value={form.review} onChange={(event) => setForm({ ...form, review: event.target.value })} /></label>
@@ -1170,12 +1312,13 @@ export function BookEditor({ book, catalog, top3Count = 0, mode = "library", onC
                 <label>{t("library.year")}<CustomSelect ariaLabel={t("library.readYear")} value={form.readYear ?? 0} onChange={(readYear) => setForm({ ...form, readYear: readYear || undefined })} options={[{ value: 0, label: t("domain.unspecified") }, ...Array.from({ length: 80 }, (_, index) => new Date().getFullYear() - index).map((year) => ({ value: year, label: String(year) }))]} /></label>
               </fieldset>
             </div>}
+            {!organizationMode && (form.readingStatus === "abandoned" || form.readingStatus === "postponed") && <ReadingStateFields value={form} onChange={setForm} />}
             <div className="library-links-section">
               <BookLinksEditor links={form.links ?? []} lockedUrls={lockedLinkUrls} restricted onChange={(links) => { setForm((current) => ({ ...current, links })); setLinksError(false); }} />
               {linksError && <p className="form-error">{t("library.linksError")}</p>}
             </div>
             <label className="adult-material-checkbox"><input type="checkbox" checked={Boolean(form.isAdult)} onChange={(event) => setForm({ ...form, isAdult: event.target.checked })} />{t("book.adult")}</label>
-            {saveError && <p className="form-error" role="alert">{saveError}</p>}<div className="form-actions"><button type="button" disabled={saving} onClick={onClose}>{t("common.cancel")}</button><button className="primary-button" disabled={saving} type="submit">{saving ? t("auth.saving") : t("book.save")}</button></div>
+            {saveError && <p className="form-error" role="alert">{saveError}</p>}<div className="form-actions"><button type="button" disabled={saving} onClick={onClose}>{t("common.cancel")}</button><button className="primary-button" disabled={saving || !readingFormValid} type="submit">{saving ? t("auth.saving") : t("book.save")}</button></div>
           </div>
         </form>
       </section>
@@ -1186,10 +1329,13 @@ export function BookEditor({ book, catalog, top3Count = 0, mode = "library", onC
 export function ReadingStatsModal({ books, users, viewer, catalog = [], onClose }: { books: LibraryBook[]; users: DemoUser[]; viewer?: DemoUser; catalog?: (LibraryBook | AuthorBook)[]; onClose: () => void }) {
   const { t } = useI18n();
   const currentYear = new Date().getFullYear();
-  const availableYears = Array.from(new Set([currentYear, ...books.map((book) => book.readYear).filter((year): year is number => Boolean(year))])).sort((a, b) => b - a);
+  // An explicitly returned empty history is authoritative: completed cycles
+  // are not reconstructed from the mutable current-library relation.
+  const completed = Array.isArray(viewer?.readingHistory) ? viewer.readingHistory.map((entry) => ({ ...entry, book: (catalog.find((book) => (book.catalogBookId ?? book.id) === entry.bookId) ?? entry.book) as LibraryBook })) : books.filter((book) => (book.readingStatus ?? "read") === "read").map((book) => ({ id: book.id, bookId: book.catalogBookId ?? book.id, completedMonth: book.readMonth, completedYear: book.readYear, book }));
+  const availableYears = Array.from(new Set([currentYear, ...completed.map((entry) => entry.completedYear).filter((year): year is number => Boolean(year))])).sort((a, b) => b - a);
   const [year, setYear] = useState(currentYear);
   const [openedBook, setOpenedBook] = useState<LibraryBook | null>(null);
-  const counts = readingMonths.map((_, index) => books.filter((book) => book.readYear === year && book.readMonth === index + 1).length);
+  const counts = readingMonths.map((_, index) => completed.filter((entry) => entry.completedYear === year && entry.completedMonth === index + 1).length);
   const maxCount = Math.max(1, ...counts);
   const chartLeft = 54;
   const chartTop = 20;
@@ -1198,7 +1344,7 @@ export function ReadingStatsModal({ books, users, viewer, catalog = [], onClose 
   const slot = chartWidth / 12;
   const tickCount = Math.min(5, maxCount + 1);
   const ticks = Array.from({ length: tickCount }, (_, index) => Math.round(index * maxCount / Math.max(1, tickCount - 1))).filter((value, index, list) => list.indexOf(value) === index);
-  const monthlyGroups = readingMonths.map((month, index) => ({ month, books: books.filter((book) => (book.readingStatus ?? "read") === "read" && book.readYear === year && book.readMonth === index + 1) })).filter((group) => group.books.length);
+  const monthlyGroups = readingMonths.map((month, index) => ({ month, entries: completed.filter((entry) => entry.completedYear === year && entry.completedMonth === index + 1) })).filter((group) => group.entries.length);
 
   return <div className="nested-modal-backdrop" onMouseDown={onClose}><section className="reading-stats-modal" onMouseDown={(event) => event.stopPropagation()}>
     <button className="modal-close" type="button" onClick={onClose} aria-label={t("common.close")}>×</button>
@@ -1215,19 +1361,19 @@ export function ReadingStatsModal({ books, users, viewer, catalog = [], onClose 
       </svg>
       <div className="reading-stats-mobile-chart" role="img" aria-label={t("library.readInYear", { year })}>{counts.map((count, index) => ({ count, month: readingMonths[index] })).reverse().map(({ count, month }) => <div className="reading-stats-mobile-row" key={month}><span>{t(month).slice(0, 3)}</span><i><b style={{ width: `${count ? count / maxCount * 100 : 0}%` }}><em>{count}</em></b></i></div>)}</div>
     </div>
-    {monthlyGroups.length > 0 && <div className="reading-month-groups">{monthlyGroups.map((group) => <section className="reading-month-group" key={group.month}><h3>{t(group.month)}</h3><div>{group.books.map((book) => <button type="button" data-i18n-skip className="reading-month-book" key={book.id} onClick={() => setOpenedBook(book)}><div className={`library-book-cover library-cover-${book.coverTone}`} style={book.coverUrl ? { backgroundImage: `url(${book.coverUrl})` } : undefined}>{!book.coverUrl && <strong>{book.title.slice(0, 1)}</strong>}</div><span><strong>{book.title}</strong><small>{book.author}</small></span></button>)}</div></section>)}</div>}
+    {monthlyGroups.length > 0 && <div className="reading-month-groups">{monthlyGroups.map((group) => <section className="reading-month-group" key={group.month}><h3>{t(group.month)}</h3><div>{group.entries.map((entry) => { const historyBook = entry.book; return <button type="button" data-i18n-skip className="reading-month-book" key={entry.id} onClick={() => setOpenedBook(historyBook)}><div className={`library-book-cover library-cover-${historyBook.coverTone}`} style={historyBook.coverUrl ? { backgroundImage: `url(${historyBook.coverUrl})` } : undefined}>{!historyBook.coverUrl && <strong>{historyBook.title.slice(0, 1)}</strong>}</div><span><strong>{historyBook.title}</strong><small>{historyBook.author}</small></span></button>; })}</div></section>)}</div>}
      {openedBook && <UnifiedBookModal book={openedBook} viewer={viewer} users={users} catalog={catalog.length ? catalog : books} nested onClose={() => setOpenedBook(null)} />}
   </section></div>;
 }
 
-export function LibraryTab({ books, setBooks, userId, users, catalog = [], initialAdd = false, initialEditId }: { books: LibraryBook[]; setBooks: React.Dispatch<React.SetStateAction<LibraryBook[]>>; userId: number; users: DemoUser[]; catalog?: (LibraryBook | AuthorBook)[]; initialAdd?: boolean; initialEditId?: number | null }) {
+export function LibraryTab({ books, setBooks, userId, users, catalog = [], initialAdd = false, initialEditId, initialStatusId }: { books: LibraryBook[]; setBooks: React.Dispatch<React.SetStateAction<LibraryBook[]>>; userId: number; users: DemoUser[]; catalog?: (LibraryBook | AuthorBook)[]; initialAdd?: boolean; initialEditId?: number | null; initialStatusId?: number | null }) {
   const { t } = useI18n();
   const viewer = users.find((user) => user.id === userId);
   const canonicalCatalog = catalog.length ? catalog : catalogFromUsers(users);
   const canonicalBookId = (book: Pick<LibraryBook, "id"> & { catalogBookId?: number }) => book.catalogBookId ?? book.id;
   const [view, setView] = useState<LibraryView>("grid");
-  const [statusFilter, setStatusFilter] = useState<"want" | "reading" | "read">("read");
-  const [editingBook, setEditingBook] = useState<LibraryBook | null | undefined>(() => initialEditId ? books.find((item) => canonicalBookId(item) === initialEditId) : initialAdd ? null : undefined);
+  const [statusFilter, setStatusFilter] = useState<"want" | "reading" | "read" | "abandoned" | "postponed">("read");
+  const [editingBook, setEditingBook] = useState<LibraryBook | null | undefined>(() => initialStatusId ? undefined : initialEditId ? books.find((item) => canonicalBookId(item) === initialEditId) : initialAdd ? null : undefined);
   const [viewingBook, setViewingBook] = useState<LibraryBook | null>(null);
   const [statsOpen, setStatsOpen] = useState(false);
   const now = new Date();
@@ -1243,16 +1389,19 @@ export function LibraryTab({ books, setBooks, userId, users, catalog = [], initi
     const book = books.find((item) => canonicalBookId(item) === id);
     if (!book) return;
     const bookId = canonicalBookId(book);
-    const response = await apiFetch("/api/books", { method: "POST", credentials: "same-origin", headers: { "content-type": "application/json" }, body: JSON.stringify({ rating, shortReview: book.review, readMonth: book.readMonth, readYear: book.readYear, readingStatus: book.readingStatus ?? "read", lastReadChapter: book.lastReadChapter, readingComment: book.readingComment, top3: Boolean(book.topRank), useExistingId: bookId }) });
-    if (!response.ok) { window.alert(t("library.ratingSaveError")); return; }
-    setBooks((current) => current.map((item) => canonicalBookId(item) === bookId ? { ...item, rating } : item));
+    try {
+      const data = await saveLibraryBook(`/api/books/${bookId}`, "PATCH", { rating });
+      setBooks((current) => current.map((item) => canonicalBookId(item) === bookId ? data.book : item));
+    } catch { window.alert(t("library.ratingSaveError")); }
   }
 
   async function saveBook(book: LibraryBook) {
+    const requestViewerId = Number(document.documentElement.dataset.bookMeetUserId);
+    announceLibraryMutationStart(requestViewerId);
     const bookId = canonicalBookId(book);
     const existingBook = books.some((item) => canonicalBookId(item) === bookId) || canonicalCatalog.some((item) => canonicalBookId(item) === bookId);
     const canonicalId = book.catalogBookId ?? (existingBook ? book.id : undefined);
-    const ownerFields = { rating: book.rating, shortReview: book.review, readMonth: book.readMonth, readYear: book.readYear, readingStatus: book.readingStatus ?? "read", lastReadChapter: book.lastReadChapter, readingComment: book.readingComment, top3: Boolean(book.topRank) };
+    const ownerFields = { ...buildReadingPatch(book), top3: Boolean(book.topRank) };
     const payload = canonicalId ? { ...ownerFields, useExistingId: canonicalId } : { userId, author: book.author, title: book.title, isbn: book.isbn, publisher: book.publisher, genres: book.genres, annotation: book.annotation, isAdult: book.isAdult, coverUrl: book.coverUrl, coverTone: book.coverTone, flipUrl: book.flipUrl, links: book.links?.map(({ label, url, action }) => ({ label, url, action })), format: "Книга", ...ownerFields };
     try {
       const editingOwnedBook = canonicalId !== undefined && books.some((item) => canonicalBookId(item) === canonicalId);
@@ -1267,8 +1416,10 @@ export function LibraryTab({ books, setBooks, userId, users, catalog = [], initi
         const failure = await response.json().catch(() => ({})) as { error?: string };
         throw new Error(failure.error || t("book.catalogSaveError"));
       }
-      const data = await response.json() as { bookId: number; topRank?: 1 | 2 | 3 };
-      const savedBook = { ...book, id: data.bookId ?? canonicalId ?? book.id, catalogBookId: canonicalId ?? data.bookId, topRank: data.topRank };
+      const data = await response.json() as unknown;
+      if (!isLibraryMutationResponse(data)) throw new Error(t("book.catalogSaveError"));
+      announceLibraryMutation(data, requestViewerId);
+      const savedBook = data.book;
       const relationId = canonicalId ?? book.id;
       setBooks((current) => current.some((item) => canonicalBookId(item) === relationId) ? current.map((item) => canonicalBookId(item) === relationId ? savedBook : item) : [savedBook, ...current]);
       setEditingBook(undefined);
@@ -1283,7 +1434,7 @@ export function LibraryTab({ books, setBooks, userId, users, catalog = [], initi
         <div className="library-import-actions"><button className="primary-button creation-action-button library-add-book-cta" type="button" onClick={() => { openMobileWorkflowRoute({ mode: "create", kind: "book" }); setEditingBook(null); }}>＋ {t("content.addBook")}</button></div>
       </div>
       <div className="library-toolbar">
-        <div className="library-status-filter" role="group" aria-label={t("library.statusFilter")}><button className={statusFilter === "want" ? "active" : ""} type="button" onClick={() => setStatusFilter("want")}>{t("content.want")}</button><button className={statusFilter === "reading" ? "active" : ""} type="button" onClick={() => setStatusFilter("reading")}>{t("content.reading")}</button><button className={statusFilter === "read" ? "active" : ""} type="button" onClick={() => setStatusFilter("read")}>{t("content.readDone")}</button></div>
+        <div className="library-status-filter" role="group" aria-label={t("library.statusFilter")}>{(["want", "reading", "read", "abandoned", "postponed"] as const).map((status) => <button key={status} className={statusFilter === status ? "active" : ""} type="button" onClick={() => setStatusFilter(status)}>{readingStatusLabel(status, currentLocale())}</button>)}</div>
         <div className="view-switcher" aria-label={t("library.view")}>
           <button className={view === "grid" ? "active" : ""} type="button" aria-pressed={view === "grid"} onClick={() => setView("grid")}>▦ {t("library.grid")}</button>
           <button className={view === "list" ? "active" : ""} type="button" aria-pressed={view === "list"} onClick={() => setView("list")}>☷ {t("library.list")}</button>
@@ -1295,6 +1446,7 @@ export function LibraryTab({ books, setBooks, userId, users, catalog = [], initi
             {book.topRank && <span className="top3-crown" aria-label={t("library.top3Place", { rank: book.topRank })}>♛<b>{book.topRank}</b></span>}
             <div className={`library-book-cover library-cover-${book.coverTone}`} style={book.coverUrl ? { backgroundImage: `url(${book.coverUrl})` } : undefined}>
               {!book.coverUrl && <><em>{book.author}</em><strong>{book.title}</strong><span>Book Meet</span></>}
+              {(book.readingStatus ?? "read") === "reading" && readingPercent(book) !== null && <small className="reading-progress-badge">{currentLocale() === "ru" ? "Прочитано" : currentLocale() === "kk" ? "Оқылды" : "Read"} {readingPercent(book)}%</small>}
             </div>
             <div className="library-book-copy">
               <h3>{book.title}</h3><p className="library-author">{book.author}</p>
@@ -1306,6 +1458,7 @@ export function LibraryTab({ books, setBooks, userId, users, catalog = [], initi
       </div>
       {editingBook !== undefined && <BookEditor book={editingBook} catalog={canonicalCatalog} top3Count={books.filter((item) => item.topRank).length} onClose={() => { setEditingBook(undefined); closeActiveMobileWorkflow("/profile/library"); }} onSave={saveBook} />}
        {viewingBook && <UnifiedBookModal book={viewingBook} viewer={viewer} users={users} catalog={canonicalCatalog} onClose={() => setViewingBook(null)} onEdit={() => { const id = canonicalBookId(viewingBook); openMobileWorkflowRoute({ mode: "edit", kind: "book", id }); setEditingBook(viewingBook); setViewingBook(null); }} onDelete={async () => { if (!window.confirm(t("library.deleteConfirm", { title: viewingBook.title }))) return; const id = canonicalBookId(viewingBook); const response = await apiFetch(`/api/books/${id}`, { method: "DELETE", credentials: "same-origin" }); if (!response.ok) { window.alert(t("book.deleteError")); return; } setBooks((current) => current.filter((book) => canonicalBookId(book) !== id)); setViewingBook(null); }} />}
+       {initialStatusId && books.find((book) => canonicalBookId(book) === initialStatusId) && <UnifiedBookModal book={books.find((book) => canonicalBookId(book) === initialStatusId)!} viewer={viewer} users={users} catalog={canonicalCatalog} retainWhenInactive initialStatusDialog onClose={() => closeActiveMobileWorkflow("/profile/library")} />}
        {statsOpen && <ReadingStatsModal books={books} users={users} viewer={viewer} catalog={canonicalCatalog} onClose={() => setStatsOpen(false)} />}
     </div>
   );
