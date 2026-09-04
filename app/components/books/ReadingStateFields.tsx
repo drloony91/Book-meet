@@ -1,6 +1,7 @@
 import { useState, type ChangeEvent } from "react";
 import { useI18n } from "../../i18n";
 import type { LibraryBook, ReadingStatus } from "../../types/domain";
+import { CustomSelect } from "../common/CustomSelect";
 
 export const readingStatuses: ReadingStatus[] = ["want", "reading", "read", "abandoned", "postponed"];
 
@@ -40,7 +41,7 @@ export function readingStatusLabel(status: ReadingStatus, locale: "ru" | "kk" | 
 
 export function ReadingStatusSelector({ value, onChange }: { value: ReadingStatus; onChange: (status: ReadingStatus) => void }) {
   const { locale, t } = useI18n();
-  return <label className="reading-status-select"><span>{t("library.bookStatus")}</span><select aria-label={t("library.bookStatus")} value={value} onChange={(event) => onChange(event.target.value as ReadingStatus)}>{readingStatuses.map((status) => <option key={status} value={status}>{readingStatusLabel(status, locale)}</option>)}</select></label>;
+  return <div className="reading-status-select"><span>{t("library.bookStatus")}</span><CustomSelect ariaLabel={t("library.bookStatus")} value={value} onChange={onChange} options={readingStatuses.map((status) => ({ value: status, label: readingStatusLabel(status, locale) }))} /></div>;
 }
 
 /**
@@ -65,7 +66,7 @@ export function ReadingStateFields({ value, onChange, includeStatus = false }: {
   return <div className={`reading-state-fields ${status === "postponed" && value.postponedOverdue ? "postponed-overdue-fields" : ""}`}>
     {includeStatus && <ReadingStatusSelector value={status} onChange={changeStatus} />}
     {status === "reading" && <>
-      <fieldset><legend>{locale === "ru" ? "Прогресс" : locale === "kk" ? "Прогресс" : "Progress"}</legend>
+      <fieldset><legend className="visually-hidden">{locale === "ru" ? "Прогресс" : locale === "kk" ? "Прогресс" : "Progress"}</legend>
         <div className="reading-unit-tabs" role="group" aria-label={locale === "ru" ? "Единица прогресса" : locale === "kk" ? "Прогресс бірлігі" : "Progress unit"}><button type="button" aria-pressed={shownUnit === "chapters"} className={shownUnit === "chapters" ? "active" : ""} onClick={() => setShownUnit("chapters")}>{locale === "ru" ? "Главы" : locale === "kk" ? "Тараулар" : "Chapters"}</button><button type="button" aria-pressed={shownUnit === "pages"} className={shownUnit === "pages" ? "active" : ""} onClick={() => setShownUnit("pages")}>{locale === "ru" ? "Страницы" : locale === "kk" ? "Беттер" : "Pages"}</button></div>
         {shownUnit === "chapters" ? <div className="form-row"><label>{locale === "ru" ? "Главы: прочитано" : locale === "kk" ? "Тараулар: оқылған" : "Chapters: current"}<input title={t("library.chaptersRead")} min={0} max={UINT32_MAX} step={1} inputMode="numeric" type="number" value={value.chaptersCurrent ?? ""} onChange={updatePair("chaptersCurrent")} /></label><label>{locale === "ru" ? "Главы: всего" : locale === "kk" ? "Тараулар: барлығы" : "Chapters: total"}<input min={1} max={UINT32_MAX} step={1} inputMode="numeric" type="number" value={value.chaptersTotal ?? ""} onChange={updatePair("chaptersTotal")} /></label></div> : <div className="form-row"><label>{locale === "ru" ? "Страницы: прочитано" : locale === "kk" ? "Беттер: оқылған" : "Pages: current"}<input min={0} max={UINT32_MAX} step={1} inputMode="numeric" type="number" value={value.pagesCurrent ?? ""} onChange={updatePair("pagesCurrent")} /></label><label>{locale === "ru" ? "Страницы: всего" : locale === "kk" ? "Беттер: барлығы" : "Pages: total"}<input min={1} max={UINT32_MAX} step={1} inputMode="numeric" type="number" value={value.pagesTotal ?? ""} onChange={updatePair("pagesTotal")} /></label></div>}
       </fieldset>

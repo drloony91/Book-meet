@@ -22,8 +22,8 @@ export function sortBookReaders(entries: ReaderEntry[], viewerBook?: LibraryBook
   // choosing the next book by its saved current progress, not by that history.
   const mode = status === "read" ? "completed" : (status === "reading" || status === "abandoned" || status === "postponed") && viewerPercent !== null ? "nearest" : "want";
   const kind = (item: LibraryBook) => item.readingStatus === "reading" ? 1 : completed(item) ? 2 : item.readingStatus === "want" ? 3 : 4;
-  const order = mode === "completed" ? [2, 1, 3] : mode === "nearest" ? [1, 2, 3] : [3, 1, 2];
-  return entries.map((entry, index) => ({ entry, index })).filter(({ entry }) => kind(entry.item) < 4).sort((a, b) => {
+  const order = mode === "completed" ? [2, 1, 3, 4] : mode === "nearest" ? [1, 2, 3, 4] : [3, 1, 2, 4];
+  return entries.map((entry, index) => ({ entry, index })).sort((a, b) => {
     const aKind = kind(a.entry.item); const bKind = kind(b.entry.item);
     if (order.indexOf(aKind) !== order.indexOf(bKind)) return order.indexOf(aKind) - order.indexOf(bKind);
     if (aKind === 1) {

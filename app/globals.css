@@ -1538,55 +1538,6 @@ select option {
 .suspension-screen h1 { margin:0 0 18px; font:700 34px/1.15 Georgia,serif; }
 @media (max-width:760px) { .blocked-user-grid,.admin-user-directory.grid,.admin-user-status-buttons { grid-template-columns:1fr; } .admin-report-list>button { grid-template-columns:1fr; gap:5px; } }
 
-/* Final segmented-control overrides: the indicator uses each active button's real width. */
-.library-status-filter,
-.book-reading-status,
-.profile-social-switch,
-.view-switcher {
-  --segment-left: 3px;
-  --segment-width: 0px;
-  position: relative;
-  display: inline-flex;
-}
-
-.library-status-filter::before,
-.book-reading-status::before,
-.profile-social-switch::before,
-.view-switcher::before {
-  right: auto;
-  left: 0;
-  width: var(--segment-width);
-  transform: translateX(var(--segment-left));
-  transition:
-    width .34s cubic-bezier(.22, .8, .3, 1),
-    transform .34s cubic-bezier(.22, .8, .3, 1);
-}
-
-.library-status-filter:has(button:nth-child(2).active)::before,
-.book-reading-status:has(button:nth-child(2).active)::before,
-.profile-social-switch:has(button:nth-child(2).active)::before,
-.view-switcher:has(button:nth-child(2).active)::before,
-.library-status-filter:has(button:nth-child(3).active)::before,
-.book-reading-status:has(button:nth-child(3).active)::before {
-  transform: translateX(var(--segment-left));
-}
-
-.library-status-filter button.active,
-.book-reading-status button.active,
-.profile-social-switch button.active,
-.view-switcher button.active {
-  background: transparent;
-  box-shadow: none;
-}
-
-/* Five reading states use the same compact control without inheriting the
-   historical three-column indicator assumptions. */
-.library-status-filter { grid-template-columns: repeat(5, minmax(0, 1fr)); }
-.library-status-filter::before { width: calc((100% - 6px) / 5); }
-.library-status-filter:has(button:nth-child(2).active)::before { transform: translateX(100%); }
-.library-status-filter:has(button:nth-child(3).active)::before { transform: translateX(200%); }
-.library-status-filter:has(button:nth-child(4).active)::before { transform: translateX(300%); }
-.library-status-filter:has(button:nth-child(5).active)::before { transform: translateX(400%); }
 .reading-state-fields { display: grid; gap: 12px; margin-top: 10px; }
 .reading-unit-tabs { display: inline-flex; gap: 4px; margin: 0 0 8px; }
 .reading-unit-tabs button { border: 1px solid var(--line); border-radius: 7px; padding: 5px 8px; background: #fff; cursor: pointer; }
@@ -1875,13 +1826,6 @@ select option {
 }
 
 /* The same sliding selection used by the home country/city switch. */
-.library-status-filter,
-.book-reading-status {
-  position: relative;
-  display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-}
-
 .profile-social-switch,
 .view-switcher {
   position: relative;
@@ -1889,8 +1833,6 @@ select option {
   grid-template-columns: repeat(2, minmax(0, 1fr));
 }
 
-.library-status-filter::before,
-.book-reading-status::before,
 .profile-social-switch::before,
 .view-switcher::before {
   position: absolute;
@@ -1905,38 +1847,22 @@ select option {
   transition: transform .32s cubic-bezier(.22, .8, .3, 1);
 }
 
-.library-status-filter::before,
-.book-reading-status::before {
-  width: calc((100% - 6px) / 3);
-}
-
 .profile-social-switch::before,
 .view-switcher::before {
   width: calc((100% - 6px) / 2);
 }
 
-.library-status-filter:has(button:nth-child(2).active)::before,
-.book-reading-status:has(button:nth-child(2).active)::before,
 .profile-social-switch:has(button:nth-child(2).active)::before,
 .view-switcher:has(button:nth-child(2).active)::before {
   transform: translateX(100%);
 }
 
-.library-status-filter:has(button:nth-child(3).active)::before,
-.book-reading-status:has(button:nth-child(3).active)::before {
-  transform: translateX(200%);
-}
-
-.library-status-filter button,
-.book-reading-status button,
 .profile-social-switch button,
 .view-switcher button {
   position: relative;
   z-index: 1;
 }
 
-.library-status-filter button.active,
-.book-reading-status button.active,
 .profile-social-switch button.active,
 .view-switcher button.active {
   background: transparent;
@@ -1964,9 +1890,7 @@ select option {
   margin-top: 14px;
 }
 
-/* The indicator follows the selected segment's measured position and width. */
-.library-status-filter,
-.book-reading-status,
+/* The indicator follows the selected social/view segment's measured width. */
 .profile-social-switch,
 .view-switcher {
   --segment-left: 3px;
@@ -1975,8 +1899,6 @@ select option {
   display: inline-flex;
 }
 
-.library-status-filter::before,
-.book-reading-status::before,
 .profile-social-switch::before,
 .view-switcher::before {
   right: auto;
@@ -1988,12 +1910,8 @@ select option {
     transform .34s cubic-bezier(.22, .8, .3, 1);
 }
 
-.library-status-filter:has(button:nth-child(2).active)::before,
-.book-reading-status:has(button:nth-child(2).active)::before,
 .profile-social-switch:has(button:nth-child(2).active)::before,
-.view-switcher:has(button:nth-child(2).active)::before,
-.library-status-filter:has(button:nth-child(3).active)::before,
-.book-reading-status:has(button:nth-child(3).active)::before {
+.view-switcher:has(button:nth-child(2).active)::before {
   transform: translateX(var(--segment-left));
 }
 
@@ -2543,6 +2461,179 @@ select option {
 
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { scroll-behavior: auto !important; animation-duration: .01ms !important; transition-duration: .01ms !important; }
+}
+
+/* Library status is a five-option control. Keep the active state on the
+   button itself so it cannot drift away from the selected option. */
+.library-tab .library-status-filter {
+  display: grid;
+  width: 100%;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 4px;
+}
+
+.library-tab .library-status-filter button {
+  min-width: 0;
+  min-height: 38px;
+  overflow: visible;
+  padding: 6px 8px;
+  color: #51708e;
+  background: transparent;
+  font-size: 11px;
+  line-height: 1.15;
+  text-align: center;
+  text-overflow: clip;
+  white-space: normal;
+}
+
+.library-tab .library-status-filter button.active {
+  color: #fff;
+  background: var(--action-blue, var(--blue));
+  box-shadow: 0 4px 12px rgba(23, 105, 210, .24);
+}
+
+.reading-status-select {
+  display: grid;
+  gap: 7px;
+  min-width: 0;
+  color: #8d857e;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: .7px;
+  text-transform: uppercase;
+}
+
+.library-editor-status {
+  width: 100%;
+  margin: 0 0 12px;
+}
+
+.library-editor-status .reading-status-select {
+  grid-template-columns: minmax(190px, auto) minmax(0, 1fr);
+  align-items: center;
+  column-gap: 14px;
+}
+
+.library-editor-status .custom-select {
+  min-width: 0;
+}
+
+.book-personal-state,
+.book-status-dialog {
+  --reading-field-border: #cfd9e6;
+}
+
+.book-personal-state {
+  display: grid;
+  gap: 8px;
+  margin: 12px 0;
+  padding: 10px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: #fafcff;
+}
+
+.book-personal-state-heading {
+  display: flex;
+  min-height: 1.2em;
+  justify-content: flex-end;
+  gap: 10px;
+}
+
+.book-personal-state .reading-state-fields,
+.book-status-dialog .reading-state-fields {
+  gap: 8px;
+  margin-top: 0;
+}
+
+.book-personal-state .reading-state-fields > label,
+.book-status-dialog .reading-state-fields > label {
+  display: grid;
+  gap: 5px;
+}
+
+.book-personal-state fieldset,
+.book-status-dialog fieldset {
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+
+.book-personal-state input,
+.book-personal-state textarea,
+.book-status-dialog input,
+.book-status-dialog textarea {
+  box-sizing: border-box;
+  width: 100%;
+  border: 1px solid var(--reading-field-border);
+  border-radius: 9px;
+  padding: 9px 10px;
+  outline: 0;
+  color: var(--ink);
+  background: #fff;
+}
+
+.book-personal-state textarea,
+.book-status-dialog textarea {
+  resize: vertical;
+  line-height: 1.45;
+}
+
+.book-personal-state input:focus,
+.book-personal-state textarea:focus,
+.book-status-dialog input:focus,
+.book-status-dialog textarea:focus {
+  border-color: #9bbddd;
+  box-shadow: 0 0 0 3px var(--blue-soft);
+}
+
+.modal-icon-actions .book-status-action {
+  min-width: 158px;
+  width: auto;
+  max-width: 250px;
+  min-height: 40px;
+  padding: 8px 15px;
+  border-radius: var(--action-radius);
+  font-size: 13px;
+  font-weight: 800;
+  line-height: 1.15;
+  white-space: normal;
+}
+
+@media (max-width: 800px) {
+  .library-tab .library-status-filter {
+    grid-template-columns: repeat(6, minmax(0, 1fr));
+  }
+
+  .library-tab .library-status-filter button {
+    grid-column: span 2;
+    min-height: 42px;
+    padding: 6px 4px;
+    font-size: clamp(9px, 2.7vw, 11px);
+  }
+
+  .library-tab .library-status-filter button:nth-child(4) {
+    grid-column: 2 / span 2;
+  }
+
+  .library-tab .library-status-filter button:nth-child(5) {
+    grid-column: 4 / span 2;
+  }
+
+  .library-editor-status .reading-status-select {
+    grid-template-columns: minmax(0, 1fr);
+    row-gap: 7px;
+  }
+
+  .modal-icon-actions .book-status-action {
+    flex: 1 1 auto;
+    min-width: 150px;
+    max-width: none;
+    min-height: 42px;
+    padding-inline: 12px;
+    font-size: 13px;
+  }
 }
 /* Events, moderation and support */
 .friends-heading { align-items: flex-start; gap: 10px; }

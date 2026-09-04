@@ -3,6 +3,7 @@ import { expect, loginAs, test } from "./fixtures";
 
 const year = new Date().getFullYear();
 const completed = { readingStatus: "read", rating: 4.5, shortReview: "Первое завершение", readMonth: 1, readYear: year };
+const statusLabels: Record<string, string> = { want: "Хочу прочитать", reading: "Читаю", read: "Прочитано", abandoned: "Брошено", postponed: "Отложено" };
 
 async function state(page: Page) {
   const response = await page.request.get("/api/bootstrap/catalog");
@@ -27,7 +28,10 @@ async function chooseStatus(page: Page, status: string) {
   await page.getByTestId("book-status-action").click();
   const dialog = page.getByTestId("book-status-dialog");
   await expect(dialog).toBeVisible();
-  await dialog.getByRole("combobox", { name: /Статус/ }).selectOption(status);
+  const control = dialog.getByRole("combobox", { name: /Статус/ });
+  await control.click();
+  await dialog.getByRole("option", { name: statusLabels[status], exact: true }).click();
+  await expect(dialog.getByRole("listbox")).toHaveCount(0);
   return dialog;
 }
 
@@ -70,6 +74,7 @@ test("five reading statuses require explicit Save, read fields are required, Can
     await expect(dialog).toBeHidden();
     await page.reload();
     await expect(page.getByTestId("book-status-action")).toHaveText(label);
+    if (status === "want") await expect(page.getByTestId("book-personal-state")).toHaveCount(0);
     expect((await savedBook(page)).readingStatus).toBe(status);
   }
   expect((await state(page)).readingHistory.length).toBe(2);
@@ -184,7 +189,9 @@ test("status workflow supports direct mobile entry and Back cancels without chan
   await page.getByTestId("book-status-action").click();
   const dialog = page.getByTestId("book-status-dialog");
   await expect(dialog).toBeVisible();
-  await dialog.getByRole("combobox", { name: /Статус/ }).selectOption("want");
+  const control = dialog.getByRole("combobox", { name: /Статус/ });
+  await control.click();
+  await dialog.getByRole("option", { name: statusLabels.want, exact: true }).click();
   if (testInfo.project.name === "mobile") {
     await expect(page).toHaveURL(/\/edit\/book-status\/24$/);
     await page.goBack();
@@ -194,7 +201,7 @@ test("status workflow supports direct mobile entry and Back cancels without chan
   if (testInfo.project.name === "mobile") {
     await page.goto("/edit/book-status/24");
     await expect(dialog).toBeVisible();
-    await expect(dialog.getByRole("combobox", { name: /Статус/ })).toHaveValue("reading");
+    await expect(dialog.getByRole("combobox", { name: /Статус/ })).toHaveText(statusLabels.reading);
     await dialog.getByRole("button", { name: "Отмена", exact: true }).click();
     await expect(dialog).toBeHidden();
     expect((await savedBook(page)).readingStatus).toBe("reading");
@@ -246,7 +253,7 @@ test("an unrelated SSE refresh cannot replace an unsaved status dialog draft", a
   const mutation = await page.request.post("/api/books", { data: { useExistingId: other.id, readingStatus: "want" } });
   expect(mutation.ok()).toBeTruthy();
   await refreshed;
-  await expect(dialog.getByRole("combobox", { name: /Статус/ })).toHaveValue("abandoned");
+  await expect(dialog.getByRole("combobox", { name: /Статус/ })).toHaveText(statusLabels.abandoned);
   await expect(dialog.getByLabel(/Краткий отзыв/)).toHaveValue("Несохранённое решение");
   await dialog.getByRole("button", { name: "Отмена", exact: true }).click();
   expect((await savedBook(page)).readingStatus).toBe("reading");

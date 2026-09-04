@@ -116,3 +116,26 @@ test("desktop profile dialogs and directory controls keep the correction contrac
   assert.match(messages, /"friends\.incomingShort": "Входящие запросы"/);
   assert.match(messages, /"friends\.outgoingShort": "Исходящие запросы"/);
 });
+
+test("library reading controls keep all statuses accessible and responsive", async () => {
+  const [content, fields, css, messages] = await Promise.all([
+    readFile(path.join(root, "app", "components", "content", "ContentComponents.tsx"), "utf8"),
+    readFile(path.join(root, "app", "components", "books", "ReadingStateFields.tsx"), "utf8"),
+    readFile(path.join(root, "app", "globals.css"), "utf8"),
+    readFile(path.join(root, "app", "i18n", "messages.ts"), "utf8"),
+  ]);
+  assert.match(content, /\(\["want", "reading", "read", "abandoned", "postponed"\] as const\)\.map/);
+  assert.match(content, /inlineDraft\.readingStatus !== "want" && <section data-testid="book-personal-state"/);
+  assert.match(fields, /return <div className="reading-status-select">/);
+  assert.match(fields, /<CustomSelect ariaLabel=\{t\("library\.bookStatus"\)\}/);
+  assert.match(fields, /options=\{readingStatuses\.map/);
+  assert.match(fields, /<legend className="visually-hidden">/);
+  assert.doesNotMatch(css, /\.library-status-filter::before/);
+  assert.match(css, /\.library-tab \.library-status-filter[\s\S]*grid-template-columns: repeat\(5, minmax\(0, 1fr\)\)/);
+  assert.match(css, /@media \(max-width: 800px\)[\s\S]*\.library-tab \.library-status-filter[\s\S]*grid-template-columns: repeat\(6, minmax\(0, 1fr\)/);
+  assert.match(css, /\.library-tab \.library-status-filter button:nth-child\(4\)[\s\S]*grid-column: 2 \/ span 2/);
+  assert.match(css, /\.modal-icon-actions \.book-status-action[\s\S]*min-width: 158px/);
+  assert.match(css, /\.modal-icon-actions \.book-status-action[\s\S]*border-radius: var\(--action-radius\)/);
+  assert.match(messages, /"book\.readers": "Читатели"/);
+  assert.match(messages, /"book\.readers": "Оқырмандар"/);
+});

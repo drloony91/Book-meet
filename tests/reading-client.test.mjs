@@ -42,9 +42,9 @@ test("wanting, absent or progress-less viewer sees wanting then ascending progre
 test("paused viewer uses retained zero progress and historical completions remain readers", () => {
   const list = [entry(1, "А", "want"), entry(2, "Б", "read"), entry(3, "В", "reading", 80), entry(4, "Г", "reading", 5), entry(5, "Д", "abandoned", undefined, true), entry(6, "Е", "postponed", undefined, true), entry(7, "Ж", "abandoned"), entry(8, "З", "postponed")];
   for (const status of ["abandoned", "postponed"]) {
-    assert.deepEqual(ids(list, { readingStatus: status, progressPercent: 0 }), [4, 3, 2, 5, 6, 1]);
-    assert.deepEqual(ids(list, { readingStatus: status, progressPercent: 0, hasCompletedReading: true }), [4, 3, 2, 5, 6, 1], "historical completion does not override a paused viewer's retained progress");
-    assert.deepEqual(ids(list, { readingStatus: status, hasCompletedReading: true }), [1, 4, 3, 2, 5, 6], "paused viewer without progress uses want ordering even after an earlier completion");
+    assert.deepEqual(ids(list, { readingStatus: status, progressPercent: 0 }), [4, 3, 2, 5, 6, 1, 7, 8]);
+    assert.deepEqual(ids(list, { readingStatus: status, progressPercent: 0, hasCompletedReading: true }), [4, 3, 2, 5, 6, 1, 7, 8], "historical completion does not override a paused viewer's retained progress");
+    assert.deepEqual(ids(list, { readingStatus: status, hasCompletedReading: true }), [1, 4, 3, 2, 5, 6, 7, 8], "paused viewer without progress uses want ordering even after an earlier completion");
   }
 });
 
