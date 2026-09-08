@@ -16,7 +16,7 @@ test("mobile entities and long workflows own full-page routed surfaces", async (
   ]);
 
   assert.match(routes, /MobileWorkflowKind/);
-  assert.match(routes, /\^\\\/\(create\|edit\)\\\/\(review\|publication\|event\|occasion\|book\|book-status\|news\)/);
+  assert.match(routes, /\^\\\/\(create\|edit\)\\\/\(review\|publication\|event\|occasion\|book\|book-status\|news\|reading-goal\|shelf\)/);
   assert.match(routes, /MobileWorkflowRouteState/);
   assert.match(routes, /"publisher-news"/);
   assert.match(routes, /pattern: \/\^\\\/publishing\\\/\(\\d\+\)\$\/, kind: "publisher-news"/);
@@ -24,7 +24,8 @@ test("mobile entities and long workflows own full-page routed surfaces", async (
   assert.match(controller, /openMobileWorkflow\(\{ mode: "create", kind: "event" \}\)/);
   assert.match(controller, /openMobileWorkflow\(\{ mode: "edit", kind: "occasion", id: item\.id \}\)/);
   assert.match(controller, /if \(!routeData\.activeUserId\) return;/);
-  assert.match(controller, /workflow\.kind === "book" && \["Издатель", "Сообщество"\]\.includes\(viewer\.profile\.type\)/);
+  assert.match(controller, /\(workflow\.kind === "book" \|\| workflow\.kind === "reading-goal"\) && \["Издатель", "Сообщество"\]\.includes\(viewer\.profile\.type\)/);
+  assert.match(controller, /workflow\.kind === "shelf"[\s\S]*\["Издатель", "Сообщество"\]\.includes\(viewer\.profile\.type\)/);
   assert.match(controller, /item\.creatorId === viewer\.id \|\| viewer\.isAdmin/);
   assert.match(content, /entity-page-backdrop/);
   assert.match(content, /useRoutedPopup\(`\/publishing\/\$\{item\.id\}`.*mobileRoute && routed\)/);

@@ -73,6 +73,11 @@ export function searchBootstrapMaterials(bootstrap, rawQuery, options = {}) {
     }
   }
 
+  for (const shelf of bootstrap?.shelves ?? []) {
+    if (!matches(parsed.words, [shelf.title, shelf.description, ...(shelf.items ?? []).flatMap((item) => [item.book?.title, item.book?.author])])) continue;
+    entries.push({ kind: "shelf", id: Number(shelf.id), ownerId: Number(shelf.ownerId), owner: ownerSummary({ ...shelf.owner, profile: { name: shelf.owner?.name ?? "" } }), createdAt: shelf.createdAt, item: { ...shelf, kind: "shelf", author: shelf.owner?.name ?? "", linkedBookIds: (shelf.items ?? []).map((item) => item.bookId).filter(Boolean) } });
+  }
+
   for (const event of bootstrap?.events ?? []) {
     if (!(event.status === "published" || Number(event.creatorId) === activeUserId)) continue;
     if (!matches(parsed.words, [event.title, event.summary, event.description, event.city, event.address])) continue;

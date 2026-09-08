@@ -101,6 +101,48 @@ test("demo reading API shares production state, history and privacy contracts", 
       assert.equal(user.readingHistory.filter((entry) => entry.bookId === bookId).length, 2);
       assert.equal(state.books.some((book) => book.id === bookId), true);
     });
+    await t.test("goals are private, validate periods and return server-computed statistics", async () => {
+      const created = await call(owner, "POST", "/reading-goals", { goalKind: "month", targetYear: year, targetMonth: new Date().getUTCMonth() + 1, targetCount: 2 }, 201);
+      assert.equal(created.goal.targetCount, 2);
+      await call(owner, "POST", "/reading-goals", { goalKind: "month", targetYear: year, targetMonth: new Date().getUTCMonth() + 1, targetCount: 2 }, 409);
+      const changed = await call(owner, "PATCH", `/reading-goals/${created.goal.id}`, { targetCount: 3 });
+      assert.equal(changed.goal.targetCount, 3);
+      const statistics = await call(owner, "GET", `/reading-statistics?year=${year}`);
+      assert.equal(statistics.goals[0].projection.target, 3);
+      const peer = await login(4);
+      assert.deepEqual((await call(peer, "GET", "/reading-goals")).goals, []);
+      assert.equal(Object.hasOwn((await call(peer, "GET", "/bootstrap")).users.find((user) => user.id === 3), "readingGoals"), false);
+      await call(owner, "DELETE", `/reading-goals/${created.goal.id}`);
+    });
+    await t.test("notes keep frozen progress, enforce the spoiler gate, and reset after report moderation", async () => {
+      await call(null, "POST", "/__test__/reset");
+      const adminAuthor = await login(1);
+      const viewer = await login(3);
+      const bookId = 24;
+      await call(adminAuthor, "POST", "/books", { useExistingId: bookId, readingStatus: "reading", chaptersCurrent: 41, chaptersTotal: 100, progressUnit: "chapters" }, 201);
+      const created = await call(adminAuthor, "POST", `/books/${bookId}/notes`, { body: "Секрет на сорок первом проценте" }, 201);
+      assert.equal(created.note.progressPercent, 41);
+      await call(viewer, "PATCH", `/books/${bookId}`, { readingStatus: "reading", chaptersCurrent: 40, chaptersTotal: 100, progressUnit: "chapters" });
+      const gated = await call(viewer, "GET", `/books/${bookId}/notes?scope=all`);
+      assert.equal(gated.notes.some((note) => note.id === created.note.id), false);
+      await call(viewer, "PATCH", `/books/${bookId}`, { readingStatus: "read", rating: 4, shortReview: "Прочитано", readMonth: 1, readYear: year });
+      assert.equal((await call(viewer, "GET", `/books/${bookId}/notes?scope=all`)).notes[0].id, created.note.id);
+      const report = await call(viewer, "POST", "/reports", { targetKind: "book_note", targetId: created.note.id, reason: "Проверка заметки" }, 201);
+      await call(adminAuthor, "POST", `/admin/reports/${report.id}/delete-material`, { reason: "Удалено модератором" });
+      assert.deepEqual((await call(adminAuthor, "GET", `/books/${bookId}/notes?scope=mine`)).notes, []);
+      await call(null, "POST", "/__test__/reset");
+      assert.deepEqual((await call(await login(1), "GET", `/books/${bookId}/notes?scope=mine`)).notes, []);
+    });
+    await t.test("shelves preserve ordered own-library books and batch additions", async () => {
+      await call(null, "POST", "/__test__/reset");
+      const shelfOwner = await login(3); const shelfViewer = await login(4);
+      const created = await call(shelfOwner, "POST", "/shelves", { title: "Демо-полка", description: "Проверка", items: [{ bookId: 24, description: "Первая" }] }, 201);
+      assert.equal(created.shelf.items[0].position, 0);
+      assert.equal((await call(shelfViewer, "GET", `/users/3/shelves`)).shelves[0].id, created.shelf.id);
+      const added = await call(shelfViewer, "POST", `/shelves/${created.shelf.id}/add-to-library`, {});
+      assert.equal(added.addedCount, 1); assert.equal(added.addedBooks[0].readingStatus, "want");
+      assert.equal((await call(shelfViewer, "POST", `/shelves/${created.shelf.id}/add-to-library`, {})).skippedExistingCount, 1);
+    });
   } finally {
     server.closeAllConnections();
     await new Promise((resolve) => server.close(resolve));

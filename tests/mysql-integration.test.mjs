@@ -126,6 +126,10 @@ test("MySQL production migrations, seed and critical relational behavior", async
     "user_books.chapters_current",
     "user_books.postponed_timezone",
     "reading_cycles.active_slot",
+    "book_progress_notes.progress_percent",
+    "user_hides.hidden_user_id",
+    "book_shelves.owner_user_id",
+    "book_shelf_items.book_id",
   ]) assert.ok(columns.has(column), `missing late-schema column ${column}`);
 
   const [foreignKeys] = await rootPool.query(
@@ -135,7 +139,7 @@ test("MySQL production migrations, seed and critical relational behavior", async
     [databaseName],
   );
   const rules = new Set(foreignKeys.map((row) => `${row.TABLE_NAME ?? row.table_name}->${row.REFERENCED_TABLE_NAME ?? row.referenced_table_name}:${row.DELETE_RULE ?? row.delete_rule}`));
-  for (const rule of ["profiles->users:CASCADE", "messages->users:SET NULL", "chat_history_clears->users:CASCADE", "legal_acceptances->legal_documents:RESTRICT"]) {
+  for (const rule of ["profiles->users:CASCADE", "messages->users:SET NULL", "chat_history_clears->users:CASCADE", "legal_acceptances->legal_documents:RESTRICT", "book_progress_notes->reading_cycles:SET NULL", "book_progress_notes->users:CASCADE", "user_hides->users:CASCADE", "book_shelves->users:CASCADE", "book_shelf_items->book_shelves:CASCADE", "book_shelf_items->books:SET NULL"]) {
     assert.ok(rules.has(rule), `missing foreign-key rule ${rule}`);
   }
 
@@ -212,7 +216,21 @@ test("MySQL production migrations, seed and critical relational behavior", async
   await rootPool.query("DELETE FROM users WHERE id = ?", [setNullUserId]);
   const [[setNullBook]] = await rootPool.query("SELECT creator_user_id FROM books WHERE id = ?", [bookResult.insertId]);
   assert.equal(setNullBook.creator_user_id, null, "ON DELETE SET NULL must preserve canonical books");
+  const noteUserId = await insertUser("note-relations-user");
+  const [noteBook] = await rootPool.query("INSERT INTO books (author, author_key, title, title_key, genres, annotation) VALUES ('Note', 'note', 'Note relation', 'note relation', '[]', '')");
+  const [noteCycle] = await rootPool.query("INSERT INTO reading_cycles (user_id, book_id, status) VALUES (?, ?, 'active')", [noteUserId, noteBook.insertId]);
+  const [note] = await rootPool.query("INSERT INTO book_progress_notes (user_id, book_id, reading_cycle_id, body, progress_unit, progress_current, progress_total, progress_percent) VALUES (?, ?, ?, 'relation', 'chapters', 1, 4, 25)", [noteUserId, noteBook.insertId, noteCycle.insertId]);
+  await assert.rejects(rootPool.query("INSERT INTO user_hides (hider_user_id, hidden_user_id) VALUES (?, ?)", [noteUserId, noteUserId]), /check/i, "a user cannot hide themself");
+  await rootPool.query("DELETE FROM reading_cycles WHERE id = ?", [noteCycle.insertId]);
+  const [[noteAfterCycle]] = await rootPool.query("SELECT reading_cycle_id FROM book_progress_notes WHERE id = ?", [note.insertId]);
+  assert.equal(noteAfterCycle.reading_cycle_id, null, "deleting a cycle must retain the frozen note");
+  await rootPool.query("DELETE FROM books WHERE id = ?", [noteBook.insertId]);
+  const [[noteAfterBook]] = await rootPool.query("SELECT COUNT(*) AS count FROM book_progress_notes WHERE id = ?", [note.insertId]);
+  assert.equal(Number(noteAfterBook.count), 0, "book deletion must cascade to notes");
   assertSucceeded(runNode("tests/reading-http-mysql.mjs"), "TZ2 authenticated HTTP transaction and privacy matrix");
+  assertSucceeded(runNode("tests/reading-goals-http-mysql.mjs"), "TZ3 goals authenticated HTTP, privacy, uniqueness and cascade");
+  assertSucceeded(runNode("tests/book-progress-notes-http-mysql.mjs"), "TZ3 notes authenticated HTTP, spoiler/privacy and moderation matrix");
+  assertSucceeded(runNode("tests/book-shelves-http-mysql.mjs"), "TZ3 shelves authenticated HTTP, visibility, material actions and atomic batch matrix");
 });
 
 test("039 upgrades populated legacy libraries without losing unknown completion dates", async () => {

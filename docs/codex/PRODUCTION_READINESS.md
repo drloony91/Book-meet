@@ -17,7 +17,17 @@
 - [x] На staging проверены SSE connect/reconnect/no-buffering и только безопасные SMTP/Google/Telegram smoke.
 - [x] После smoke и restart в application/Plesk logs нет новых 5xx, unhandled, DB, auth или upload errors.
 - [x] Подготовлен и, где безопасно, отрепетирован rollback кода/process; для DB указано, где возможен только restore backup, включая partial DDL.
-- [ ] Production deployment отдельно и явно разрешён пользователем после итогового verdict.
+- [x] Production deployment отдельно и явно разрешён пользователем после итогового verdict (2026-09-08).
+
+## Goals, progress notes and book shelves (queue 3) — 2026-09-08 release candidate
+
+Verdict: **LOCAL RELEASE GATES PASS; PRODUCTION DEPLOYMENT AUTHORIZED**. Deployment must use the exact committed artifact, coordinated backup, migration stop gates and post-restart smoke below.
+
+- Candidate schema: append-only `040_reading_goals.sql`, `041_book_progress_notes.sql` and `042_book_shelves.sql`. Goals are private; note bodies are server-filtered by frozen progress and viewer-aware privacy; public shelves apply block/hide/age rules and participate in the existing material-action and moderation flows.
+- Local evidence: `pnpm verify` passed the production build and 170/170 Node tests; `pnpm verify:db` passed 3/3 top-level disposable-MySQL tests including authenticated queue-3 HTTP matrices and removed its resources; the full desktop/mobile Playwright run passed 77 scenarios with 3 expected cross-viewport skips; `pnpm audit --audit-level=high` found four moderate findings and no high/critical finding; generated documentation and `git diff --check` passed.
+- Visual evidence: desktop and mobile screenshots were inspected for goals, inline notes, owner shelf detail and foreign shelf detail, including material actions, comments and batch-add feedback.
+- Current production before this deployment remains commit `8efb4205446edeac5d48cf91961fa74c7dbaf179` with 39 applied migrations. No seed, credential rotation or external Telegram/SMTP delivery belongs to this release.
+- Stop gates: verify the release commit and SHA-256, create and off-host-verify the coordinated DB/uploads/current-release/redacted-environment backup, then run migration status → apply → status → no-op → status with zero unresolved attempts before restart.
 
 ## Reading state (queue 2) — 2026-09-04, release candidate
 

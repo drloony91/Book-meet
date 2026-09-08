@@ -1,16 +1,18 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { EventCard, MaterialPreviewCard, OccasionCard } from "../components/content/ContentComponents";
+import { BookShelfCard, isBookShelf } from "../components/books/BookShelves";
+import type { BookShelf } from "../types/shelves";
 import { useI18n } from "../i18n";
 import { apiFetch } from "../services/api";
 import type { BookEvent, DemoUser, Occasion, ReadingItem } from "../types/domain";
 
-type SearchKind = "review" | "excerpt" | "event" | "occasion";
+type SearchKind = "review" | "excerpt" | "event" | "occasion" | "shelf";
 export type SearchEntry = {
   kind: SearchKind;
   id: number;
   ownerId: number;
   createdAt: string;
-  item: ReadingItem | BookEvent | Occasion;
+  item: ReadingItem | BookEvent | Occasion | BookShelf;
 };
 type SearchResponse = { page: number; hasMore: boolean; items: SearchEntry[] };
 
@@ -157,6 +159,7 @@ export function MobileGlobalSearchPage({ userId, initialQuery, users, likes, sav
     replaceSearchUrl(value);
   };
   const renderEntry = (entry: SearchEntry, index: number) => {
+    if (entry.kind === "shelf") return isBookShelf(entry.item) ? <BookShelfCard key={`shelf-${entry.id}`} shelf={entry.item} /> : null;
     const owner = users.find((user) => user.id === entry.ownerId);
     const source = entry.item;
     const actionItem: ReadingItem = entry.kind === "event"

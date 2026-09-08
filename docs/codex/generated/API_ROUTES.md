@@ -49,10 +49,14 @@ Production Express routes only; demo-api routes are intentionally excluded. The 
 | `POST` | `/api/auth/totp/setup/confirm` |
 | `POST` | `/api/auth/totp/setup/start` |
 | `GET` | `/api/auth/totp/status` |
+| `DELETE` | `/api/book-notes/:id` |
+| `PATCH` | `/api/book-notes/:id` |
 | `GET` | `/api/books` |
 | `POST` | `/api/books` |
 | `DELETE` | `/api/books/:id` |
 | `PATCH` | `/api/books/:id` |
+| `GET` | `/api/books/:id/notes` |
+| `POST` | `/api/books/:id/notes` |
 | `GET` | `/api/books/catalog` |
 | `POST` | `/api/books/preview` |
 | `GET` | `/api/bootstrap` |
@@ -91,6 +95,11 @@ Production Express routes only; demo-api routes are intentionally excluded. The 
 | `DELETE` | `/api/reactions` |
 | `GET` | `/api/reactions` |
 | `POST` | `/api/reactions` |
+| `GET` | `/api/reading-goals` |
+| `POST` | `/api/reading-goals` |
+| `DELETE` | `/api/reading-goals/:id` |
+| `PATCH` | `/api/reading-goals/:id` |
+| `GET` | `/api/reading-statistics` |
 | `GET` | `/api/realtime` |
 | `POST` | `/api/reports` |
 | `POST` | `/api/reports/:id/appeal` |
@@ -101,6 +110,11 @@ Production Express routes only; demo-api routes are intentionally excluded. The 
 | `GET` | `/api/saves` |
 | `POST` | `/api/saves` |
 | `GET` | `/api/search/materials` |
+| `POST` | `/api/shelves` |
+| `DELETE` | `/api/shelves/:id` |
+| `GET` | `/api/shelves/:id` |
+| `PATCH` | `/api/shelves/:id` |
+| `POST` | `/api/shelves/:id/add-to-library` |
 | `POST` | `/api/social/blocks` |
 | `DELETE` | `/api/social/blocks/:targetId` |
 | `POST` | `/api/social/follows` |
@@ -113,6 +127,7 @@ Production Express routes only; demo-api routes are intentionally excluded. The 
 | `POST` | `/api/social/messages` |
 | `DELETE` | `/api/social/messages/:targetId/history` |
 | `PATCH` | `/api/social/messages/:targetId/read` |
+| `GET` | `/api/users/:id/shelves` |
 | `DELETE` | `/api/users/me/avatar` |
 | `PATCH` | `/api/users/me/home-view` |
 | `DELETE` | `/api/users/me/profile` |

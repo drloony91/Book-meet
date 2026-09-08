@@ -166,6 +166,7 @@ export function ChatView({
     { kind: "excerpt", label: t("chat.shareExcerpt"), hint: t("chat.hintExcerpt") },
     { kind: "occasion", label: t("chat.shareOccasion"), hint: t("chat.hintOccasion") },
     { kind: "publisher_news", label: t("chat.sharePublisherNews"), hint: t("chat.hintPublisherNews") },
+    { kind: "shelf", label: t("shelves.label"), hint: t("shelves.title") },
   ];
   const currentShareType = shareTypes.find((item) => item.kind === shareKind);
   const matchingItems = useMemo(() => {

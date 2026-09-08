@@ -5,7 +5,7 @@ import { localizedApiError, useI18n } from "../../i18n";
 import { apiFetch } from "../../services/api";
 
 export type ReportTarget = {
-  kind: "user" | "book" | "review" | "excerpt" | "event" | "occasion" | "publisher_news" | "chat" | "comment";
+  kind: "user" | "book" | "review" | "excerpt" | "event" | "occasion" | "publisher_news" | "chat" | "comment" | "book_note" | "shelf";
   id: number;
 };
 

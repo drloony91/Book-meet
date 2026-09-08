@@ -44,3 +44,6 @@ This is a deterministic file-level inventory of migration names and `CREATE TABL
 | `037_publisher_book_dates.sql` | `ALTER TABLE user_books` |
 | `038_chat_history_clears.sql` | `CREATE TABLE chat_history_clears` |
 | `039_reading_state_cycles.sql` | `ALTER TABLE user_books`, `CREATE TABLE reading_cycles` |
+| `040_reading_goals.sql` | `CREATE TABLE reading_goals` |
+| `041_book_progress_notes.sql` | `CREATE TABLE user_hides`, `CREATE TABLE book_progress_notes` |
+| `042_book_shelves.sql` | `CREATE TABLE book_shelves`, `ALTER TABLE material_saves`, `CREATE TABLE book_shelf_items` |

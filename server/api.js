@@ -23,6 +23,9 @@ import { nextTopRank, top3Eligibility } from "./modules/top3.js";
 import { LoginAttemptTracker } from "./modules/login-attempts.js";
 import { normalizeUsername, usernameStem, usernameValidationError } from "./modules/username.js";
 import { normalizeReadingState, postponedOverdue, readingStateStorage, validTimezone } from "./modules/reading-state.js";
+import { annualPlan, eligibleGoalPeriods, monthPace, validateGoalPayload } from "./modules/reading-goals.js";
+import { expectedProgress, noteBody, noteCursor, noteDto, progressSnapshot, sameProgress } from "./modules/book-progress-notes.js";
+import { assertShelfReadable, shelfCursor, shelfDto, shelfPayload, shelvesForUser } from "./modules/book-shelves.js";
 import { deliverDuePostponedBookReminders as deliverDuePostponedBooks } from "./modules/postponed-reminders.js";
 import { LEGAL_DOCUMENT_TYPES, REQUIRED_LEGAL_DOCUMENT_TYPES, REPORT_STATUSES, REPORT_TARGET_KINDS, activeLegalDocuments, assertAgeCompatible, assertLegalDocumentDeletable, legalAccessState, legalConsentRequired, legalDocumentWriteMode, logModerationAction, logSecurityEvent, profileAccessState, recordLegalAcceptances, removeCrossAgeRelationships, requestAuditMetadata, validateLegalAcceptance } from "./modules/compliance.js";
 import { clearSessionCookie, clearTransientCookie, createSessionToken, generateRecoveryCodes, generateTotpSecret, hashPassword, hashRecoveryCode, hashSessionToken, isValidEmail, normalizeEmail, normalizeIdentity, readCookie, recoveryCodeIndex, sessionCookie, transientCookie, verifyPassword, verifyTotp } from "./security.js";
@@ -76,6 +79,12 @@ async function purgeDeletedProfile(connection, userId) {
   await connection.query("DELETE FROM wishlist_items WHERE user_id = ?", [userId]);
   await connection.query("DELETE FROM user_books WHERE user_id = ? AND is_author = 0", [userId]);
   await connection.query("DELETE FROM reading_cycles WHERE user_id = ?", [userId]);
+  await connection.query("DELETE FROM reading_goals WHERE user_id = ?", [userId]);
+  await connection.query("DELETE FROM book_progress_notes WHERE user_id = ?", [userId]);
+  const [ownedShelves] = await connection.query("SELECT id FROM book_shelves WHERE owner_user_id = ?", [userId]);
+  for (const shelf of ownedShelves) await deleteShelfMaterialRelations(connection, Number(shelf.id));
+  await connection.query("DELETE FROM book_shelves WHERE owner_user_id = ?", [userId]);
+  await connection.query("DELETE FROM user_hides WHERE hider_user_id = ? OR hidden_user_id = ?", [userId, userId]);
   await connection.query("DELETE FROM material_likes WHERE user_id = ?", [userId]);
   await connection.query("DELETE FROM material_saves WHERE user_id = ?", [userId]);
   await connection.query("DELETE FROM notifications WHERE user_id = ? OR actor_user_id = ?", [userId, userId]);
@@ -887,13 +896,59 @@ async function reportTarget(connection, kind, id) {
     event: ["SELECT id, title, creator_user_id AS owner_id FROM events WHERE id = ?", id],
     occasion: ["SELECT id, primary_text AS title, creator_user_id AS owner_id FROM occasions WHERE id = ?", id],
     publisher_news: ["SELECT id, title, user_id AS owner_id FROM publisher_news WHERE id = ?", id],
+    shelf: ["SELECT id, title, owner_user_id AS owner_id FROM book_shelves WHERE id = ?", id],
     chat: ["SELECT u.id, p.display_name AS title, u.id AS owner_id FROM users u JOIN profiles p ON p.user_id = u.id WHERE u.id = ?", id],
     comment: ["SELECT mc.id, LEFT(mc.body, 180) AS title, mc.user_id AS owner_id FROM material_comments mc WHERE mc.id = ?", id],
+    book_note: ["SELECT n.id, CONCAT('Заметка: ', LEFT(n.body, 180)) AS title, n.user_id AS owner_id FROM book_progress_notes n WHERE n.id = ?", id],
   };
   const spec = specs[kind];
   if (!spec || !Number(id)) return null;
   const [[row]] = await connection.query(spec[0], [spec[1]]);
   return row ?? null;
+}
+
+function bookNoteVisibilityPredicate(note = "n", author = "author", viewerBook = "viewer_book") {
+  return `(
+    ${note}.user_id = ? OR (
+      ${author}.deleted_at IS NULL AND ${author}.purged_at IS NULL
+      AND NOT EXISTS (
+        SELECT 1 FROM user_blocks block
+         WHERE (block.blocker_user_id = ? AND block.blocked_user_id = ${note}.user_id)
+            OR (block.blocker_user_id = ${note}.user_id AND block.blocked_user_id = ?)
+      )
+      AND NOT EXISTS (
+        SELECT 1 FROM user_hides hidden
+         WHERE hidden.hider_user_id = ? AND hidden.hidden_user_id = ${note}.user_id
+      )
+      AND ${note}.progress_percent <= CASE
+        WHEN ${viewerBook}.reading_status = 'read' THEN 100
+        WHEN ${viewerBook}.reading_status IN ('reading', 'abandoned', 'postponed') THEN CASE
+          WHEN ${viewerBook}.progress_unit = 'chapters' AND ${viewerBook}.chapters_current IS NOT NULL AND ${viewerBook}.chapters_total > 0 AND ${viewerBook}.chapters_current <= ${viewerBook}.chapters_total THEN FLOOR(${viewerBook}.chapters_current * 100 / ${viewerBook}.chapters_total)
+          WHEN ${viewerBook}.progress_unit = 'pages' AND ${viewerBook}.pages_current IS NOT NULL AND ${viewerBook}.pages_total > 0 AND ${viewerBook}.pages_current <= ${viewerBook}.pages_total THEN FLOOR(${viewerBook}.pages_current * 100 / ${viewerBook}.pages_total)
+          ELSE 0
+        END
+        ELSE 0
+      END
+    )
+  )`;
+}
+
+async function assertBookNoteReadable(connection, viewerId, noteId) {
+  const [[header]] = await connection.query(
+    "SELECT n.book_id FROM book_progress_notes n JOIN books b ON b.id = n.book_id WHERE n.id = ?",
+    [noteId],
+  );
+  if (!header) throw Object.assign(new Error("Заметка не найдена"), { statusCode: 404 });
+  await assertAdultMaterialReadable(connection, viewerId, "book", Number(header.book_id));
+  const [[visible]] = await connection.query(
+    `SELECT n.id
+       FROM book_progress_notes n
+       JOIN users author ON author.id = n.user_id
+       LEFT JOIN user_books viewer_book ON viewer_book.user_id = ? AND viewer_book.book_id = n.book_id AND viewer_book.is_author = 0
+      WHERE n.id = ? AND ${bookNoteVisibilityPredicate()}`,
+    [viewerId, noteId, viewerId, viewerId, viewerId, viewerId],
+  );
+  if (!visible) throw Object.assign(new Error("Заметка не найдена"), { statusCode: 404 });
 }
 
 async function publisherAccess(connection, userId) {
@@ -949,6 +1004,10 @@ async function consumeRecoveryCode(userId, code) {
 }
 
 async function materialInfo(connection, kind, id) {
+  if (kind === "shelf") {
+    const [[row]] = await connection.query("SELECT s.owner_user_id AS owner_id, s.title FROM book_shelves s JOIN users u ON u.id = s.owner_user_id WHERE s.id = ? AND u.deleted_at IS NULL AND u.purged_at IS NULL", [id]);
+    return row;
+  }
   if (kind === "review") {
     const [[row]] = await connection.query("SELECT r.user_id AS owner_id, b.title FROM reviews r JOIN books b ON b.id = r.book_id WHERE r.id = ?", [id]);
     return row;
@@ -980,6 +1039,7 @@ async function readableMaterialInfo(connection, userId, kind, id) {
   if (!gate.complete) throw Object.assign(new Error("Для открытия материала заполните обязательные поля профиля"), { statusCode: 428, code: "PROFILE_COMPLETION_REQUIRED", missing: gate.missing });
   const material = await materialInfo(connection, kind, id);
   if (!material) throw Object.assign(new Error("Материал не найден"), { statusCode: 404 });
+  if (kind === "shelf") await assertShelfReadable(connection, userId, id, { blockAsForbidden: true });
   await assertAdultMaterialReadable(connection, userId, kind, id);
   if (await blockExists(connection, userId, Number(material.owner_id))) {
     throw Object.assign(new Error("Материал недоступен"), { statusCode: 403 });
@@ -1006,12 +1066,13 @@ async function validatedChatAttachment(connection, input, senderUserId, recipien
     excerpt: "SELECT id FROM excerpts WHERE id = ? LIMIT 1",
     occasion: "SELECT id FROM occasions WHERE id = ? AND status = 'published' LIMIT 1",
     publisher_news: "SELECT n.id, n.user_id AS owner_id FROM publisher_news n JOIN profiles p ON p.user_id = n.user_id WHERE n.id = ? AND p.profile_type IN ('Издатель', 'Сообщество') AND p.publisher_status = 'approved' LIMIT 1",
+    shelf: "SELECT s.id, s.owner_user_id AS owner_id FROM book_shelves s JOIN users u ON u.id = s.owner_user_id WHERE s.id = ? AND u.deleted_at IS NULL AND u.purged_at IS NULL LIMIT 1",
   };
   if (!queries[kind]) throw Object.assign(new Error("Неизвестный тип вложения"), { statusCode: 400 });
   const [[item]] = await connection.query(queries[kind], [id]);
   if (!item) throw Object.assign(new Error("Материал для отправки не найден"), { statusCode: 404 });
   let materialOwnerId = Number(item.owner_id) || null;
-  if (["review", "excerpt", "event", "occasion", "publisher_news"].includes(kind)) {
+  if (["review", "excerpt", "event", "occasion", "publisher_news", "shelf"].includes(kind)) {
     // Both participants must be able to read the exact shared material, not
     // merely be permitted to message each other. This preserves block, status
     // and 18+ visibility at the attachment boundary.
@@ -2580,6 +2641,77 @@ router.get("/books", asyncRoute(async (request, response) => {
   response.json({ books: rows.map((row) => ({ ...row, id: Number(row.id), isAdult: Boolean(row.isAdult), genres: JSON.parse(row.genres || "[]") })) });
 }));
 
+function goalDto(row) {
+  return { id: Number(row.id), goalKind: row.goal_kind, targetCount: Number(row.target_count), targetMonth: row.target_month == null ? null : Number(row.target_month), targetYear: Number(row.target_year), startMonth: row.start_month == null ? null : Number(row.start_month), createdAt: row.created_at ? new Date(row.created_at).toISOString() : undefined, updatedAt: row.updated_at ? new Date(row.updated_at).toISOString() : undefined };
+}
+function goalWriteError(error) {
+  if (error?.code === "ER_DUP_ENTRY") return Object.assign(new Error("Такая цель уже есть"), { statusCode: 409, code: "READING_GOAL_DUPLICATE" });
+  return error;
+}
+
+async function ownerGoalCompletions(connection, userId, year) {
+  const [rows] = await connection.query("SELECT completed_month, completed_year FROM reading_cycles WHERE user_id = ? AND status = 'completed' AND completed_year = ?", [userId, year]);
+  return rows.map((row) => ({ completedMonth: Number(row.completed_month), completedYear: Number(row.completed_year) }));
+}
+
+router.get("/reading-goals", asyncRoute(async (request, response) => {
+  const [rows] = await getPool().query("SELECT * FROM reading_goals WHERE user_id = ? ORDER BY target_year, COALESCE(target_month, 0), id", [request.bookMeetUser.id]);
+  response.json({ goals: rows.map(goalDto) });
+}));
+
+router.post("/reading-goals", asyncRoute(async (request, response) => {
+  const userId = request.bookMeetUser.id;
+  const timezone = validTimezone(request.get("X-BookMeet-Timezone") || "UTC");
+  const goal = validateGoalPayload(request.body ?? {}, { timezone });
+  let created;
+  try { created = await withTransaction(async (connection) => {
+    const [result] = await connection.query("INSERT INTO reading_goals (user_id, goal_kind, target_count, target_month, target_year, start_month) VALUES (?, ?, ?, ?, ?, ?)", [userId, goal.goalKind, goal.targetCount, goal.targetMonth, goal.targetYear, goal.startMonth || null]);
+    const [[row]] = await connection.query("SELECT * FROM reading_goals WHERE id = ? AND user_id = ?", [result.insertId, userId]);
+    return goalDto(row);
+  }); } catch (error) { throw goalWriteError(error); }
+  response.status(201).json({ goal: created, pace: created.goalKind === "month" ? monthPace(created, timezone) : annualPlan(created, [], timezone) });
+}));
+
+router.patch("/reading-goals/:id", asyncRoute(async (request, response) => {
+  const userId = request.bookMeetUser.id; const id = Number(request.params.id);
+  if (!Number.isSafeInteger(id) || id < 1) return response.status(400).json({ error: "Некорректная цель" });
+  const timezone = validTimezone(request.get("X-BookMeet-Timezone") || "UTC");
+  let updated;
+  try { updated = await withTransaction(async (connection) => {
+    const [[existing]] = await connection.query("SELECT * FROM reading_goals WHERE id = ? AND user_id = ? FOR UPDATE", [id, userId]);
+    if (!existing) throw Object.assign(new Error("Цель не найдена"), { statusCode: 404 });
+    const goal = validateGoalPayload(request.body ?? {}, { timezone, existing });
+    await connection.query("UPDATE reading_goals SET goal_kind = ?, target_count = ?, target_month = ?, target_year = ?, start_month = ? WHERE id = ? AND user_id = ?", [goal.goalKind, goal.targetCount, goal.targetMonth, goal.targetYear, goal.startMonth || null, id, userId]);
+    const [[row]] = await connection.query("SELECT * FROM reading_goals WHERE id = ? AND user_id = ?", [id, userId]);
+    return goalDto(row);
+  }); } catch (error) { throw goalWriteError(error); }
+  response.json({ goal: updated });
+}));
+
+router.delete("/reading-goals/:id", asyncRoute(async (request, response) => {
+  const id = Number(request.params.id);
+  if (!Number.isSafeInteger(id) || id < 1) return response.status(400).json({ error: "Некорректная цель" });
+  const [result] = await getPool().query("DELETE FROM reading_goals WHERE id = ? AND user_id = ?", [id, request.bookMeetUser.id]);
+  if (!result.affectedRows) return response.status(404).json({ error: "Цель не найдена" });
+  response.json({ ok: true });
+}));
+
+router.get("/reading-statistics", asyncRoute(async (request, response) => {
+  const userId = request.bookMeetUser.id;
+  const timezone = validTimezone(request.get("X-BookMeet-Timezone") || "UTC");
+  const periods = eligibleGoalPeriods(timezone);
+  const year = Number(request.query.year ?? periods.year);
+  const month = request.query.month === undefined ? null : Number(request.query.month);
+  if (!Number.isInteger(year) || year < 1900 || year > periods.year + 1 || month !== null && (!Number.isInteger(month) || month < 1 || month > 12)) return response.status(400).json({ error: "Некорректный период" });
+  const connection = getPool();
+  const [goals, completions] = await Promise.all([
+    connection.query(`SELECT * FROM reading_goals WHERE user_id = ? AND target_year = ?${month === null ? "" : " AND (target_month IS NULL OR target_month = ?)"} ORDER BY goal_kind, id`, month === null ? [userId, year] : [userId, year, month]),
+    ownerGoalCompletions(connection, userId, year),
+  ]);
+  const items = goals[0].map(goalDto).map((goal) => ({ ...goal, projection: goal.goalKind === "month" ? { target: goal.targetCount, actual: completions.filter((item) => item.completedMonth === goal.targetMonth).length, pace: monthPace(goal, timezone) } : annualPlan(goal, completions, timezone) }));
+  response.json({ year, month, goals: items, counts: Array.from({ length: 12 }, (_, index) => completions.filter((item) => item.completedMonth === index + 1).length) });
+}));
+
 function adminBookImportInput(value = {}) {
   const linkUrl = String(value.url ?? value.link ?? value.sourceUrl ?? "").trim();
   const links = Array.isArray(value.links) ? value.links : linkUrl ? [{ url: linkUrl, label: "Источник", action: "Читать" }] : [];
@@ -3017,6 +3149,233 @@ router.patch("/books/:id", asyncRoute(async (request, response) => {
   response.json({ ...result, ...owner });
 }));
 
+async function noteBookAccess(connection, userId, bookId) {
+  const [[book]] = await connection.query("SELECT id FROM books WHERE id = ?", [bookId]);
+  if (!book) throw Object.assign(new Error("Книга не найдена"), { statusCode: 404 });
+  await assertAdultMaterialReadable(connection, userId, "book", bookId);
+}
+
+function requireOnlyNoteFields(payload, allowed) {
+  if (!payload || typeof payload !== "object" || Array.isArray(payload) || Object.keys(payload).some((key) => !allowed.has(key))) {
+    throw Object.assign(new Error("Некорректные поля заметки"), { statusCode: 400, code: "INVALID_BOOK_PROGRESS_NOTE" });
+  }
+}
+
+async function selectedBookNote(connection, noteId) {
+  const [[row]] = await connection.query(
+    `SELECT n.*, p.display_name AS author_name, u.initials AS author_initials, u.avatar_path AS author_avatar_url
+       FROM book_progress_notes n
+       JOIN users u ON u.id = n.user_id
+       JOIN profiles p ON p.user_id = n.user_id
+      WHERE n.id = ?`,
+    [noteId],
+  );
+  return row;
+}
+
+router.get("/books/:id/notes", asyncRoute(async (request, response) => {
+  const viewerId = request.bookMeetUser.id;
+  const bookId = Number(request.params.id);
+  const scope = String(request.query.scope ?? "mine");
+  if (!Number.isSafeInteger(bookId) || bookId <= 0 || !["mine", "all"].includes(scope)) return response.status(400).json({ error: "Некорректный запрос заметок" });
+  const cursor = noteCursor(request.query.cursor);
+  const pool = getPool();
+  await noteBookAccess(pool, viewerId, bookId);
+  const visibility = scope === "mine" ? "n.user_id = ?" : bookNoteVisibilityPredicate("n", "u", "viewer_book");
+  const parameters = [viewerId, bookId];
+  if (cursor !== null) parameters.push(cursor);
+  parameters.push(viewerId);
+  if (scope === "all") parameters.push(viewerId, viewerId, viewerId);
+  const [rows] = await pool.query(
+    `SELECT n.*, p.display_name AS author_name, u.initials AS author_initials, u.avatar_path AS author_avatar_url
+       FROM book_progress_notes n
+       JOIN users u ON u.id = n.user_id
+       JOIN profiles p ON p.user_id = n.user_id
+       LEFT JOIN user_books viewer_book ON viewer_book.user_id = ? AND viewer_book.book_id = n.book_id AND viewer_book.is_author = 0
+      WHERE n.book_id = ? ${cursor === null ? "" : "AND n.id < ?"}
+        AND ${visibility}
+      ORDER BY n.id DESC
+      LIMIT 21`,
+    parameters,
+  );
+  const page = rows.slice(0, 20);
+  response.json({ notes: page.map(noteDto), nextCursor: rows.length > 20 ? Number(page.at(-1).id) : null });
+}));
+
+router.post("/books/:id/notes", asyncRoute(async (request, response) => {
+  const userId = request.bookMeetUser.id;
+  const bookId = Number(request.params.id);
+  if (!Number.isSafeInteger(bookId) || bookId <= 0) return response.status(400).json({ error: "Некорректная книга" });
+  requireOnlyNoteFields(request.body, new Set(["body", "expectedProgress"]));
+  const body = noteBody(request.body.body);
+  const expected = expectedProgress(request.body.expectedProgress);
+  const note = await withTransaction(async (connection) => {
+    await connection.query("SELECT id FROM users WHERE id = ? FOR UPDATE", [userId]);
+    await noteBookAccess(connection, userId, bookId);
+    const [[profile]] = await connection.query("SELECT profile_type FROM profiles WHERE user_id = ?", [userId]);
+    if (!["Читатель", "Писатель", "Блогер"].includes(profile?.profile_type)) throw Object.assign(new Error("Личные заметки доступны только личному профилю"), { statusCode: 403 });
+    const [[library]] = await connection.query("SELECT * FROM user_books WHERE user_id = ? AND book_id = ? FOR UPDATE", [userId, bookId]);
+    if (!library || library.is_author || library.reading_status !== "reading") throw Object.assign(new Error("Заметку можно сохранить только во время чтения книги"), { statusCode: 409 });
+    const snapshot = progressSnapshot({
+      unit: library.progress_unit,
+      current: library.progress_unit === "chapters" ? library.chapters_current : library.pages_current,
+      total: library.progress_unit === "chapters" ? library.chapters_total : library.pages_total,
+    });
+    if (!snapshot) throw Object.assign(new Error("Укажите корректный прогресс чтения перед сохранением заметки"), { statusCode: 409 });
+    if (expected && !sameProgress(expected, snapshot)) throw Object.assign(new Error("Прогресс чтения изменился; подтвердите заметку ещё раз"), { statusCode: 409, code: "BOOK_NOTE_PROGRESS_CHANGED" });
+    const [[cycle]] = await connection.query("SELECT id FROM reading_cycles WHERE user_id = ? AND book_id = ? AND status = 'active' FOR UPDATE", [userId, bookId]);
+    if (!cycle) throw Object.assign(new Error("Активный цикл чтения не найден"), { statusCode: 409 });
+    const [created] = await connection.query(
+      "INSERT INTO book_progress_notes (user_id, book_id, reading_cycle_id, body, progress_unit, progress_current, progress_total, progress_percent) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+      [userId, bookId, cycle.id, body, snapshot.unit, snapshot.current, snapshot.total, snapshot.percent],
+    );
+    return selectedBookNote(connection, Number(created.insertId));
+  });
+  response.status(201).json({ note: noteDto(note) });
+}));
+
+router.patch("/book-notes/:id", asyncRoute(async (request, response) => {
+  const userId = request.bookMeetUser.id;
+  const noteId = Number(request.params.id);
+  if (!Number.isSafeInteger(noteId) || noteId <= 0) return response.status(400).json({ error: "Некорректная заметка" });
+  requireOnlyNoteFields(request.body, new Set(["body"]));
+  const body = noteBody(request.body.body);
+  const note = await withTransaction(async (connection) => {
+    await connection.query("SELECT id FROM users WHERE id = ? FOR UPDATE", [userId]);
+    const [[owned]] = await connection.query("SELECT id, book_id FROM book_progress_notes WHERE id = ? AND user_id = ? FOR UPDATE", [noteId, userId]);
+    if (!owned) throw Object.assign(new Error("Заметка не найдена"), { statusCode: 404 });
+    await noteBookAccess(connection, userId, Number(owned.book_id));
+    await connection.query("UPDATE book_progress_notes SET body = ? WHERE id = ?", [body, noteId]);
+    return selectedBookNote(connection, noteId);
+  });
+  response.json({ note: noteDto(note) });
+}));
+
+router.delete("/book-notes/:id", asyncRoute(async (request, response) => {
+  const noteId = Number(request.params.id);
+  if (!Number.isSafeInteger(noteId) || noteId <= 0) return response.status(400).json({ error: "Некорректная заметка" });
+  const [deleted] = await getPool().query("DELETE FROM book_progress_notes WHERE id = ? AND user_id = ?", [noteId, request.bookMeetUser.id]);
+  if (!deleted.affectedRows) return response.status(404).json({ error: "Заметка не найдена" });
+  response.json({ ok: true });
+}));
+
+function shelfId(value) {
+  const id = Number(value);
+  if (!Number.isSafeInteger(id) || id < 1) throw Object.assign(new Error("Некорректная полка"), { statusCode: 400, code: "INVALID_SHELF" });
+  return id;
+}
+
+async function deleteShelfMaterialRelations(connection, id) {
+  await connection.query("DELETE FROM material_likes WHERE material_kind = 'shelf' AND material_id = ?", [id]);
+  await connection.query("DELETE FROM material_saves WHERE material_kind = 'shelf' AND material_id = ?", [id]);
+  await connection.query("DELETE FROM material_comments WHERE material_kind = 'shelf' AND material_id = ?", [id]);
+  await connection.query("DELETE FROM notifications WHERE material_kind = 'shelf' AND material_id = ?", [id]);
+}
+
+async function persistShelf(connection, ownerId, payload, existingId = null) {
+  const input = shelfPayload(payload);
+  await connection.query("SELECT id FROM users WHERE id = ? FOR UPDATE", [ownerId]);
+  const [[profile]] = await connection.query("SELECT profile_type FROM profiles WHERE user_id = ? FOR UPDATE", [ownerId]);
+  if (!profile || !["Читатель", "Писатель", "Блогер"].includes(profile.profile_type)) throw Object.assign(new Error("Полки доступны только личным профилям"), { statusCode: 403 });
+  if (existingId) {
+    const [[owned]] = await connection.query("SELECT id FROM book_shelves WHERE id = ? AND owner_user_id = ? FOR UPDATE", [existingId, ownerId]);
+    if (!owned) throw Object.assign(new Error("Полка не найдена"), { statusCode: 404 });
+  }
+  const ids = input.items.map((item) => item.bookId);
+  const [library] = await connection.query(
+    `SELECT book_id FROM user_books WHERE user_id = ? AND is_author = 0 AND book_id IN (${ids.map(() => "?").join(",")}) FOR UPDATE`, [ownerId, ...ids],
+  );
+  if (library.length !== ids.length) throw Object.assign(new Error("В полку можно добавлять только книги из своей библиотеки"), { statusCode: 409, code: "SHELF_BOOK_NOT_IN_LIBRARY" });
+  let id = existingId;
+  if (id) await connection.query("UPDATE book_shelves SET title = ?, description = ? WHERE id = ?", [input.title, input.description, id]);
+  else {
+    const [created] = await connection.query("INSERT INTO book_shelves (owner_user_id, title, description) VALUES (?, ?, ?)", [ownerId, input.title, input.description]);
+    id = Number(created.insertId);
+  }
+  await connection.query("DELETE FROM book_shelf_items WHERE shelf_id = ?", [id]);
+  for (const item of input.items) await connection.query("INSERT INTO book_shelf_items (shelf_id, book_id, position, description) VALUES (?, ?, ?, ?)", [id, item.bookId, item.position, item.description]);
+  return id;
+}
+
+router.get("/users/:id/shelves", asyncRoute(async (request, response) => {
+  const ownerId = shelfId(request.params.id);
+  const result = await shelvesForUser(getPool(), request.bookMeetUser.id, ownerId, shelfCursor(request.query.cursor));
+  response.json(result);
+}));
+
+router.get("/shelves/:id", asyncRoute(async (request, response) => {
+  response.json({ shelf: await shelfDto(getPool(), request.bookMeetUser.id, shelfId(request.params.id)) });
+}));
+
+router.post("/shelves", asyncRoute(async (request, response) => {
+  const userId = request.bookMeetUser.id;
+  const shelf = await withTransaction(async (connection) => {
+    const id = await persistShelf(connection, userId, request.body);
+    return shelfDto(connection, userId, id);
+  });
+  response.status(201).json({ shelf });
+}));
+
+router.patch("/shelves/:id", asyncRoute(async (request, response) => {
+  const userId = request.bookMeetUser.id;
+  const shelf = await withTransaction(async (connection) => {
+    const id = await persistShelf(connection, userId, request.body, shelfId(request.params.id));
+    return shelfDto(connection, userId, id);
+  });
+  response.json({ shelf });
+}));
+
+router.delete("/shelves/:id", asyncRoute(async (request, response) => {
+  const userId = request.bookMeetUser.id; const id = shelfId(request.params.id);
+  await withTransaction(async (connection) => {
+    const [[owned]] = await connection.query("SELECT id FROM book_shelves WHERE id = ? AND owner_user_id = ? FOR UPDATE", [id, userId]);
+    if (!owned) throw Object.assign(new Error("Полка не найдена"), { statusCode: 404 });
+    await deleteShelfMaterialRelations(connection, id);
+    await connection.query("DELETE FROM book_shelves WHERE id = ?", [id]);
+  });
+  response.json({ ok: true });
+}));
+
+router.post("/shelves/:id/add-to-library", asyncRoute(async (request, response) => {
+  const userId = request.bookMeetUser.id; const id = shelfId(request.params.id);
+  const result = await withTransaction(async (connection) => {
+    await assertShelfReadable(connection, userId, id);
+    await connection.query("SELECT id FROM users WHERE id = ? FOR UPDATE", [userId]);
+    const canReadAdult = await (async () => {
+      const [[row]] = await connection.query("SELECT u.role, p.birth_date FROM users u JOIN profiles p ON p.user_id = u.id WHERE u.id = ?", [userId]);
+      return row?.role === "admin" || Number(ageFromBirthDate(row?.birth_date) ?? -1) >= 18;
+    })();
+    const [items] = await connection.query("SELECT i.book_id, b.is_adult FROM book_shelf_items i LEFT JOIN books b ON b.id = i.book_id WHERE i.shelf_id = ? ORDER BY i.position FOR UPDATE", [id]);
+    const ids = items.map((item) => item.book_id ? Number(item.book_id) : null).filter(Boolean);
+    const [existing] = ids.length ? await connection.query(`SELECT book_id FROM user_books WHERE user_id = ? AND book_id IN (${ids.map(() => "?").join(",")}) FOR UPDATE`, [userId, ...ids]) : [[]];
+    const existingIds = new Set(existing.map((item) => Number(item.book_id)));
+    let addedCount = 0; let skippedExistingCount = 0; let skippedUnavailableCount = 0; const addedIds = [];
+    for (const item of items) {
+      const bookId = item.book_id ? Number(item.book_id) : null;
+      if (!bookId || !canReadAdult && item.is_adult) { skippedUnavailableCount += 1; continue; }
+      if (existingIds.has(bookId)) { skippedExistingCount += 1; continue; }
+      try {
+        await connection.query("INSERT INTO user_books (user_id, book_id, reading_status, is_author) VALUES (?, ?, 'want', 0)", [userId, bookId]);
+        existingIds.add(bookId); addedIds.push(bookId); addedCount += 1;
+      } catch (error) {
+        if (error?.code !== "ER_DUP_ENTRY") throw error;
+        existingIds.add(bookId); skippedExistingCount += 1;
+      }
+    }
+    const [addedRows] = addedIds.length ? await connection.query(
+      `SELECT b.id, b.creator_user_id, b.author, b.title, b.isbn, b.publisher, b.genres, b.annotation, b.is_adult, b.cover_path, b.cover_tone, b.flip_url
+         FROM books b WHERE b.id IN (${addedIds.map(() => "?").join(",")})`, addedIds,
+    ) : [[]];
+    const byId = new Map(addedRows.map((row) => [Number(row.id), row]));
+    const addedBooks = addedIds.map((bookId) => {
+      const book = byId.get(bookId);
+      return { id: bookId, catalogBookId: bookId, creatorUserId: book.creator_user_id ? Number(book.creator_user_id) : undefined, author: book.author, title: book.title, isbn: book.isbn ?? undefined, publisher: book.publisher ?? undefined, genres: jsonArray(book.genres), annotation: book.annotation ?? "", pages: "", format: "Бумажная", durationHours: "", durationMinutes: "", rating: 0, review: "", readingStatus: "want", isAdult: Boolean(book.is_adult), coverUrl: book.cover_path ?? undefined, coverTone: book.cover_tone ?? "blue", flipUrl: book.flip_url ?? undefined, links: [] };
+    });
+    return { addedCount, skippedExistingCount, skippedUnavailableCount, addedBooks };
+  });
+  response.json(result);
+}));
+
 // Editors use these owner-scoped routes instead of replacing an entire profile
 // snapshot.  In particular PATCH keeps the existing material id intact.
 async function saveOwnedReadingMaterial(request, response, kind, id = null) {
@@ -3074,10 +3433,17 @@ router.delete("/materials/:kind/:id", asyncRoute(async (request, response) => {
   const userId = request.bookMeetUser.id;
   const kind = String(request.params.kind ?? "");
   const materialId = Number(request.params.id);
-  const tables = { review: "reviews", excerpt: "excerpts" };
+  const tables = { review: "reviews", excerpt: "excerpts", shelf: "book_shelves" };
   const table = tables[kind];
   if (!table || !materialId) return response.status(400).json({ error: "Некорректный материал" });
   await withTransaction(async (connection) => {
+    if (kind === "shelf") {
+      const [[owned]] = await connection.query("SELECT id FROM book_shelves WHERE id = ? AND owner_user_id = ? FOR UPDATE", [materialId, userId]);
+      if (!owned) throw Object.assign(new Error("Материал не найден"), { statusCode: 404 });
+      await deleteShelfMaterialRelations(connection, materialId);
+      await connection.query("DELETE FROM book_shelves WHERE id = ?", [materialId]);
+      return;
+    }
     await connection.query("DELETE FROM material_books WHERE material_kind = ? AND material_id = ?", [kind, materialId]);
     await connection.query("DELETE FROM material_likes WHERE material_kind = ? AND material_id = ?", [kind, materialId]);
     await connection.query("DELETE FROM material_saves WHERE material_kind = ? AND material_id = ?", [kind, materialId]);
@@ -3149,7 +3515,7 @@ router.delete("/admin/materials/:kind/:id", asyncRoute(async (request, response)
   const adminId = request.bookMeetUser.id;
   const kind = String(request.params.kind ?? "");
   const materialId = Number(request.params.id);
-  const tables = { book: "books", review: "reviews", excerpt: "excerpts", event: "events", occasion: "occasions", publisher_news: "publisher_news" };
+  const tables = { book: "books", review: "reviews", excerpt: "excerpts", event: "events", occasion: "occasions", publisher_news: "publisher_news", shelf: "book_shelves" };
   const table = tables[kind];
   if (!table || !materialId) return response.status(400).json({ error: "Некорректный материал" });
   await withTransaction(async (connection) => {
@@ -3318,6 +3684,8 @@ router.post("/reports", asyncRoute(async (request, response) => {
   if (!reason) return response.status(400).json({ error: "Опишите причину жалобы" });
   if (!REPORT_TARGET_KINDS.has(targetKind) || !targetId) return response.status(400).json({ error: "Некорректный объект жалобы" });
   const result = await withTransaction(async (connection) => {
+    if (targetKind === "book_note") await assertBookNoteReadable(connection, reporterId, targetId);
+    if (targetKind === "shelf") await readableMaterialInfo(connection, reporterId, "shelf", targetId);
     const target = await reportTarget(connection, targetKind, targetId);
     if (!target) throw Object.assign(new Error("Материал или пользователь не найден"), { statusCode: 404 });
     if (Number(target.owner_id) === reporterId) throw Object.assign(new Error("Нельзя пожаловаться на собственный материал"), { statusCode: 400 });
@@ -3433,7 +3801,7 @@ router.post("/admin/reports/:id/delete-material", asyncRoute(async (request, res
     if (!(await isAdmin(connection, adminId))) throw Object.assign(new Error("Доступно только администратору"), { statusCode: 403 });
     const [[report]] = await connection.query("SELECT * FROM reports WHERE id = ? FOR UPDATE", [Number(request.params.id)]);
     if (!report) throw Object.assign(new Error("Жалоба не найдена"), { statusCode: 404 });
-    const tables = { book: "books", review: "reviews", excerpt: "excerpts", event: "events", occasion: "occasions", publisher_news: "publisher_news" };
+    const tables = { book: "books", review: "reviews", excerpt: "excerpts", event: "events", occasion: "occasions", publisher_news: "publisher_news", book_note: "book_progress_notes", shelf: "book_shelves" };
     const table = tables[report.target_kind];
     if (!table) throw Object.assign(new Error("Жалоба не относится к материалу"), { statusCode: 400 });
     await connection.query("DELETE FROM material_likes WHERE material_kind = ? AND material_id = ?", [report.target_kind, report.target_id]);

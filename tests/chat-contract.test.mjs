@@ -85,8 +85,8 @@ test("publisher and community news are readable share attachments in production 
   assert.match(content, /shareAttachment=\{actions\.shareAttachment \?\? \{ kind: "publisher_news", id: item\.id \}\}/);
   assert.match(content, /shareAttachment=\{\{ kind: "publisher_news", id: item\.id \}\}/);
   assert.match(api, /publisher_news: "SELECT n\.id, n\.user_id AS owner_id FROM publisher_news/);
-  assert.match(api, /\["review", "excerpt", "event", "occasion", "publisher_news"\]\.includes\(kind\)/);
-  assert.match(demo, /\["book", "review", "excerpt", "event", "occasion", "publisher_news"\]\.includes\(kind\)/);
+  assert.match(api, /\["review", "excerpt", "event", "occasion", "publisher_news", "shelf"\]\.includes\(kind\)/);
+  assert.match(demo, /\["book", "review", "excerpt", "event", "occasion", "publisher_news", "shelf"\]\.includes\(kind\)/);
   assert.match(demo, /publisherStatus === "approved".*publisherNews/);
   assert.match(messages, /chat\.sharePublisherNews/);
   assert.match(messages, /chat\.hintPublisherNews/);

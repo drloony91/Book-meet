@@ -22,8 +22,8 @@ export type MainView =
 
 // Search is a mobile-only nested screen, never a desktop main-navigation view.
 export type RoutableMainView = Exclude<MainView, "profile" | "search">;
-export type OverlayRouteKind = "user" | "book" | "event" | "review" | "excerpt" | "occasion" | "publisher-news" | "chat" | "notification" | "report";
-export type MobileWorkflowKind = "review" | "excerpt" | "event" | "occasion" | "book" | "book-status" | "publisher-news";
+export type OverlayRouteKind = "user" | "book" | "event" | "review" | "excerpt" | "occasion" | "publisher-news" | "chat" | "notification" | "report" | "shelf";
+export type MobileWorkflowKind = "review" | "excerpt" | "event" | "occasion" | "book" | "book-status" | "publisher-news" | "reading-goal" | "shelf";
 export type MobileWorkflowRoute = { mode: "create" | "edit"; kind: MobileWorkflowKind; id?: number };
 export type ParsedAppRoute = { view: MainView; overlay?: { kind: OverlayRouteKind; id: number }; workflow?: MobileWorkflowRoute };
 export type ChatRouteState = {
@@ -132,7 +132,8 @@ export function profileTabFromPathname(pathname: string): RoutableProfileTab {
 }
 
 export function normalizedPathname(pathname: string) {
-  const normalized = pathname.replace(/\/+$/, "");
+  const pathOnly = pathname.split(/[?#]/, 1)[0];
+  const normalized = pathOnly.replace(/\/+$/, "");
   return normalized || "/";
 }
 
@@ -147,27 +148,28 @@ export function mainViewFromPathname(pathname: string): RoutableMainView {
   if (/^\/meet\/\d+$/.test(normalized)) return "occasions";
   if (/^\/publishing\/\d+$/.test(normalized)) return "publishing";
   if (/^\/chat\/\d+$/.test(normalized)) return "chat";
-  if (/^\/(?:create|edit)\/(?:review|publication|event|occasion|book|book-status|news)(?:\/\d+)?$/.test(normalized)) return "home";
+  if (/^\/(?:create|edit)\/(?:review|publication|event|occasion|book|book-status|news|reading-goal|shelf)(?:\/\d+)?$/.test(normalized)) return "home";
   return "home";
 }
 
 export function appRouteFromPathname(pathname: string): ParsedAppRoute {
   const normalized = normalizedPathname(pathname);
   if (normalized === "/search") return { view: "search" };
-  const workflowMatch = normalized.match(/^\/(create|edit)\/(review|publication|event|occasion|book|book-status|news)(?:\/(\d+))?$/);
+  const workflowMatch = normalized.match(/^\/(create|edit)\/(review|publication|event|occasion|book|book-status|news|reading-goal|shelf)(?:\/(\d+))?$/);
   if (workflowMatch) {
     const mode = workflowMatch[1] as MobileWorkflowRoute["mode"];
     const routeKind = workflowMatch[2];
     const kind: MobileWorkflowKind = routeKind === "publication" ? "excerpt" : routeKind === "news" ? "publisher-news" : routeKind as MobileWorkflowKind;
     const id = workflowMatch[3] ? Number(workflowMatch[3]) : undefined;
     if ((mode === "create" && !id && kind !== "book-status") || (mode === "edit" && id)) {
-      return { view: ["book", "book-status", "publisher-news"].includes(kind) ? "profile" : kind === "excerpt" ? "publications" : kind === "occasion" ? "occasions" : kind === "event" ? "events" : "reviews", workflow: { mode, kind, id } };
+      return { view: ["book", "book-status", "publisher-news", "reading-goal", "shelf"].includes(kind) ? "profile" : kind === "excerpt" ? "publications" : kind === "occasion" ? "occasions" : kind === "event" ? "events" : "reviews", workflow: { mode, kind, id } };
     }
   }
   if (normalized === "/profile" || normalized === "/profile/settings" || mobileProfileSocialRouteFromPathname(normalized) || Object.values(profileTabPaths).includes(normalized as typeof profileTabPaths[RoutableProfileTab])) return { view: "profile" };
   const dynamicRoutes: Array<{ pattern: RegExp; kind: OverlayRouteKind; view: RoutableMainView }> = [
     { pattern: /^\/users\/(\d+)$/, kind: "user", view: "users" },
     { pattern: /^\/books\/(\d+)$/, kind: "book", view: "home" },
+    { pattern: /^\/shelves\/(\d+)$/, kind: "shelf", view: "home" },
     { pattern: /^\/events\/(\d+)$/, kind: "event", view: "events" },
     { pattern: /^\/reviews\/(\d+)$/, kind: "review", view: "reviews" },
     { pattern: /^\/blog\/(\d+)$/, kind: "excerpt", view: "publications" },
@@ -212,8 +214,8 @@ export function closeActiveMobileWorkflow(fallbackPath: string) {
 }
 
 export function reportTargetFromPathname(pathname: string) {
-  const match = normalizedPathname(pathname).match(/^\/reports\/(user|book|review|excerpt|event|occasion|publisher_news|chat|comment)\/(\d+)$/);
-  return match ? { kind: match[1] as "user" | "book" | "review" | "excerpt" | "event" | "occasion" | "publisher_news" | "chat" | "comment", id: Number(match[2]) } : null;
+  const match = normalizedPathname(pathname).match(/^\/reports\/(user|book|review|excerpt|event|occasion|publisher_news|chat|comment|book_note|shelf)\/(\d+)$/);
+  return match ? { kind: match[1] as "user" | "book" | "review" | "excerpt" | "event" | "occasion" | "publisher_news" | "chat" | "comment" | "book_note" | "shelf", id: Number(match[2]) } : null;
 }
 
 export function initialMainView(): MainView {
@@ -268,8 +270,8 @@ export function restoreGuardedRouteAfterNavigation() {
 
 export function openOverlayRoute(routePath: string) {
   const normalizedRoute = normalizedPathname(routePath);
-  const currentPath = normalizedPathname(window.location.pathname);
-  if (currentPath === normalizedRoute) return;
+  const currentPath = `${window.location.pathname}${window.location.search}`;
+  if (normalizedPathname(currentPath) === normalizedRoute) return;
   window.history.pushState({ bookMeetOverlay: true, backgroundPath: currentPath } satisfies OverlayHistoryState, "", normalizedRoute);
   notifyAppNavigation();
 }

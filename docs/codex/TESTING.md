@@ -86,6 +86,14 @@ The fixture fails on page errors, console errors and non-React unexpected warnin
 
 Before release, run the complete canonical Node, disposable-MySQL and desktop/mobile browser suites; a passing demo adapter alone is not evidence of production transaction behavior.
 
+## Reading goals (queue 3, stage 1)
+
+- `tests/reading-goals.test.mjs` covers timezone boundaries, leap days, inclusive remaining days, annual integer allocation and backlog, saved January/February starts, strict input and chart color thresholds.
+- `tests/browser/reading-goals.spec.ts` checks desktop/mobile creation, invalid drafts, delayed GET races, independent row edits/deletion, monthly/annual chart periods and plans, both mobile close controls, exact background query, refresh and re-authentication. It captures annual chart screenshots for visual review. The desktop-only skip is the mobile workflow test.
+- `tests/reading-goals-http-mysql.mjs`, launched by the guarded disposable MySQL suite, exercises production cookie-authenticated routes, owner-only CRUD and statistics, concurrent annual uniqueness, completed cycles without library membership, SQL checks, rollback and both hard-delete and account-finalization cleanup.
+- `tests/helpers/queue3-http.mjs` rejects all environments except the fixed disposable database and disables external deliveries before importing the production router. It is shared test infrastructure, not a staging/production runner.
+- The goal period is fixed after creation; `PATCH` changes the positive integer target. The saved annual start is January or February. Past slots are reconstructed from completion totals preceding each historical month; current/future slots distribute the remaining target once from the current month. There is no scheduled plan mutation.
+
 ## Change-type checklist
 
 | Change | Minimum evidence |
@@ -136,3 +144,15 @@ With safe local settings, `pnpm demo` can prove process startup, `/api/health`, 
 - Remove a competing implementation/source of truth only when equivalence is proven; preserve intentional business-specific representations.
 - Add a focused regression for a repaired high-impact path; use the change-type matrix above for browser, DB and production evidence.
 - Do not claim MySQL, mobile browser or production validation unless the corresponding external check actually ran.
+
+## Progress notes (queue 3, stage 2)
+
+`tests/book-progress-notes.test.mjs` covers strict bodies, snapshot preconditions, cursor validation and demo HTTP visibility. `tests/book-progress-notes-http-mysql.mjs` runs through the guarded disposable suite: owner/progress/read/want/absent/unknown/authored relation/block/hide/minor matrix, no closed body in API responses, immutable snapshots, ownership and reporting, SQL/FK/cycle deletion and account cleanup. Unknown progress includes a known current value with NULL total and a NULL active unit.
+
+`tests/browser/book-progress-notes.spec.ts` exercises desktop/mobile confirmation, cancellation, thoughts preservation, autosave followed by unchanged note snapshots, text edits/deletion and the 40%/41% response gate. It captures inline-card screenshots for visual inspection.
+
+## Book shelves (queue 3, stage 3)
+
+- `tests/book-shelves.test.mjs` covers strict Unicode payload limits, unique ordered items and cursor validation.
+- `tests/book-shelves-http-mysql.mjs`, launched only by the guarded disposable suite, covers authenticated CRUD, owner-library enforcement, transactional reorder, concurrent idempotent batch addition, status preservation, 18+ filtering, block/hide behavior, all material actions, report moderation and relation cleanup without deleting canonical books.
+- `tests/browser/book-shelves.spec.ts` covers desktop/mobile owner creation, reorder/edit, public library mode, like/comment/save/share/report, batch addition, direct-route reauthentication and exact return to `mode=shelves`. It captures owner and foreign detail screenshots for visual inspection.

@@ -3,7 +3,7 @@ import { CustomSelect } from "../common/CustomSelect";
 import { ModalIconActions, ResponsiveModalCloseButton } from "../modals/ModalIconActions";
 import { openReportDialog } from "../safety/SafetyCenter";
 import { SpoilerText, SpoilerTextarea } from "./text/SpoilerText";
-import { closeActiveMobileWorkflow, openMobileWorkflowRoute, openOverlayRoute, registerRouteLeaveGuard, useRoutedPopup } from "../../navigation/routes";
+import { closeActiveMobileWorkflow, normalizedPathname, openMobileWorkflowRoute, openOverlayRoute, registerRouteLeaveGuard, useRoutedPopup } from "../../navigation/routes";
 import {
   catalogFromUsers,
   excerptReadingItemById,
@@ -25,6 +25,8 @@ import { apiFetch } from "../../services/api";
 import { announceLibraryMutation, announceLibraryMutationStart, buildReadingPatch, isLibraryMutationResponse, saveLibraryBook } from "../../services/library-mutations";
 import { ReadingStateFields, ReadingStatusSelector, readingProgressIsValid, readingStatusLabel } from "../books/ReadingStateFields";
 import { readingPercent, sortBookReaders } from "../../lib/reading-state";
+import { BookProgressNotes, SaveBookNote } from "../books/BookProgressNotes";
+import { BookShelfList, LibraryModeSwitch, openShelfEditor, useLibraryMode } from "../books/BookShelves";
 
 type CachedReadingDraft = { book: LibraryBook; state: "idle" | "saving" | "saved" | "error"; revision: number };
 const personalReadingDrafts = new Map<string, CachedReadingDraft>();
@@ -45,13 +47,14 @@ import type {
   Excerpt,
   FlipProductPreview,
   LibraryBook,
-  LibraryView,
+
   MarketplaceProductPreview,
   MaterialComment,
   Occasion,
   OccasionType,
   ProfileTab,
   PublisherNews,
+  ReadingGoal,
   ReadingItem,
   Review,
   SocialRelationship,
@@ -221,9 +224,9 @@ function formatCommentDate(value: string, locale: Locale) {
   return translate(locale, "date.dateAt", { date: new Intl.DateTimeFormat(intl, { day: "2-digit", month: "2-digit", year: "numeric" }).format(date), time });
 }
 
-type EngagementKind = "event" | "occasion" | "publisher_news";
+type EngagementKind = "event" | "occasion" | "publisher_news" | "shelf";
 
-function MaterialEngagement({ kind, materialId, ownerId, currentUser, users, onOpenUser, shareAttachment }: { kind: EngagementKind; materialId: number; ownerId: number; currentUser?: DemoUser; users: DemoUser[]; onOpenUser?: (userId: number) => void; shareAttachment?: ChatAttachment }) {
+export function MaterialEngagement({ kind, materialId, ownerId, currentUser, users, onOpenUser, shareAttachment }: { kind: EngagementKind; materialId: number; ownerId: number; currentUser?: DemoUser; users: DemoUser[]; onOpenUser?: (userId: number) => void; shareAttachment?: ChatAttachment }) {
   const { locale, t } = useI18n();
   const [likedUserIds, setLikedUserIds] = useState<number[]>([]);
   const [comments, setComments] = useState<MaterialComment[]>([]);
@@ -628,7 +631,8 @@ export function UserProfileModal({ user, viewer, users, catalog, profileFriends 
   const [comment, setComment] = useState("");
   const [socialList, setSocialList] = useState<"friends" | "followers" | null>(null);
   const authorizedProfileFollowers = profileFollowers;
-  const [activeTab, setActiveTab] = useState<"main" | "author-books" | "excerpts" | "publisher-events" | "publisher-news" | "library" | "wishlist" | "communities" | "reviews" | "occasions" | "members">("main");
+  const [activeTab, setActiveTab] = useState<"main" | "author-books" | "excerpts" | "publisher-events" | "publisher-news" | "library" | "wishlist" | "communities" | "reviews" | "occasions" | "members">(() => new URLSearchParams(window.location.search).get("tab") === "library" ? "library" : "main");
+  const [libraryMode, setLibraryMode] = useLibraryMode();
   const [openedPublisherEvent, setOpenedPublisherEvent] = useState<BookEvent | null>(null);
   const [openedPublisherNews, setOpenedPublisherNews] = useState<PublisherNews | null>(null);
   const [openedOccasion, setOpenedOccasion] = useState<Occasion | null>(null);
@@ -739,7 +743,7 @@ export function UserProfileModal({ user, viewer, users, catalog, profileFriends 
           <nav className="public-profile-tabs" aria-label={t("nav.profile")}>
             <button className={activeTab === "main" ? "active" : ""} type="button" onClick={() => setActiveTab("main")}>{t("profile.desktopMain")}</button>
             {tabVisible("author-books") && (user.profile.type === "Писатель" || isOrganization) && Boolean(isCommunity ? user.communityBooks?.length : user.authorBooks?.length) && <button className={activeTab === "author-books" ? "active" : ""} type="button" onClick={() => setActiveTab("author-books")}>{isCommunity ? t("profile.communityBooks") : user.profile.type === "Издатель" ? t("profile.publisherBooks") : t("nav.books")} <span>{isCommunity ? user.communityBooks?.length ?? 0 : user.authorBooks?.length ?? 0}</span></button>}
-            {tabVisible("library") && !isOrganization && user.books.length > 0 && <button className={activeTab === "library" ? "active" : ""} type="button" onClick={() => setActiveTab("library")}>{t("profile.library")} <span>{user.books.length}</span></button>}
+            {tabVisible("library") && !isOrganization && <button className={activeTab === "library" ? "active" : ""} type="button" onClick={() => { setActiveTab("library"); const url = new URL(window.location.href); url.searchParams.set("tab", "library"); window.history.replaceState(window.history.state, "", `${url.pathname}${url.search}`); }}>{t("profile.library")} <span>{user.books.length}</span></button>}
             {tabVisible("wishlist") && user.profile.canViewWishlist && ["Читатель", "Писатель", "Блогер"].includes(user.profile.type) && <button className={activeTab === "wishlist" ? "active" : ""} type="button" onClick={() => setActiveTab("wishlist")}>{t("wishlist.title")} <span>{profileWishBooks.length}</span></button>}
             {!isOrganization && profileCommunities.length > 0 && <button className={activeTab === "communities" ? "active" : ""} type="button" onClick={() => setActiveTab("communities")}>{t("profile.communities")} <span>{profileCommunities.length}</span></button>}
             {tabVisible("friends") && isCommunity && <button className={activeTab === "members" ? "active" : ""} type="button" onClick={() => setActiveTab("members")}>{t("profile.communityMembers")} <span>{profileFriends.length}</span></button>}
@@ -749,7 +753,7 @@ export function UserProfileModal({ user, viewer, users, catalog, profileFriends 
           {activeTab === "author-books" && user.profile.type === "Издатель" && <CommunityBooksTab books={user.authorBooks ?? []} catalog={catalog} users={users} editable={false} organizationType="publisher" onChange={() => undefined} />}
           {activeTab === "author-books" && user.profile.type === "Писатель" && <div className="public-books-grid">{(user.authorBooks ?? []).map((book) => <button type="button" className="public-book-card" key={book.id} onClick={() => setOpenedAuthorBook(book)}><div className={`library-book-cover library-cover-${book.coverTone}`} style={book.coverUrl ? { backgroundImage: `url(${book.coverUrl})` } : undefined}>{!book.coverUrl && <><em>{book.author}</em><strong>{book.title}</strong><span>Book Meet</span></>}</div><h3>{book.title}</h3><p>{book.author}</p></button>)}</div>}
           {activeTab === "excerpts" && <div className="public-reviews-list">{(user.excerpts ?? []).map((excerpt) => <button type="button" key={excerpt.id} onClick={() => setOpenedReview({ id: excerpt.id, kind: "excerpt", title: excerpt.bookTitle || t("content.publications"), author: user.profile.name, text: excerpt.text, preview: excerpt.previewText, bodyHtml: excerpt.bodyHtml, linkedBookId: excerpt.bookId, linkedBookIds: excerpt.bookIds, ownerId: user.id, createdAt: excerpt.createdAt })}><span data-i18n-skip>{excerpt.createdAt}</span><h3 data-i18n-skip={Boolean(excerpt.bookTitle)}>{excerpt.bookTitle || t("content.publications")}</h3><p data-i18n-skip>{excerpt.previewText || excerpt.text.slice(0, 500)}</p><b>{t("common.open")} →</b></button>)}</div>}
-          {activeTab === "library" && <div className="public-library-view"><div className="library-status-filter public-library-status-filter" role="group" aria-label={t("library.statusFilter")}><button className={libraryStatus === "want" ? "active" : ""} type="button" onClick={() => setLibraryStatus("want")}>{t("content.want")}</button><button className={libraryStatus === "reading" ? "active" : ""} type="button" onClick={() => setLibraryStatus("reading")}>{t("content.reading")}</button><button className={libraryStatus === "read" ? "active" : ""} type="button" onClick={() => setLibraryStatus("read")}>{t("content.readDone")}</button></div><div className="public-books-grid">{publicLibraryBooks.map((book) => <button type="button" data-i18n-skip className={`public-book-card ${book.topRank ? "top3-book" : ""}`} key={book.id} onClick={() => setOpenedAuthorBook(book)}>{book.topRank && <span className="top3-crown" aria-label={`TOP3, ${book.topRank}`}>♛<b>{book.topRank}</b></span>}<div className={`library-book-cover library-cover-${book.coverTone}`} style={book.coverUrl ? { backgroundImage: `url(${book.coverUrl})` } : undefined}>{!book.coverUrl && <><em>{book.author}</em><strong>{book.title}</strong><span>Book Meet</span></>}</div><h3>{book.title}</h3><p>{book.author}</p>{libraryStatus === "read" && <span>★ {book.rating}</span>}</button>)}</div>{!publicLibraryBooks.length && <div className="profile-tab-placeholder">{t("library.sectionEmpty")}</div>}</div>}
+          {activeTab === "library" && <div className="public-library-view"><LibraryModeSwitch mode={libraryMode} onChange={setLibraryMode} />{libraryMode === "shelves" ? <BookShelfList ownerId={user.id} /> : <><div className="library-status-filter public-library-status-filter" role="group" aria-label={t("library.statusFilter")}><button className={libraryStatus === "want" ? "active" : ""} type="button" onClick={() => setLibraryStatus("want")}>{t("content.want")}</button><button className={libraryStatus === "reading" ? "active" : ""} type="button" onClick={() => setLibraryStatus("reading")}>{t("content.reading")}</button><button className={libraryStatus === "read" ? "active" : ""} type="button" onClick={() => setLibraryStatus("read")}>{t("content.readDone")}</button></div><div className="public-books-grid">{publicLibraryBooks.map((book) => <button type="button" data-i18n-skip className={`public-book-card ${book.topRank ? "top3-book" : ""}`} key={book.id} onClick={() => setOpenedAuthorBook(book)}>{book.topRank && <span className="top3-crown" aria-label={`TOP3, ${book.topRank}`}>♛<b>{book.topRank}</b></span>}<div className={`library-book-cover library-cover-${book.coverTone}`} style={book.coverUrl ? { backgroundImage: `url(${book.coverUrl})` } : undefined}>{!book.coverUrl && <><em>{book.author}</em><strong>{book.title}</strong><span>Book Meet</span></>}</div><h3>{book.title}</h3><p>{book.author}</p>{libraryStatus === "read" && <span>★ {book.rating}</span>}</button>)}</div>{!publicLibraryBooks.length && <div className="profile-tab-placeholder">{t("library.sectionEmpty")}</div>}</>}</div>}
           {activeTab === "wishlist" && user.profile.canViewWishlist && <WishlistTab books={profileWishBooks} setBooks={setProfileWishBooks} owner={{ ...user, wishBooks: profileWishBooks }} viewer={viewer} users={users} readOnly />}
           {activeTab === "communities" && <div className="profile-community-list public-profile-community-list">{profileCommunities.map((community) => <button type="button" key={community.id} className="profile-community-card" onClick={() => onOpenUser(community.id)}><span className={`avatar avatar-sm avatar-${community.color} ${community.avatarUrl ? "has-photo" : ""}`} style={community.avatarUrl ? { backgroundImage: `url(${community.avatarUrl})` } : undefined}>{!community.avatarUrl && community.initials}</span><span><strong data-i18n-skip>{community.profile.name}</strong><small data-i18n-skip>@{community.username}</small></span></button>)}</div>}
           {activeTab === "reviews" && ["Читатель", "Писатель", "Блогер"].includes(user.profile.type) && <div className="public-reviews-list">{user.reviews.map((review) => <button type="button" data-i18n-skip key={review.id} onClick={() => setOpenedReview({ id: review.id, kind: "review", title: review.bookTitle, author: user.profile.name, text: review.fullText, ownerId: user.id, createdAt: review.createdAt, preview: review.preview, bookAuthor: review.bookAuthor, rating: review.rating })}><span>★ {review.rating} · {review.createdAt}</span><h3>{review.bookTitle}</h3><p>{review.preview}</p><b data-i18n-skip={false}>{t("content.read")} →</b></button>)}</div>}
@@ -783,7 +787,7 @@ export function UnifiedBookModal({ book: sourceBook, users, catalog = [], viewer
   const routeCloseRef = useRef(onClose);
   const closeAlreadyApproved = useRef(false);
   const routedPopup = useRoutedPopup(`/books/${book.id}`, "/", () => routeCloseRef.current(), `${book.title} — Book Meet`, !initialStatusDialog);
-  const [tab, setTab] = useState<"about" | "readers" | "reviews">("about");
+  const [tab, setTab] = useState<"about" | "readers" | "reviews" | "notes">("about");
   const [warningLink, setWarningLink] = useState<BookLink | null>(null);
   const [openedReview, setOpenedReview] = useState<{ review: UserReview; reviewer: DemoUser } | null>(null);
   const [inlineDraft, setInlineDraft] = useState<LibraryBook | null>(initialCachedDraft?.book ?? viewerBook ?? null);
@@ -921,12 +925,14 @@ export function UnifiedBookModal({ book: sourceBook, users, catalog = [], viewer
           <div className="unified-book-copy">
             <span className="section-subtitle">{t("book.card")}{book.isAdult ? " · 18+" : ""}</span><h2 data-i18n-skip>{book.title}</h2>{bookAuthorProfile && onOpenUser ? <button className="book-author-profile" data-i18n-skip type="button" onClick={() => onOpenUser(bookAuthorProfile.id)}><span className={`avatar avatar-sm avatar-${bookAuthorProfile.color} ${bookAuthorProfile.avatarUrl ? "has-photo" : ""}`} style={bookAuthorProfile.avatarUrl ? { backgroundImage: `url(${bookAuthorProfile.avatarUrl})` } : undefined}>{!bookAuthorProfile.avatarUrl && bookAuthorProfile.initials}</span><span>{book.author}</span></button> : <p className="library-author" data-i18n-skip>{book.author}</p>}{book.ratingCount ? <p className="catalogue-rating" aria-label={t("book.ratingAria", { title: book.title })}>★ {book.averageRating?.toLocaleString(locale === "ru" ? "ru-RU" : locale === "kk" ? "kk-KZ" : "en-US", { minimumFractionDigits: 1, maximumFractionDigits: 1 })} ({book.ratingCount})</p> : null}
             <div className="profile-tags" data-i18n-skip>{book.genres.map((genre) => <span key={genre}>{genre}</span>)}</div>
-            {ownsLibraryRelation && inlineDraft && inlineDraft.readingStatus !== "want" && <section data-testid="book-personal-state" className="book-personal-state" aria-label={t("library.bookStatus")}>{(((inlineDraft.readingStatus ?? "read") === "reading" && readingPercent(inlineDraft) !== null) || ((inlineDraft.readingStatus ?? "read") === "postponed" && inlineDraft.postponedOverdue)) && <div className="book-personal-state-heading">{inlineDraft.readingStatus === "reading" && readingPercent(inlineDraft) !== null && <span>{readingPercent(inlineDraft)}%</span>}{inlineDraft.readingStatus === "postponed" && inlineDraft.postponedOverdue && <span className="postponed-overdue">{locale === "ru" ? "Срок наступил" : locale === "kk" ? "Мерзімі келді" : "Due"}</span>}</div>}<ReadingStateFields value={inlineDraft} onChange={(next) => { const revision = inlineDraftRevision.current + 1; inlineDraftRevision.current = revision; setInlineDraft(next); publishReadingDraft(readingDraftKey, { book: next, state: "idle", revision }); }} /><output data-testid="reading-autosave-status" aria-live="polite" className="reading-autosave-status">{autosaveText}</output>{inlineSaveState === "error" && <button type="button" onClick={() => { const revision = inlineDraftRevision.current + 1; inlineDraftRevision.current = revision; const next = { ...inlineDraft }; setInlineDraft(next); publishReadingDraft(readingDraftKey, { book: next, state: "idle", revision }); }}>{locale === "ru" ? "Повторить" : locale === "kk" ? "Қайталау" : "Retry"}</button>}</section>}
+            {ownsLibraryRelation && inlineDraft && inlineDraft.readingStatus !== "want" && <section data-testid="book-personal-state" className="book-personal-state" aria-label={t("library.bookStatus")}>{(((inlineDraft.readingStatus ?? "read") === "reading" && readingPercent(inlineDraft) !== null) || ((inlineDraft.readingStatus ?? "read") === "postponed" && inlineDraft.postponedOverdue)) && <div className="book-personal-state-heading">{inlineDraft.readingStatus === "reading" && readingPercent(inlineDraft) !== null && <span>{readingPercent(inlineDraft)}%</span>}{inlineDraft.readingStatus === "postponed" && inlineDraft.postponedOverdue && <span className="postponed-overdue">{locale === "ru" ? "Срок наступил" : locale === "kk" ? "Мерзімі келді" : "Due"}</span>}</div>}<ReadingStateFields value={inlineDraft} onChange={(next) => { const revision = inlineDraftRevision.current + 1; inlineDraftRevision.current = revision; setInlineDraft(next); publishReadingDraft(readingDraftKey, { book: next, state: "idle", revision }); }} /><SaveBookNote bookId={canonicalId} draft={inlineDraft} pending={inlineSaveState === "saving" || inlineHasUnsavedChanges} /><output data-testid="reading-autosave-status" aria-live="polite" className="reading-autosave-status">{autosaveText}</output>{inlineSaveState === "error" && <button type="button" onClick={() => { const revision = inlineDraftRevision.current + 1; inlineDraftRevision.current = revision; const next = { ...inlineDraft }; setInlineDraft(next); publishReadingDraft(readingDraftKey, { book: next, state: "idle", revision }); }}>{locale === "ru" ? "Повторить" : locale === "kk" ? "Қайталау" : "Retry"}</button>}</section>}
             <button className="book-share-action" type="button" aria-label={t("share.action")} title={t("share.action")} onClick={(event) => { event.stopPropagation(); window.dispatchEvent(new CustomEvent("bookmeet:share-material", { detail: { attachment: { kind: "book", id: catalogBookId } } })); }}><ShareArrowIcon />{t("share.action")}</button><nav className="book-detail-tabs">
               <button className={tab === "about" ? "active" : ""} type="button" onClick={() => setTab("about")}>{t("book.about")}</button>
               <button className={tab === "readers" ? "active" : ""} type="button" onClick={() => setTab("readers")}>{t("book.readers")}</button>
               <button className={tab === "reviews" ? "active" : ""} type="button" onClick={() => setTab("reviews")}>{t("content.reviews")}</button>
+              {effectiveViewer && <button className={tab === "notes" ? "active" : ""} type="button" onClick={() => setTab("notes")}>{t("notes.title")}</button>}
             </nav>
+            {tab === "notes" && effectiveViewer && <BookProgressNotes bookId={canonicalId} viewerId={effectiveViewer.id} visibilityKey={JSON.stringify([viewerBook?.readingStatus, readingPercent(viewerBook ?? {}), users.map((user) => [user.id, user.blockedByMe])])} />}
             {tab === "about" && <div className="unified-book-section">{(book.isbn || book.publisher) && <dl className="book-edition-details">{book.isbn && <><dt>ISBN</dt><dd data-i18n-skip>{book.isbn}</dd></>}{book.publisher && <><dt>{t("content.publisher")}</dt><dd data-i18n-skip>{book.publisher}</dd></>}</dl>}<p data-i18n-skip={Boolean(book.annotation)}>{book.annotation || t("book.noAnnotation")}</p>{relatedEvents.length > 0 && <div className="book-related-events">{relatedEvents.map((event) => <button type="button" data-i18n-skip key={event.id} onClick={() => onOpenEvent?.(event)}><strong>{event.title}</strong><span>{new Date(`${event.date}T00:00:00`).toLocaleDateString(locale === "kk" ? "kk-KZ" : locale === "en" ? "en-US" : "ru-RU")} · {event.time} · {event.city}</span></button>)}</div>}<div className="writer-book-links book-primary-actions">{book.flipUrl && <button type="button" onClick={() => setWarningLink({ id: -1, label: "Flip", url: book.flipUrl!, action: "Купить" })}>{t("book.buyOnFlip")}</button>}{(book.links ?? []).filter((link) => link.url !== book.flipUrl).map((link) => <button type="button" key={link.id} onClick={() => setWarningLink(link)}>{t(link.action === "Читать" ? "content.read" : link.action === "Слушать" ? "content.listen" : "content.buy")} · <span data-i18n-skip>{link.label}</span></button>)}{canAddToLibrary && <button className="primary-button add-catalog-to-library" type="button" onClick={() => window.dispatchEvent(new CustomEvent("bookmeet:add-catalog-book", { detail: { bookId: catalogBookId } }))}>{t("content.addLibrary")}</button>}</div></div>}
             {tab === "readers" && <div className="book-readers-list">{readers.length ? readers.map(({ reader, item }) => { const progress = readingPercent(item); const status = item.readingStatus ?? "read"; const label = status === "reading" ? `${t("book.readingNow", { chapter: "" })}${progress === null ? "" : ` · ${progress}%`}` : status === "want" ? (locale === "ru" ? "Хочет прочитать" : locale === "kk" ? "Оқығысы келеді" : "Wants to read") : status === "read" ? t("content.readDone") : readingStatusLabel(status, locale); return <button type="button" className="book-reader-row" key={`${reader.id}-${item.id}`} onClick={() => onOpenUser?.(reader.id)}><span data-i18n-skip className={`avatar avatar-sm avatar-${reader.color} ${reader.avatarUrl ? "has-photo" : ""}`} style={reader.avatarUrl ? { backgroundImage: `url(${reader.avatarUrl})` } : undefined}>{!reader.avatarUrl && reader.initials}</span><span><span className="inline-user-link" data-i18n-skip>{reader.profile.name}</span>{status === "read" && item.rating > 0 && <strong> · ★ {item.rating}</strong>}<small className="book-reader-status">{label}</small></span></button>; }) : <p>{t("book.noReaders")}</p>}</div>}
             {tab === "reviews" && <div className="book-review-results">{bookReviews.length ? bookReviews.map(({ reviewer, review }) => <button type="button" data-i18n-skip key={`${reviewer.id}-${review.id}`} onClick={() => onOpenReview ? onOpenReview(review, reviewer) : setOpenedReview({ review, reviewer })}><strong>★ {review.rating} · {review.createdAt}</strong><p>{review.preview}</p><span className="inline-user-link">{reviewer.profile.name}</span></button>) : <div><p>{t("book.noReviews")}</p><button className="primary-button" type="button" onClick={() => window.dispatchEvent(new CustomEvent("bookmeet:create-review"))}>{t("book.firstReview")}</button></div>}</div>}
@@ -1326,56 +1332,243 @@ export function BookEditor({ book, catalog, top3Count = 0, mode = "library", onC
   );
 }
 
-export function ReadingStatsModal({ books, users, viewer, catalog = [], onClose }: { books: LibraryBook[]; users: DemoUser[]; viewer?: DemoUser; catalog?: (LibraryBook | AuthorBook)[]; onClose: () => void }) {
-  const { t } = useI18n();
-  const currentYear = new Date().getFullYear();
-  // An explicitly returned empty history is authoritative: completed cycles
-  // are not reconstructed from the mutable current-library relation.
-  const completed = Array.isArray(viewer?.readingHistory) ? viewer.readingHistory.map((entry) => ({ ...entry, book: (catalog.find((book) => (book.catalogBookId ?? book.id) === entry.bookId) ?? entry.book) as LibraryBook })) : books.filter((book) => (book.readingStatus ?? "read") === "read").map((book) => ({ id: book.id, bookId: book.catalogBookId ?? book.id, completedMonth: book.readMonth, completedYear: book.readYear, book }));
-  const availableYears = Array.from(new Set([currentYear, ...completed.map((entry) => entry.completedYear).filter((year): year is number => Boolean(year))])).sort((a, b) => b - a);
-  const [year, setYear] = useState(currentYear);
-  const [openedBook, setOpenedBook] = useState<LibraryBook | null>(null);
-  const counts = readingMonths.map((_, index) => completed.filter((entry) => entry.completedYear === year && entry.completedMonth === index + 1).length);
-  const maxCount = Math.max(1, ...counts);
-  const chartLeft = 54;
-  const chartTop = 20;
-  const chartHeight = 220;
-  const chartWidth = 660;
-  const slot = chartWidth / 12;
-  const tickCount = Math.min(5, maxCount + 1);
-  const ticks = Array.from({ length: tickCount }, (_, index) => Math.round(index * maxCount / Math.max(1, tickCount - 1))).filter((value, index, list) => list.indexOf(value) === index);
-  const monthlyGroups = readingMonths.map((month, index) => ({ month, entries: completed.filter((entry) => entry.completedYear === year && entry.completedMonth === index + 1) })).filter((group) => group.entries.length);
+type ReadingGoalProjection = { plan?: Array<{ month: number; target: number; actual: number }>; target?: number; actual?: number; pace?: { text?: string; days?: number; daysPerBook?: number; moreThanOnePerDay?: boolean }; booksPerMonth?: number; startMonth?: number; currentMonth?: number | null };
+type ReadingGoalWithProjection = ReadingGoal & { projection?: ReadingGoalProjection };
+type ReadingStatisticsResponse = { year: number; month: number | null; goals: ReadingGoalWithProjection[]; counts: number[] };
 
-  return <div className="nested-modal-backdrop" onMouseDown={onClose}><section className="reading-stats-modal" onMouseDown={(event) => event.stopPropagation()}>
-    <button className="modal-close" type="button" onClick={onClose} aria-label={t("common.close")}>×</button>
-    <div className="reading-stats-heading"><div><span className="section-subtitle">{t("profile.library")}</span><h2>{t("library.readingStats")}</h2><p>{t("library.readByMonth")}</p></div><label>{t("library.year")}<CustomSelect ariaLabel={t("library.statsYear")} value={year} onChange={setYear} options={availableYears.map((item) => ({ value: item, label: String(item) }))} /></label></div>
-    <div className="reading-chart-shell">
-      <svg className="reading-stats-chart" viewBox="0 0 750 290" role="img" aria-label={t("library.readInYear", { year })}>
-        {ticks.map((tick) => { const y = chartTop + chartHeight - (tick / maxCount) * chartHeight; return <g key={tick}><line x1={chartLeft} x2={chartLeft + chartWidth} y1={y} y2={y} className="chart-grid-line" /><text x={chartLeft - 14} y={y + 4} textAnchor="end" className="chart-y-label">{tick}</text></g>; })}
-        {counts.map((count, index) => {
-          const height = count ? Math.max(8, (count / maxCount) * chartHeight) : 3;
-          const x = chartLeft + index * slot + 8;
-          const y = chartTop + chartHeight - height;
-          return <g key={readingMonths[index]}><rect className={`chart-bar ${count ? "has-value" : ""}`} x={x} y={y} width={slot - 16} height={height} rx="7"><title>{t(readingMonths[index])}: {count} {booksWord(count)}</title></rect>{count > 0 && <text x={x + (slot - 16) / 2} y={y - 8} textAnchor="middle" className="chart-value">{count}</text>}<text x={x + (slot - 16) / 2} y={chartTop + chartHeight + 24} textAnchor="middle" className="chart-month-label">{t(readingMonths[index]).slice(0, 3)}</text></g>;
-        })}
-      </svg>
-      <div className="reading-stats-mobile-chart" role="img" aria-label={t("library.readInYear", { year })}>{counts.map((count, index) => ({ count, month: readingMonths[index] })).reverse().map(({ count, month }) => <div className="reading-stats-mobile-row" key={month}><span>{t(month).slice(0, 3)}</span><i><b style={{ width: `${count ? count / maxCount * 100 : 0}%` }}><em>{count}</em></b></i></div>)}</div>
-    </div>
-    {monthlyGroups.length > 0 && <div className="reading-month-groups">{monthlyGroups.map((group) => <section className="reading-month-group" key={group.month}><h3>{t(group.month)}</h3><div>{group.entries.map((entry) => { const historyBook = entry.book; return <button type="button" data-i18n-skip className="reading-month-book" key={entry.id} onClick={() => setOpenedBook(historyBook)}><div className={`library-book-cover library-cover-${historyBook.coverTone}`} style={historyBook.coverUrl ? { backgroundImage: `url(${historyBook.coverUrl})` } : undefined}>{!historyBook.coverUrl && <strong>{historyBook.title.slice(0, 1)}</strong>}</div><span><strong>{historyBook.title}</strong><small>{historyBook.author}</small></span></button>; })}</div></section>)}</div>}
-     {openedBook && <UnifiedBookModal book={openedBook} viewer={viewer} users={users} catalog={catalog.length ? catalog : books} nested onClose={() => setOpenedBook(null)} />}
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
+function parseReadingGoal(value: unknown): ReadingGoal {
+  if (!isRecord(value) || typeof value.id !== "number" || !Number.isInteger(value.id) || value.id < 1 || (value.goalKind !== "month" && value.goalKind !== "year") || typeof value.targetCount !== "number" || !Number.isInteger(value.targetCount) || value.targetCount < 1 || value.targetCount > 4_294_967_295 || typeof value.targetYear !== "number" || !Number.isInteger(value.targetYear) || value.targetYear < 1900) throw new Error("Некорректный формат цели");
+  const id = value.id as number;
+  const targetCount = value.targetCount as number;
+  const targetYear = value.targetYear as number;
+  const targetMonth = value.goalKind === "month" && Number.isInteger(value.targetMonth) && Number(value.targetMonth) >= 1 && Number(value.targetMonth) <= 12 ? value.targetMonth as number : value.goalKind === "year" && value.targetMonth === null ? null : (() => { throw new Error("Некорректный период цели"); })();
+  const startMonth = value.goalKind === "year" && Number.isInteger(value.startMonth) && Number(value.startMonth) >= 1 && Number(value.startMonth) <= 2 ? value.startMonth as number : value.goalKind === "month" && value.startMonth === null ? null : (() => { throw new Error("Некорректный месяц начала цели"); })();
+  return { id, goalKind: value.goalKind as ReadingGoal["goalKind"], targetCount, targetMonth, targetYear, startMonth, ...(typeof value.createdAt === "string" ? { createdAt: value.createdAt } : {}), ...(typeof value.updatedAt === "string" ? { updatedAt: value.updatedAt } : {}) };
+}
+
+function parseReadingGoals(value: unknown): ReadingGoal[] {
+  if (!isRecord(value) || !Array.isArray(value.goals)) throw new Error("Некорректный формат целей");
+  return value.goals.map(parseReadingGoal);
+}
+
+function parseReadingStatistics(value: unknown): ReadingStatisticsResponse {
+  if (!isRecord(value) || typeof value.year !== "number" || !Number.isInteger(value.year) || value.year < 1900 || !(value.month === null || (Number.isInteger(value.month) && Number(value.month) >= 1 && Number(value.month) <= 12)) || !Array.isArray(value.counts) || value.counts.length !== 12 || !Array.isArray(value.goals)) throw new Error("Некорректный формат статистики");
+  const year = value.year as number;
+  const counts = value.counts.map((count) => Number.isInteger(count) && count >= 0 ? count : NaN);
+  if (counts.some((count) => !Number.isFinite(count))) throw new Error("Некорректные данные статистики");
+  const goals = value.goals.map((goal) => {
+    const parsed = parseReadingGoal(goal);
+    if (!isRecord(goal) || goal.projection === undefined) return parsed;
+    if (!isRecord(goal.projection)) throw new Error("Некорректный план цели");
+    const projection: ReadingGoalProjection = {};
+    if (goal.projection.plan !== undefined && !Array.isArray(goal.projection.plan)) throw new Error("Некорректный месячный план");
+    if (Array.isArray(goal.projection.plan)) {
+      const planMonths = new Set<number>();
+      projection.plan = goal.projection.plan.map((entry) => {
+        if (!isRecord(entry) || typeof entry.month !== "number" || !Number.isInteger(entry.month) || entry.month < 1 || entry.month > 12 || planMonths.has(entry.month) || typeof entry.target !== "number" || !Number.isInteger(entry.target) || entry.target < 0 || typeof entry.actual !== "number" || !Number.isInteger(entry.actual) || entry.actual < 0) throw new Error("Некорректный месячный план");
+        planMonths.add(entry.month);
+        return { month: entry.month, target: Number(entry.target), actual: Number(entry.actual) };
+      });
+    }
+    const projectionNumbers: Array<readonly ["target" | "actual" | "booksPerMonth" | "startMonth" | "currentMonth", (number: number) => boolean]> = [
+      ["target", (number) => Number.isInteger(number) && number >= 0],
+      ["actual", (number) => Number.isInteger(number) && number >= 0],
+      ["booksPerMonth", (number) => Number.isFinite(number) && number >= 0],
+      ["startMonth", (number) => Number.isInteger(number) && number >= 1 && number <= 12],
+      ["currentMonth", (number) => Number.isInteger(number) && number >= 1 && number <= 12],
+    ];
+    for (const [key, valid] of projectionNumbers) {
+      const raw = goal.projection[key];
+      if (raw !== undefined && raw !== null && (typeof raw !== "number" || !valid(raw))) throw new Error("Некорректная проекция цели");
+    }
+    if (typeof goal.projection.target === "number") projection.target = goal.projection.target;
+    if (typeof goal.projection.actual === "number") projection.actual = goal.projection.actual;
+    if (typeof goal.projection.booksPerMonth === "number") projection.booksPerMonth = goal.projection.booksPerMonth;
+    if (typeof goal.projection.startMonth === "number") projection.startMonth = goal.projection.startMonth;
+    if (typeof goal.projection.currentMonth === "number" || goal.projection.currentMonth === null) projection.currentMonth = goal.projection.currentMonth;
+    if (goal.projection.pace !== undefined) {
+      if (!isRecord(goal.projection.pace)) throw new Error("Некорректный темп цели");
+      const pace = goal.projection.pace;
+      if (pace.text !== undefined && typeof pace.text !== "string" || pace.days !== undefined && (typeof pace.days !== "number" || !Number.isInteger(pace.days) || pace.days < 0) || pace.daysPerBook !== undefined && (typeof pace.daysPerBook !== "number" || !Number.isFinite(pace.daysPerBook) || pace.daysPerBook < 0) || pace.moreThanOnePerDay !== undefined && typeof pace.moreThanOnePerDay !== "boolean") throw new Error("Некорректный темп цели");
+      projection.pace = { text: pace.text as string | undefined, days: pace.days as number | undefined, daysPerBook: pace.daysPerBook as number | undefined, moreThanOnePerDay: pace.moreThanOnePerDay as boolean | undefined };
+    }
+    return { ...parsed, projection };
+  });
+  return { year, month: value.month as number | null, goals, counts };
+}
+
+function clientDaysInMonth(year: number, month: number) { return new Date(year, month, 0).getDate(); }
+
+function clientMonthPace(year: number, month: number, count: number, now: Date, t: ReturnType<typeof useI18n>["t"]) {
+  const days = year === now.getFullYear() && month === now.getMonth() + 1 ? clientDaysInMonth(year, month) - now.getDate() + 1 : clientDaysInMonth(year, month);
+  if (count > days) return t("library.goalPaceMore");
+  const value = days / count;
+  if (Number.isInteger(value)) return t("library.goalPaceInteger", { days: value });
+  return t("library.goalPaceRange", { from: Math.floor(value), to: Math.ceil(value) });
+}
+
+function clientAnnualPace(year: number, count: number, currentYear: number, currentMonth: number, t: ReturnType<typeof useI18n>["t"], startMonth?: number | null) {
+  const months = startMonth && year === currentYear ? 13 - startMonth : year === currentYear && currentMonth <= 2 ? 13 - currentMonth : 12;
+  return t("library.goalAnnualPace", { value: (count / months).toFixed(1) });
+}
+
+function validGoalCount(value: string) {
+  const count = Number(value);
+  return /^\d+$/.test(value) && Number.isSafeInteger(count) && count > 0 && count <= 4_294_967_295;
+}
+
+export function ReadingGoalsModal({ onClose, onOpenStats }: { onClose: () => void; onOpenStats: (goal: ReadingGoal) => void }) {
+  const { t } = useI18n();
+  const now = new Date(); const currentYear = now.getFullYear(); const currentMonth = now.getMonth() + 1;
+  const months = readingMonths.map((label, index) => ({ value: index + 1, label: t(label) }));
+  const [goals, setGoals] = useState<ReadingGoal[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [creationKind, setCreationKind] = useState<"month" | "year" | null>(null);
+  const [editingGoalId, setEditingGoalId] = useState<number | null>(null);
+  const [month, setMonth] = useState(currentMonth);
+  const [year, setYear] = useState(currentMonth <= 2 ? currentYear : currentYear + 1);
+  const [count, setCount] = useState("");
+  const [editingCount, setEditingCount] = useState("");
+  const [error, setError] = useState("");
+  const [saving, setSaving] = useState<number | "create" | null>(null);
+  const [deleting, setDeleting] = useState<number | null>(null);
+  const goalDataRevision = useRef(0);
+
+  useEffect(() => {
+    let active = true;
+    setLoading(true); setError("");
+    const requestRevision = goalDataRevision.current;
+    void apiFetch("/api/reading-goals", { cache: "no-store" }).then(async (response) => {
+      const payload = await response.json().catch(() => null);
+      if (!response.ok) throw new Error(isRecord(payload) && typeof payload.error === "string" ? payload.error : t("library.goalLoadError"));
+      return parseReadingGoals(payload);
+    }).then((nextGoals) => { if (active && requestRevision === goalDataRevision.current) setGoals(nextGoals); }).catch((reason) => { if (active) setError(reason instanceof Error ? reason.message : t("library.goalLoadError")); }).finally(() => { if (active) setLoading(false); });
+    return () => { active = false; };
+  }, [t]);
+
+  const creationValid = Boolean(creationKind && validGoalCount(count));
+  const editingValid = validGoalCount(editingCount);
+  const chooseKind = (next: "month" | "year") => { setCreationKind(next); setEditingGoalId(null); setCount(""); setError(""); };
+  async function save(goal?: ReadingGoal) {
+    const value = goal ? editingCount : count;
+    if (!validGoalCount(value) || !goal && !creationKind) return;
+    const mode = goal ? goal.id : "create" as const;
+    goalDataRevision.current += 1;
+    setSaving(mode); setError("");
+    const payload = goal ? { targetCount: Number(value) } : { targetCount: Number(value), goalKind: creationKind, targetYear: creationKind === "month" ? currentYear : year, ...(creationKind === "month" ? { targetMonth: month } : {}) };
+    try {
+      const response = await apiFetch(goal ? `/api/reading-goals/${goal.id}` : "/api/reading-goals", { method: goal ? "PATCH" : "POST", body: JSON.stringify(payload) });
+      const data = await response.json().catch(() => null);
+      if (!response.ok || !isRecord(data) || !data.goal) throw new Error(isRecord(data) && typeof data.error === "string" ? data.error : t("library.goalSaveError"));
+      const savedGoal = parseReadingGoal(data.goal);
+      setGoals((current) => goal ? current.map((item) => item.id === goal.id ? savedGoal : item) : [...current, savedGoal]);
+      if (goal) { setEditingGoalId(null); setEditingCount(""); } else { setCreationKind(null); setCount(""); }
+    } catch (reason) { setError(reason instanceof Error ? reason.message : t("library.goalSaveError")); }
+    finally { setSaving(null); }
+  }
+  async function remove(goal: ReadingGoal) {
+    if (!window.confirm(t("library.goalDeleteConfirm"))) return;
+    goalDataRevision.current += 1;
+    setDeleting(goal.id); setError("");
+    try {
+      const response = await apiFetch(`/api/reading-goals/${goal.id}`, { method: "DELETE" });
+      const data = await response.json().catch(() => null);
+      if (!response.ok) throw new Error(isRecord(data) && typeof data.error === "string" ? data.error : t("library.goalDeleteError"));
+      setGoals((current) => current.filter((item) => item.id !== goal.id));
+      if (editingGoalId === goal.id) { setEditingGoalId(null); setEditingCount(""); }
+    } catch (reason) { setError(reason instanceof Error ? reason.message : t("library.goalDeleteError")); }
+    finally { setDeleting(null); }
+  }
+
+  return <div className="nested-modal-backdrop workflow-page-backdrop reading-goals-backdrop" onMouseDown={onClose}><section className="reading-goals-modal" role="dialog" aria-modal="true" aria-label="Цели чтения" onMouseDown={(event) => event.stopPropagation()}>
+    <button className="modal-close" type="button" aria-label={t("common.close")} onClick={onClose}>×</button><button className="reading-goals-mobile-back" type="button" aria-label={t("common.back")} onClick={onClose}>← {t("common.back")}</button>
+    <span className="section-subtitle">{t("profile.library")}</span><h2>{t("library.goalTitle")}</h2>
+    {loading && <p className="reading-goals-status" role="status">{t("library.goalLoading")}</p>}
+    {!loading && <div className="reading-goal-list">{goals.map((goal) => { const editing = editingGoalId === goal.id; const goalMonthLabel = goal.targetMonth && months[goal.targetMonth - 1] ? `${months[goal.targetMonth - 1].label} ${goal.targetYear}` : `${goal.targetYear} ${t("library.goalYearSuffix")}`; return <div key={goal.id} className={`reading-goal-row${editing ? " is-editing" : ""}`}>
+      <button type="button" className="reading-goal-title" onClick={() => onOpenStats(goal)}>{t("library.goalOn", { period: goal.goalKind === "month" ? goalMonthLabel : `${goal.targetYear} ${t("library.goalYearSuffix")}` })}</button><span>{goal.targetCount} {booksWord(goal.targetCount)}</span>
+      <button type="button" aria-label={t("library.goalEditAria", { period: goalMonthLabel })} disabled={saving !== null || deleting !== null} onClick={() => { setEditingGoalId(goal.id); setEditingCount(String(goal.targetCount)); setCreationKind(null); setCount(""); setError(""); }}>{t("library.goalEdit")}</button>
+      <button type="button" aria-label={t("library.goalDeleteAria", { period: goalMonthLabel })} disabled={saving !== null || deleting === goal.id} onClick={() => void remove(goal)}>{deleting === goal.id ? "…" : "×"}</button>
+      {editing && <div className="reading-goal-inline-edit"><label>{t("library.goalCount")}<input aria-label={t("library.goalCountFor", { period: goalMonthLabel })} inputMode="numeric" type="text" value={editingCount} onChange={(event) => setEditingCount(event.target.value)} /></label><button className="primary-button" type="button" disabled={!editingValid || saving !== null} onClick={() => void save(goal)}>{saving === goal.id ? t("library.goalSaving") : t("library.goalSave")}</button>{editingValid && <p>{goal.goalKind === "month" ? clientMonthPace(goal.targetYear, goal.targetMonth ?? currentMonth, Number(editingCount), now, t) : clientAnnualPace(goal.targetYear, Number(editingCount), currentYear, currentMonth, t, goal.startMonth)}</p>}</div>}
+    </div>; })}</div>}
+    {!loading && !goals.length && <p className="reading-goals-status">{t("library.goalEmpty")}</p>}
+    <div className="reading-goal-divider" /><div className="reading-goal-kind" role="group" aria-label={t("library.goalType")}><button type="button" className={creationKind === "month" ? "active" : ""} onClick={() => chooseKind("month")}>{t("library.goalMonth")}</button><button type="button" className={creationKind === "year" ? "active" : ""} onClick={() => chooseKind("year")}>{t("library.goalYear")}</button></div>
+    {creationKind && <div className="reading-goal-form"><label>{creationKind === "month" ? t("library.month") : t("library.year")}{creationKind === "month" ? <select aria-label={t("library.goalMonth")} value={month} onChange={(event) => setMonth(Number(event.target.value))}>{months.slice(currentMonth - 1).map((item) => <option key={item.value} value={item.value}>{item.label}</option>)}</select> : <select aria-label={t("library.goalYear")} value={year} onChange={(event) => setYear(Number(event.target.value))}>{(currentMonth <= 2 ? [currentYear, currentYear + 1] : [currentYear + 1]).map((item) => <option key={item} value={item}>{item}</option>)}</select>}</label><label>{t("library.goalCount")}<input aria-label={t("library.goalCount")} inputMode="numeric" type="text" value={count} onChange={(event) => setCount(event.target.value)} /></label>{validGoalCount(count) && <p>{creationKind === "month" ? t("library.goalMonthlySummary", { month: months[month - 1]?.label ?? "", count, books: booksWord(Number(count)), pace: clientMonthPace(currentYear, month, Number(count), now, t) }) : t("library.goalAnnualSummary", { year, count, books: booksWord(Number(count)), pace: clientAnnualPace(year, Number(count), currentYear, currentMonth, t) })}</p>}<button className="primary-button" type="button" disabled={!creationValid || saving !== null} onClick={() => void save()}>{saving === "create" ? t("library.goalSaving") : t("library.goalPlace")}</button></div>}
+    {error && <p className="form-error" role="alert">{error}</p>}
   </section></div>;
 }
 
-export function LibraryTab({ books, setBooks, userId, users, catalog = [], initialAdd = false, initialEditId, initialStatusId }: { books: LibraryBook[]; setBooks: React.Dispatch<React.SetStateAction<LibraryBook[]>>; userId: number; users: DemoUser[]; catalog?: (LibraryBook | AuthorBook)[]; initialAdd?: boolean; initialEditId?: number | null; initialStatusId?: number | null }) {
+export function ReadingStatsModal({ books, users, viewer, catalog = [], initialYear, initialMonth, selectedGoalId, onClose }: { books: LibraryBook[]; users: DemoUser[]; viewer?: DemoUser; catalog?: (LibraryBook | AuthorBook)[]; initialYear?: number; initialMonth?: number | null; selectedGoalId?: number; onClose: () => void }) {
+  const { t } = useI18n();
+  const currentYear = new Date().getFullYear();
+  const completed = Array.isArray(viewer?.readingHistory) ? viewer.readingHistory.map((entry) => ({ ...entry, book: (catalog.find((book) => (book.catalogBookId ?? book.id) === entry.bookId) ?? entry.book) as LibraryBook })) : [];
+  const historicalYears = completed.map((entry) => entry.completedYear).filter((value): value is number => typeof value === "number" && Number.isInteger(value) && value >= 1900);
+  const availableYears = Array.from(new Set([currentYear, initialYear, ...historicalYears].filter((value): value is number => typeof value === "number" && Number.isInteger(value) && value >= 1900))).sort((a, b) => b - a);
+  const [year, setYear] = useState(initialYear ?? currentYear);
+  const [selectedMonth] = useState(initialMonth ?? null);
+  const [goalStats, setGoalStats] = useState<ReadingStatisticsResponse | null>(null);
+  const [statsLoading, setStatsLoading] = useState(true);
+  const [statsError, setStatsError] = useState("");
+  const [openedBook, setOpenedBook] = useState<LibraryBook | null>(null);
+  const selectedGoal = goalStats?.goals.find((goal) => goal.id === selectedGoalId);
+  const annualGoal = goalStats?.goals.find((goal) => goal.goalKind === "year");
+  const monthlyGoal = goalStats?.goals.find((goal) => goal.goalKind === "month");
+  const planGoal = selectedGoal ?? annualGoal ?? monthlyGoal;
+  const counts = goalStats?.counts ?? Array.from({ length: 12 }, () => 0);
+  const planTargets = planGoal?.goalKind === "year" ? planGoal.projection?.plan?.map((item) => item.target) ?? [] : planGoal?.targetCount !== undefined ? [planGoal.targetCount] : [];
+  const maxCount = Math.max(1, ...counts, ...planTargets);
+  const chartLeft = 54; const chartTop = 20; const chartHeight = 220; const chartWidth = 660; const slot = chartWidth / 12;
+  const tickCount = Math.min(5, maxCount + 1);
+  const ticks = Array.from({ length: tickCount }, (_, index) => Math.round(index * maxCount / Math.max(1, tickCount - 1))).filter((value, index, list) => list.indexOf(value) === index);
+  const monthlyGroups = readingMonths.map((month, index) => ({ month, entries: completed.filter((entry) => entry.completedYear === year && entry.completedMonth === index + 1 && entry.book) })).filter((group) => group.entries.length);
+  const targetForMonth = (index: number) => planGoal?.goalKind === "year" ? planGoal.projection?.plan?.find((item) => item.month === index + 1)?.target : planGoal?.goalKind === "month" && planGoal.targetMonth === index + 1 ? planGoal.targetCount : undefined;
+  const closeLabel = t("common.close");
+
+  useEffect(() => {
+    let active = true;
+    setStatsLoading(true); setStatsError("");
+    void apiFetch(`/api/reading-statistics?year=${year}${selectedMonth ? `&month=${selectedMonth}` : ""}`, { cache: "no-store" }).then(async (response) => {
+      const payload = await response.json().catch(() => null);
+      if (!response.ok) throw new Error(isRecord(payload) && typeof payload.error === "string" ? payload.error : t("library.goalStatsError"));
+      return parseReadingStatistics(payload);
+    }).then((data) => { if (active) setGoalStats(data); }).catch((reason) => { if (active) setStatsError(reason instanceof Error ? reason.message : t("library.goalStatsError")); }).finally(() => { if (active) setStatsLoading(false); });
+    return () => { active = false; };
+  }, [year, selectedMonth]);
+
+  return <div className="nested-modal-backdrop workflow-page-backdrop reading-stats-backdrop" onMouseDown={onClose}><section className="reading-stats-modal" role="dialog" aria-modal="true" aria-label={t("library.readingStats")} onMouseDown={(event) => event.stopPropagation()}>
+    <button className="modal-close" type="button" onClick={onClose} aria-label={closeLabel}>×</button><button className="reading-stats-mobile-back" type="button" onClick={onClose} aria-label={t("common.back")}>← {t("common.back")}</button>
+    <div className="reading-stats-heading"><div><span className="section-subtitle">{t("profile.library")}</span><h2>{t("library.readingStats")}</h2><p>{t("library.readByMonth")}{selectedMonth ? ` · ${t(readingMonths[selectedMonth - 1])}` : ""}</p></div><label>{t("library.year")}<CustomSelect ariaLabel={t("library.statsYear")} value={year} onChange={setYear} options={availableYears.map((item) => ({ value: item, label: String(item) }))} /></label></div>
+    {statsLoading && <p className="reading-stats-status" role="status">{t("library.goalStatsLoading")}</p>}{statsError && <p className="form-error" role="alert">{statsError}</p>}
+    {!statsLoading && !statsError && <div className="reading-chart-shell">
+      <svg className="reading-stats-chart" viewBox="0 0 750 290" role="img" aria-label={t("library.readInYear", { year })}>
+        {ticks.map((tick) => { const y = chartTop + chartHeight - tick / maxCount * chartHeight; return <g key={tick}><line x1={chartLeft} x2={chartLeft + chartWidth} y1={y} y2={y} className="chart-grid-line" /><text x={chartLeft - 14} y={y + 4} textAnchor="end" className="chart-y-label">{tick}</text></g>; })}
+        {counts.map((count, index) => { const target = targetForMonth(index); const color = target === undefined ? "blue" : target === 0 ? "green" : count / target * 100 < 50 ? "muted-red" : count / target * 100 <= 80 ? "muted-yellow" : count / target * 100 < 100 ? "muted-green" : "green"; const barHeight = count ? Math.max(8, count / maxCount * chartHeight) : 3; const x = chartLeft + index * slot + 8; const y = chartTop + chartHeight - barHeight; const planHeight = target === undefined ? 0 : Math.max(3, target / maxCount * chartHeight); const planY = chartTop + chartHeight - planHeight; const planLabelY = Math.max(12, planY - 8); const defaultActualLabelY = count > 0 ? y - 8 : chartTop + chartHeight - 7; const actualLabelY = target !== undefined && Math.abs(defaultActualLabelY - planLabelY) < 14 ? Math.min(chartTop + chartHeight + 1, defaultActualLabelY + 20) : defaultActualLabelY; return <g key={readingMonths[index]}><rect className={`chart-bar ${target === undefined ? count ? "has-value" : "" : `has-value goal-${color}`}`} x={x} y={y} width={slot - 16} height={barHeight} rx="7"><title>{t(readingMonths[index])}: {count} {booksWord(count)}{target !== undefined ? ` · ${t("library.goalPlan", { count: target })}` : ""}</title></rect>{target !== undefined && <><rect className="chart-plan-outline" x={x} y={planY} width={slot - 16} height={planHeight} rx="7" /><text x={x + (slot - 16) / 2} y={planLabelY} textAnchor="middle" className="chart-plan-label">{target}</text></>}<text x={x + (slot - 16) / 2} y={actualLabelY} textAnchor="middle" className={`chart-value${target === undefined ? "" : ` chart-value-${color}`}`}>{count}</text><text x={x + (slot - 16) / 2} y={chartTop + chartHeight + 24} textAnchor="middle" className="chart-month-label">{t(readingMonths[index]).slice(0, 3)}</text></g>; })}
+      </svg>
+      <div className="reading-stats-mobile-chart" role="img" aria-label={t("library.readInYear", { year })}>{counts.map((count, index) => { const target = targetForMonth(index); const color = target === undefined ? "blue" : target === 0 ? "green" : count / target * 100 < 50 ? "muted-red" : count / target * 100 <= 80 ? "muted-yellow" : count / target * 100 < 100 ? "muted-green" : "green"; const actualWidth = Math.min(100, count / maxCount * 100); const planWidth = target === undefined ? 0 : Math.min(100, target / maxCount * 100); return <div className="reading-stats-mobile-row" key={readingMonths[index]}><span>{t(readingMonths[index]).slice(0, 3)}</span><i className={target === undefined ? "" : `has-plan goal-${color}`}>{target !== undefined && <u style={{ width: `${planWidth}%` }} />}<b className={target === undefined ? "mobile-actual-blue" : `mobile-actual-${color}`} style={{ width: `${actualWidth}%` }}><em style={count === 0 ? { color: "#40566d" } : undefined}>{count}</em></b></i>{target !== undefined && <small>{t("library.goalPlan", { count: target })}</small>}</div>; })}</div>
+    </div>}
+    {monthlyGroups.length > 0 && <div className="reading-month-groups">{monthlyGroups.map((group) => <section className="reading-month-group" key={group.month}><h3>{t(group.month)}</h3><div>{group.entries.map((entry) => { const historyBook = entry.book; return historyBook ? <button type="button" data-i18n-skip className="reading-month-book" key={entry.id} onClick={() => setOpenedBook(historyBook)}><div className={`library-book-cover library-cover-${historyBook.coverTone}`} style={historyBook.coverUrl ? { backgroundImage: `url(${historyBook.coverUrl})` } : undefined}>{!historyBook.coverUrl && <strong>{historyBook.title.slice(0, 1)}</strong>}</div><span><strong>{historyBook.title}</strong><small>{historyBook.author}</small></span></button> : null; })}</div></section>)}</div>}
+    {openedBook && <UnifiedBookModal book={openedBook} viewer={viewer} users={users} catalog={catalog.length ? catalog : books} nested onClose={() => setOpenedBook(null)} />}
+  </section></div>;
+}
+
+export function LibraryTab({ books, setBooks, userId, users, catalog = [], initialAdd = false, initialEditId, initialStatusId, initialGoals = false }: { books: LibraryBook[]; setBooks: React.Dispatch<React.SetStateAction<LibraryBook[]>>; userId: number; users: DemoUser[]; catalog?: (LibraryBook | AuthorBook)[]; initialAdd?: boolean; initialEditId?: number | null; initialStatusId?: number | null; initialGoals?: boolean }) {
   const { t } = useI18n();
   const viewer = users.find((user) => user.id === userId);
   const canonicalCatalog = catalog.length ? catalog : catalogFromUsers(users);
   const canonicalBookId = (book: Pick<LibraryBook, "id"> & { catalogBookId?: number }) => book.catalogBookId ?? book.id;
-  const [view, setView] = useState<LibraryView>("grid");
+  const [libraryMode, setLibraryMode] = useLibraryMode();
   const [statusFilter, setStatusFilter] = useState<"want" | "reading" | "read" | "abandoned" | "postponed">("read");
   const [editingBook, setEditingBook] = useState<LibraryBook | null | undefined>(() => initialStatusId ? undefined : initialEditId ? books.find((item) => canonicalBookId(item) === initialEditId) : initialAdd ? null : undefined);
   const [viewingBook, setViewingBook] = useState<LibraryBook | null>(null);
   const [statsOpen, setStatsOpen] = useState(false);
+  const [goalsOpen, setGoalsOpen] = useState(initialGoals);
+  const [statsYear, setStatsYear] = useState<number | undefined>();
+  const [statsMonth, setStatsMonth] = useState<number | null>(null);
+  const [selectedGoalId, setSelectedGoalId] = useState<number | undefined>();
+  const [statsFromGoalsWorkflow, setStatsFromGoalsWorkflow] = useState(initialGoals);
   const now = new Date();
   const currentMonth = now.getMonth() + 1;
   const currentYear = now.getFullYear();
@@ -1430,17 +1623,14 @@ export function LibraryTab({ books, setBooks, userId, users, catalog = [], initi
   return (
     <div className="library-tab">
       <div className="profile-title-row library-title-row">
-         <div><h1>{t("profile.library")}</h1><div className="library-status-summary" aria-label={t("library.readingStats")}><span>{t("library.wantSummary", { count: wantCount })}</span><i aria-hidden="true" /><span>{t("library.readingSummary", { count: readingCount })}</span><i aria-hidden="true" /><span>{t("library.readSummary", { count: books.filter((book) => (book.readingStatus ?? "read") === "read").length })}</span></div><div className="library-stats-actions"><button className="outline-button" type="button" onClick={() => setStatsOpen(true)}>{t("library.openStats")}</button><button className="outline-button" type="button" disabled aria-disabled="true">{t("library.goals")}</button></div></div>
-        <div className="library-import-actions"><button className="primary-button creation-action-button library-add-book-cta" type="button" onClick={() => { openMobileWorkflowRoute({ mode: "create", kind: "book" }); setEditingBook(null); }}>＋ {t("content.addBook")}</button></div>
+         <div><h1>{t("profile.library")}</h1><div className="library-status-summary" aria-label={t("library.readingStats")}><span>{t("library.wantSummary", { count: wantCount })}</span><i aria-hidden="true" /><span>{t("library.readingSummary", { count: readingCount })}</span><i aria-hidden="true" /><span>{t("library.readSummary", { count: books.filter((book) => (book.readingStatus ?? "read") === "read").length })}</span></div><div className="library-stats-actions"><button className="outline-button" type="button" onClick={() => { setStatsFromGoalsWorkflow(false); setSelectedGoalId(undefined); setStatsYear(undefined); setStatsMonth(null); setStatsOpen(true); }}>{t("library.openStats")}</button><button className="outline-button" type="button" onClick={() => { const openedWorkflow = openMobileWorkflowRoute({ mode: "create", kind: "reading-goal" }); setStatsFromGoalsWorkflow(openedWorkflow); setGoalsOpen(true); setStatsOpen(false); }}>{t("library.goals")}</button></div></div>
+        <div className="library-import-actions"><button className="primary-button creation-action-button library-add-book-cta" type="button" onClick={() => { openMobileWorkflowRoute({ mode: "create", kind: "book" }); setEditingBook(null); }}>＋ {t("content.addBook")}</button><button className="outline-button creation-action-button" type="button" onClick={() => { setLibraryMode("shelves"); openShelfEditor(); }}>{t("shelves.create")}</button></div>
       </div>
       <div className="library-toolbar">
-        <div className="library-status-filter" role="group" aria-label={t("library.statusFilter")}>{(["want", "reading", "read", "abandoned", "postponed"] as const).map((status) => <button key={status} className={statusFilter === status ? "active" : ""} type="button" onClick={() => setStatusFilter(status)}>{readingStatusLabel(status, currentLocale())}</button>)}</div>
-        <div className="view-switcher" aria-label={t("library.view")}>
-          <button className={view === "grid" ? "active" : ""} type="button" aria-pressed={view === "grid"} onClick={() => setView("grid")}>▦ {t("library.grid")}</button>
-          <button className={view === "list" ? "active" : ""} type="button" aria-pressed={view === "list"} onClick={() => setView("list")}>☷ {t("library.list")}</button>
-        </div>
+        {libraryMode === "books" && <div className="library-status-filter" role="group" aria-label={t("library.statusFilter")}>{(["want", "reading", "read", "abandoned", "postponed"] as const).map((status) => <button key={status} className={statusFilter === status ? "active" : ""} type="button" onClick={() => setStatusFilter(status)}>{readingStatusLabel(status, currentLocale())}</button>)}</div>}
+        <LibraryModeSwitch mode={libraryMode} onChange={setLibraryMode} />
       </div>
-      <div className={`library-grid ${view === "list" ? "list-view" : ""}`}>
+      {libraryMode === "shelves" ? <BookShelfList ownerId={userId} /> : <div className="library-grid">
         {visibleBooks.map((book) => (
           <article data-i18n-skip className={`library-book material-clickable-card ${book.topRank ? "top3-book" : ""}`} role="button" tabIndex={0} key={book.id} onClick={() => setViewingBook(book)} onKeyDown={(event) => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); setViewingBook(book); } }}>
             {book.topRank && <span className="top3-crown" aria-label={t("library.top3Place", { rank: book.topRank })}>♛<b>{book.topRank}</b></span>}
@@ -1451,15 +1641,16 @@ export function LibraryTab({ books, setBooks, userId, users, catalog = [], initi
             <div className="library-book-copy">
               <h3>{book.title}</h3><p className="library-author">{book.author}</p>
                {(book.readingStatus ?? "read") === "read" && <RatingStars allowHalf value={book.rating} onChange={(rating) => updateRating(canonicalBookId(book), rating)} label={t("library.bookRating", { title: book.title })} />}
-              <div className="list-only-book-details"><p>{book.annotation}</p><span>{book.genres.join(", ")}</span>{(book.readingStatus ?? "read") === "read" && book.review && <blockquote>«{book.review}»</blockquote>}</div>
+
             </div>
           </article>
         ))}
-      </div>
+      </div>}
       {editingBook !== undefined && <BookEditor book={editingBook} catalog={canonicalCatalog} top3Count={books.filter((item) => item.topRank).length} onClose={() => { setEditingBook(undefined); closeActiveMobileWorkflow("/profile/library"); }} onSave={saveBook} />}
        {viewingBook && <UnifiedBookModal book={viewingBook} viewer={viewer} users={users} catalog={canonicalCatalog} onClose={() => setViewingBook(null)} onEdit={() => { const id = canonicalBookId(viewingBook); openMobileWorkflowRoute({ mode: "edit", kind: "book", id }); setEditingBook(viewingBook); setViewingBook(null); }} onDelete={async () => { if (!window.confirm(t("library.deleteConfirm", { title: viewingBook.title }))) return; const id = canonicalBookId(viewingBook); const response = await apiFetch(`/api/books/${id}`, { method: "DELETE", credentials: "same-origin" }); if (!response.ok) { window.alert(t("book.deleteError")); return; } setBooks((current) => current.filter((book) => canonicalBookId(book) !== id)); setViewingBook(null); }} />}
        {initialStatusId && books.find((book) => canonicalBookId(book) === initialStatusId) && <UnifiedBookModal book={books.find((book) => canonicalBookId(book) === initialStatusId)!} viewer={viewer} users={users} catalog={canonicalCatalog} retainWhenInactive initialStatusDialog onClose={() => closeActiveMobileWorkflow("/profile/library")} />}
-       {statsOpen && <ReadingStatsModal books={books} users={users} viewer={viewer} catalog={canonicalCatalog} onClose={() => setStatsOpen(false)} />}
+       {goalsOpen && <ReadingGoalsModal onClose={() => { setGoalsOpen(false); closeActiveMobileWorkflow("/profile/library"); }} onOpenStats={(goal) => { setGoalsOpen(false); setStatsYear(goal.targetYear); setStatsMonth(goal.goalKind === "month" ? goal.targetMonth : null); setSelectedGoalId(goal.id); setStatsFromGoalsWorkflow(normalizedPathname(window.location.pathname).startsWith("/create/reading-goal")); setStatsOpen(true); }} />}
+       {statsOpen && <ReadingStatsModal books={books} users={users} viewer={viewer} catalog={canonicalCatalog} initialYear={statsYear} initialMonth={statsMonth} selectedGoalId={selectedGoalId} onClose={() => { setStatsOpen(false); if (statsFromGoalsWorkflow) { setStatsFromGoalsWorkflow(false); closeActiveMobileWorkflow("/profile/library"); } }} />}
     </div>
   );
 }

@@ -13,7 +13,7 @@ function ageFromBirthDate(value, now = new Date()) {
 
 export const LEGAL_DOCUMENT_TYPES = ["user_agreement", "privacy_policy", "personal_data_consent", "community_moderation_rules"];
 export const REQUIRED_LEGAL_DOCUMENT_TYPES = ["user_agreement", "privacy_policy", "personal_data_consent"];
-export const REPORT_TARGET_KINDS = new Set(["user", "book", "review", "excerpt", "event", "occasion", "publisher_news", "chat", "comment", "partner", "admin_action", "interface"]);
+export const REPORT_TARGET_KINDS = new Set(["user", "book", "review", "excerpt", "event", "occasion", "publisher_news", "shelf", "chat", "comment", "book_note", "partner", "admin_action", "interface"]);
 export const REPORT_STATUSES = new Set(["new", "reviewing", "satisfied", "rejected"]);
 
 export function legalConsentRequired(environment = process.env) {

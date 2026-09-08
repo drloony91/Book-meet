@@ -2,6 +2,8 @@
 
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { Avatar, ChatView } from "../components/chat/ChatComponents";
+import { BookShelfDialog, BookShelfEditor, isBookShelf } from "../components/books/BookShelves";
+import type { BookShelf } from "../types/shelves";
 import type { ChatAttachment, ChatShareItem, Friend, Message } from "../components/chat/types";
 import { sortChatFriends } from "../components/chat/chat-utils.js";
 import { BookMeetHeader, MobileBottomNavigation, MobileNavigationDrawer, WorkspaceScreen, type MobileCreateOption } from "../components/layout/AppLayout";
@@ -14,6 +16,7 @@ import {
   mainViewPaths,
   mobileWorkflowPath,
   notifyAppNavigation,
+  openOverlayRoute,
   normalizedPathname,
   useCurrentAppRoute,
   type ChatRouteState,
@@ -43,6 +46,7 @@ import {
   PublicationEditor,
   PublisherNewsModal,
   ReadingModal,
+  MaterialEngagement,
   ReviewEditor,
   UnifiedBookModal,
   UserProfileModal,
@@ -153,6 +157,9 @@ export function useBookMeetController() {
   const [commentCounts, setCommentCounts] = useState<Record<string, number>>({});
   const [saveCounts, setSaveCounts] = useState<Record<string, number>>({});
   const [selectedBook, setSelectedBook] = useState<LibraryBook | AuthorBook | null>(null);
+  const [selectedShelfId, setSelectedShelfId] = useState<number | null>(null);
+  const [shelfEditorId, setShelfEditorId] = useState<number | null | undefined>(undefined);
+  const [shelves, setShelves] = useState<BookShelf[]>([]);
   const [materialShareAttachment, setMaterialShareAttachment] = useState<ChatAttachment | null>(null);
   const [catalogBookToAdd, setCatalogBookToAdd] = useState<LibraryBook | null>(null);
   const [selectedMaterial, setSelectedMaterial] = useState<ReadingItem | null>(null);
@@ -166,7 +173,7 @@ export function useBookMeetController() {
   const [editingOccasion, setEditingOccasion] = useState<Occasion | null>(null);
   const [selectedOccasion, setSelectedOccasion] = useState<Occasion | null>(null);
   const [selectedPublisherNews, setSelectedPublisherNews] = useState<PublisherNews | null>(null);
-  const [profileAction, setProfileAction] = useState<"review" | "excerpt" | "book" | "book-status" | null>(null);
+  const [profileAction, setProfileAction] = useState<"review" | "excerpt" | "book" | "book-status" | "reading-goal" | "shelf" | null>(null);
   const [quickMaterialAction, setQuickMaterialAction] = useState<"review" | "excerpt" | null>(null);
   const [quickMaterialEditId, setQuickMaterialEditId] = useState<number | null>(null);
   const [profileEditId, setProfileEditId] = useState<number | null>(null);
@@ -197,9 +204,30 @@ export function useBookMeetController() {
       libraryMutationEpoch.current += 1;
       setUsers((current) => current.map((user) => user.id === activeUserId ? applyLibraryMutation(user, result) : user));
     };
+    const applyBatch = (event: Event) => {
+      const detail = (event as CustomEvent<{ viewerId?: number; books?: LibraryBook[] }>).detail;
+      if (detail?.viewerId !== activeUserId || !Array.isArray(detail.books) || !detail.books.every((book) => Number.isSafeInteger(book.id) && book.readingStatus === "want")) return;
+      libraryMutationEpoch.current += 1;
+      setUsers((current) => current.map((user) => user.id !== activeUserId ? user : { ...user, books: [...detail.books!.filter((book) => !user.books.some((existing) => (existing.catalogBookId ?? existing.id) === (book.catalogBookId ?? book.id))), ...user.books] }));
+    };
     window.addEventListener("bookmeet:library-mutation-start", start);
     window.addEventListener("bookmeet:library-mutation", apply);
-    return () => { window.removeEventListener("bookmeet:library-mutation-start", start); window.removeEventListener("bookmeet:library-mutation", apply); };
+    window.addEventListener("bookmeet:library-batch-added", applyBatch);
+    return () => { window.removeEventListener("bookmeet:library-mutation-start", start); window.removeEventListener("bookmeet:library-mutation", apply); window.removeEventListener("bookmeet:library-batch-added", applyBatch); };
+  }, [activeUserId]);
+  useEffect(() => {
+    const open = (event: Event) => {
+      const id = (event as CustomEvent<{ id?: number }>).detail?.id;
+      if (!activeUserId || !Number.isSafeInteger(id) || !id || id < 1) return;
+      openOverlayRoute(`/shelves/${id}`); setSelectedShelfId(id);
+    };
+    const edit = (event: Event) => {
+      const id = (event as CustomEvent<{ id?: number | null }>).detail?.id;
+      if (!activeUserId || !(id === null || Number.isSafeInteger(id) && Number(id) > 0)) return;
+      setShelfEditorId(id);
+    };
+    window.addEventListener("bookmeet:open-shelf", open); window.addEventListener("bookmeet:edit-shelf", edit);
+    return () => { window.removeEventListener("bookmeet:open-shelf", open); window.removeEventListener("bookmeet:edit-shelf", edit); };
   }, [activeUserId]);
   useEffect(() => {
     const show = () => setCompletionNotice(true);
@@ -244,6 +272,8 @@ export function useBookMeetController() {
       if (!response.ok) { window.alert(t("book.deleteError")); return; }
       setUsers((current) => current.map((user) => user.id === currentUser?.id ? { ...user, books: user.books.filter((book) => (book.catalogBookId ?? book.id) !== id) } : user));
       setSelectedBook(null);
+      setSelectedShelfId(null);
+      setShelfEditorId(undefined);
     };
     window.addEventListener("bookmeet:edit-owned-book", edit);
     window.addEventListener("bookmeet:delete-owned-book", remove);
@@ -318,6 +348,7 @@ export function useBookMeetController() {
         setBlocks(data.blocks ?? []);
         setBlockedByUserIds(data.blockedByUserIds ?? []);
         setReports(data.reports ?? []);
+        setShelves(Array.isArray(data.shelves) ? data.shelves.filter(isBookShelf) : []);
       } catch (error) {
         if (error instanceof BootstrapRequestError && error.status === 423) {
           setSuspension({ permanent: Boolean(error.data.permanent), until: typeof error.data.until === "string" ? error.data.until : undefined, reason: typeof error.data.reason === "string" ? error.data.reason : "" });
@@ -330,6 +361,7 @@ export function useBookMeetController() {
     };
     const eventsSource = new EventSource("/api/realtime", { withCredentials: true });
     eventsSource.addEventListener("update", refresh);
+    eventsSource.addEventListener("update", () => window.dispatchEvent(new CustomEvent("bookmeet:materials-refreshed")));
     const timer = window.setInterval(refresh, 30_000);
     const onVisible = () => { if (!document.hidden) void refresh(); };
     document.addEventListener("visibilitychange", onVisible);
@@ -352,6 +384,8 @@ export function useBookMeetController() {
       setMobileFriendsOpen(false);
       setProfileUserId(null);
       setSelectedBook(null);
+      setSelectedShelfId(null);
+      setShelfEditorId(undefined);
       setSelectedMaterial(null);
       setSelectedEvent(null);
       setSelectedOccasion(null);
@@ -368,7 +402,7 @@ export function useBookMeetController() {
       setProfileEditId(null);
       if (route.workflow) {
         const state = (window.history.state ?? {}) as MobileWorkflowRouteState;
-        const fallbackPath = state.backgroundPath || (route.workflow.kind === "excerpt" ? "/blog" : route.workflow.kind === "publisher-news" || route.workflow.kind === "book" || route.workflow.kind === "book-status" ? "/profile/library" : `/${route.workflow.kind === "occasion" ? "meet" : `${route.workflow.kind}s`}`);
+        const fallbackPath = state.backgroundPath || (route.workflow.kind === "excerpt" ? "/blog" : route.workflow.kind === "shelf" ? "/profile/library?mode=shelves" : route.workflow.kind === "publisher-news" || route.workflow.kind === "book" || route.workflow.kind === "book-status" || route.workflow.kind === "reading-goal" ? "/profile/library" : `/${route.workflow.kind === "occasion" ? "meet" : `${route.workflow.kind}s`}`);
         if (window.matchMedia("(min-width: 801px)").matches && route.workflow.kind !== "publisher-news") {
           const fallbackRoute = appRouteFromPathname(fallbackPath);
           setView(fallbackRoute.view);
@@ -389,16 +423,21 @@ export function useBookMeetController() {
         if (!routeData.activeUserId) return;
         if (!viewer) { denyWorkflow(); return; }
         const workflow = route.workflow;
+        if (workflow.kind === "shelf") {
+          if (["Издатель", "Сообщество"].includes(viewer.profile.type)) { denyWorkflow(); return; }
+          setView("profile"); setProfileAction("shelf"); setShelfEditorId(workflow.mode === "edit" ? workflow.id : null); return;
+        }
         const mayCreateReview = ["Читатель", "Писатель", "Блогер"].includes(viewer.profile.type.trim());
         const mayCreateExcerpt = ["Читатель", "Писатель", "Блогер"].includes(viewer.profile.type.trim());
         const approvedOrganization = !["Издатель", "Сообщество"].includes(viewer.profile.type) || viewer.profile.publisherStatus === "approved";
         if (workflow.mode === "create") {
-          if (workflow.kind === "review" && !mayCreateReview || workflow.kind === "excerpt" && !mayCreateExcerpt || workflow.kind === "event" && !approvedOrganization || workflow.kind === "occasion" && !["Читатель", "Писатель", "Блогер"].includes(viewer.profile.type) || workflow.kind === "book" && ["Издатель", "Сообщество"].includes(viewer.profile.type) || workflow.kind === "publisher-news" && (!approvedOrganization || !["Издатель", "Сообщество"].includes(viewer.profile.type))) { denyWorkflow(); return; }
-          setView(workflow.kind === "book" || workflow.kind === "book-status" || workflow.kind === "publisher-news" ? "profile" : workflow.kind === "excerpt" ? "publications" : workflow.kind === "occasion" ? "occasions" : workflow.kind === "event" ? "events" : "reviews");
+          if (workflow.kind === "review" && !mayCreateReview || workflow.kind === "excerpt" && !mayCreateExcerpt || workflow.kind === "event" && !approvedOrganization || workflow.kind === "occasion" && !["Читатель", "Писатель", "Блогер"].includes(viewer.profile.type) || (workflow.kind === "book" || workflow.kind === "reading-goal") && ["Издатель", "Сообщество"].includes(viewer.profile.type) || workflow.kind === "publisher-news" && (!approvedOrganization || !["Издатель", "Сообщество"].includes(viewer.profile.type))) { denyWorkflow(); return; }
+          setView(workflow.kind === "book" || workflow.kind === "book-status" || workflow.kind === "publisher-news" || workflow.kind === "reading-goal" ? "profile" : workflow.kind === "excerpt" ? "publications" : workflow.kind === "occasion" ? "occasions" : workflow.kind === "event" ? "events" : "reviews");
           if (workflow.kind === "review" || workflow.kind === "excerpt") setQuickMaterialAction(workflow.kind);
           if (workflow.kind === "event") setEventFormOpen(true);
           if (workflow.kind === "occasion") setOccasionFormOpen(true);
           if (workflow.kind === "book") setProfileAction("book");
+          if (workflow.kind === "reading-goal") setProfileAction("reading-goal");
           return;
         }
         if (!workflow.id) { denyWorkflow(); return; }
@@ -458,7 +497,7 @@ export function useBookMeetController() {
         document.title = route.view === "profile" ? `${t("profile.my")} — Book Meet` : localizedViewTitle(route.view);
         return;
       }
-      if (routeData.accessGate && !routeData.accessGate.profileComplete && ["book", "review", "excerpt", "event", "occasion", "publisher-news"].includes(route.overlay.kind)) {
+      if (routeData.accessGate && !routeData.accessGate.profileComplete && ["book", "review", "excerpt", "event", "occasion", "publisher-news", "shelf"].includes(route.overlay.kind)) {
         setCompletionNotice(true);
         return;
       }
@@ -470,6 +509,7 @@ export function useBookMeetController() {
       }
       if (route.overlay.kind === "user") setProfileUserId(routeData.users.find((user) => user.id === route.overlay!.id && !user.isAdmin)?.id ?? null);
       if (route.overlay.kind === "book") setSelectedBook(routeData.catalog.find((book) => book.id === route.overlay!.id) ?? null);
+      if (route.overlay.kind === "shelf") setSelectedShelfId(route.overlay.id);
       if (route.overlay.kind === "review") setSelectedMaterial(reviewReadingItemById(routeData.users, route.overlay.id));
       if (route.overlay.kind === "excerpt") setSelectedMaterial(excerptReadingItemById(routeData.users, route.overlay.id, t("content.publications")));
       if (route.overlay.kind === "event") setSelectedEvent(routeData.events.find((item) => item.id === route.overlay!.id) ?? null);
@@ -573,8 +613,8 @@ export function useBookMeetController() {
       if (!["Издатель", "Сообщество"].includes(user.profile.type) || user.profile.publisherStatus !== "approved") return [];
       return (user.publisherNews ?? []).map((news) => ({ kind: "publisher_news" as const, id: news.id, title: news.title, subtitle: `${t("content.publisherNews")} · ${user.profile.name}`, preview: news.previewText, path: `/publishing/${news.id}` }));
     });
-    return [...books, ...people, ...eventItems, ...reviewItems, ...excerptItems, ...occasionItems, ...publisherNewsItems];
-  }, [catalog, users, events, occasions]);
+    return [...books, ...people, ...eventItems, ...reviewItems, ...excerptItems, ...occasionItems, ...publisherNewsItems, ...shelves.map((shelf): ChatShareItem => ({ kind: "shelf", id: shelf.id, title: shelf.title, subtitle: shelf.owner.name, preview: shelf.description, imageUrl: shelf.items.find((item) => item.book?.coverUrl)?.book?.coverUrl, path: `/shelves/${shelf.id}` }))];
+  }, [catalog, users, events, occasions, shelves]);
   const homeReviews = currentUser ? allReviews : [];
   const homeExcerpts = currentUser ? allExcerpts : [];
   const currentNotifications = currentUser ? notifications.filter((notification) => notification.userId === currentUser.id && notification.type !== "new_message").sort((a, b) => b.id - a.id) : [];
@@ -642,6 +682,7 @@ export function useBookMeetController() {
     setBlocks(data.blocks ?? []);
     setBlockedByUserIds(data.blockedByUserIds ?? []);
     setReports(data.reports ?? []);
+    setShelves(Array.isArray(data.shelves) ? data.shelves.filter(isBookShelf) : []);
     if (data.accessGate) setAccessGate(data.accessGate);
     setSuspension(null);
     setStartupError("");
@@ -687,6 +728,8 @@ export function useBookMeetController() {
     }).catch(async (error) => {
       if (!active) return;
       if (error instanceof BootstrapRequestError && error.status === 401) {
+        const returnTo = safeReturnTo(`${window.location.pathname}${window.location.search}${window.location.hash}`);
+        if (returnTo !== "/") sessionStorage.setItem("bookmeet:returnTo", returnTo);
         return;
       }
       if (error instanceof BootstrapRequestError && error.status === 423) {
@@ -860,6 +903,7 @@ export function useBookMeetController() {
   }
 
   function openMobileSearchResult(entry: SearchEntry) {
+    if (entry.kind === "shelf") { setSelectedShelfId(entry.id); return; }
     if (entry.kind === "review" || entry.kind === "excerpt") setSelectedMaterial(entry.item as ReadingItem);
     else if (entry.kind === "event") setSelectedEvent(entry.item as BookEvent);
     else setSelectedOccasion(entry.item as Occasion);
@@ -1243,7 +1287,8 @@ export function useBookMeetController() {
     setNotificationsOpen(false);
     if (["like", "comment"].includes(notification.type) && notification.materialId && notification.materialKind) {
       const owner = users.find((user) => user.id === notification.userId);
-      if (notification.materialKind === "review") { const review = owner?.reviews.find((item) => item.id === notification.materialId); if (review) setSelectedMaterial({ id: review.id, kind: "review", title: review.bookTitle, author: owner!.profile.name, text: review.fullText, ownerId: owner!.id, createdAt: review.createdAt, preview: review.preview, bookAuthor: review.bookAuthor, rating: review.rating }); }
+      if (notification.materialKind === "shelf") setSelectedShelfId(notification.materialId ?? null);
+      else if (notification.materialKind === "review") { const review = owner?.reviews.find((item) => item.id === notification.materialId); if (review) setSelectedMaterial({ id: review.id, kind: "review", title: review.bookTitle, author: owner!.profile.name, text: review.fullText, ownerId: owner!.id, createdAt: review.createdAt, preview: review.preview, bookAuthor: review.bookAuthor, rating: review.rating }); }
       else if (notification.materialKind === "excerpt") { const excerpt = owner?.excerpts?.find((item) => item.id === notification.materialId); if (excerpt) setSelectedMaterial({ id: excerpt.id, kind: "excerpt", title: excerpt.bookTitle || t("content.publications"), author: owner!.profile.name, text: excerpt.text, preview: excerpt.previewText, bodyHtml: excerpt.bodyHtml, linkedBookId: excerpt.bookId, linkedBookIds: excerpt.bookIds, ownerId: owner!.id, createdAt: excerpt.createdAt }); }
       else if (notification.materialKind === "event") setSelectedEvent(events.find((item) => item.id === notification.materialId) ?? null);
       else if (notification.materialKind === "occasion") setSelectedOccasion(occasions.find((item) => item.id === notification.materialId) ?? null);
@@ -1363,6 +1408,7 @@ export function useBookMeetController() {
     setChatExpanded(nextExpanded);
   };
   const openChatAttachment = (attachment: ChatAttachment) => {
+    if (attachment.kind === "shelf") { setSelectedShelfId(attachment.id); return; }
     if (attachment.kind === "book") setSelectedBook(catalog.find((book) => book.id === attachment.id) ?? null);
     else if (attachment.kind === "user") openUserProfile(attachment.id);
     else if (attachment.kind === "event") setSelectedEvent(events.find((item) => item.id === attachment.id) ?? null);
@@ -1372,6 +1418,7 @@ export function useBookMeetController() {
     else setSelectedOccasion(occasions.find((item) => item.id === attachment.id) ?? null);
   };
   const openPersonalMaterial = (kind: MaterialActionRef["kind"], id: number) => {
+    if (kind === "shelf") { setSelectedShelfId(id); return; }
     if (kind === "event") { setSelectedEvent(events.find((item) => item.id === id) ?? null); return; }
     if (kind === "occasion") { setSelectedOccasion(occasions.find((item) => item.id === id) ?? null); return; }
     if (kind === "review") { setSelectedMaterial(reviewReadingItemById(users, id)); return; }
@@ -1421,9 +1468,9 @@ export function useBookMeetController() {
             : view === "partners"
               ? directoryShell(<SimpleDirectoryPage kind="partners" />)
             : view === "liked"
-              ? <PersonalMaterialFeed mode="liked" refs={likedMaterialRefs} users={visibleUsers} events={events} occasions={occasions} publisherNews={allPublisherNews} currentUser={currentUser} likes={likes} saves={saves} commentCounts={commentCounts} saveCounts={saveCounts} onToggleLike={toggleLike} onToggleSave={toggleSave} onOpenUser={openUserProfile} onOpenMaterial={openPersonalMaterial} />
+              ? <PersonalMaterialFeed shelves={shelves} mode="liked" refs={likedMaterialRefs} users={visibleUsers} events={events} occasions={occasions} publisherNews={allPublisherNews} currentUser={currentUser} likes={likes} saves={saves} commentCounts={commentCounts} saveCounts={saveCounts} onToggleLike={toggleLike} onToggleSave={toggleSave} onOpenUser={openUserProfile} onOpenMaterial={openPersonalMaterial} />
             : view === "saved"
-              ? <PersonalMaterialFeed mode="saved" refs={savedMaterialRefs} users={visibleUsers} events={events} occasions={occasions} publisherNews={allPublisherNews} currentUser={currentUser} likes={likes} saves={saves} commentCounts={commentCounts} saveCounts={saveCounts} onToggleLike={toggleLike} onToggleSave={toggleSave} onOpenUser={openUserProfile} onOpenMaterial={openPersonalMaterial} />
+              ? <PersonalMaterialFeed shelves={shelves} mode="saved" refs={savedMaterialRefs} users={visibleUsers} events={events} occasions={occasions} publisherNews={allPublisherNews} currentUser={currentUser} likes={likes} saves={saves} commentCounts={commentCounts} saveCounts={saveCounts} onToggleLike={toggleLike} onToggleSave={toggleSave} onOpenUser={openUserProfile} onOpenMaterial={openPersonalMaterial} />
             : view === "chat" ? routedChatPage
               : <HomeContent reviews={homeReviews} excerpts={homeExcerpts} publisherNews={allPublisherNews} events={visibleHomeEvents} occasions={visibleHomeOccasions} catalog={catalog} currentUserType={currentUser.profile.type === "Писатель" ? "writer" : currentUser.profile.type === "Блогер" ? "blogger" : "reader"} onOpenUser={openUserProfile} onCreateEvent={startEventCreation} onEditEvent={startEventEditing} onCreateOccasion={startOccasionCreation} onEditOccasion={startOccasionEditing} onCreateReview={() => startCreating("review")} onCreateExcerpt={() => startCreating("excerpt")} onNavigate={navigateMainView} currentUserName={currentUser.profile.name} currentUser={currentUser} users={visibleUsers} likes={likes} saves={saves} commentCounts={commentCounts} saveCounts={saveCounts} onToggleLike={toggleLike} onToggleSave={toggleSave} onComment={addComment} relationshipFor={relationshipFor} isFollowing={followsUser} onAddFriend={sendFriendRequest} onFollow={followUser} />;
 
@@ -1507,6 +1554,8 @@ export function useBookMeetController() {
 
       <MobileNavigationDrawer open={mobileNavigationOpen} activeView={view} onClose={() => setMobileNavigationOpen(false)} onNavigate={navigateMainView} createOptions={mobileCreateOptions} />
 
+      {selectedShelfId && <BookShelfDialog id={selectedShelfId} viewer={currentUser} onClose={() => setSelectedShelfId(null)} onOpenBook={(id) => setSelectedBook(catalog.find((book) => book.id === id) ?? null)} renderActions={(shelf) => <MaterialEngagement kind="shelf" materialId={shelf.id} ownerId={shelf.ownerId} currentUser={currentUser} users={visibleUsers} onOpenUser={openUserProfile} shareAttachment={{ kind: "shelf", id: shelf.id }} />} />}
+      {shelfEditorId !== undefined && <BookShelfEditor key={`${currentUser.id}-${shelfEditorId ?? "new"}`} id={shelfEditorId} viewer={currentUser} onClose={() => setShelfEditorId(undefined)} />}
       {selectedBook && <UnifiedBookModal book={selectedBook} viewer={currentUser} users={visibleUsers} catalog={catalog} events={events} retainWhenInactive onClose={() => setSelectedBook(null)} onEdit={() => { const id = selectedBook.catalogBookId ?? selectedBook.id; setProfileAction("book"); setProfileEditId(id); setSelectedBook(null); setView("profile"); window.history.pushState({}, "", "/profile/library"); }} onDelete={async () => { const id = selectedBook.catalogBookId ?? selectedBook.id; const response = await apiFetch(`/api/books/${id}`, { method: "DELETE", credentials: "same-origin" }); if (!response.ok) { window.alert(t("book.deleteError")); return; } setUsers((current) => current.map((user) => user.id === currentUser.id ? { ...user, books: user.books.filter((book) => (book.catalogBookId ?? book.id) !== id) } : user)); setSelectedBook(null); }} onReport={currentUser.isAdmin || currentUser.books.some((book) => (book.catalogBookId ?? book.id) === (selectedBook.catalogBookId ?? selectedBook.id)) || selectedBook.creatorUserId === currentUser.id || (currentUser.authorBooks ?? []).some((book) => (book.catalogBookId ?? book.id) === (selectedBook.catalogBookId ?? selectedBook.id)) ? undefined : () => openReportDialog({ kind: "book", id: selectedBook.catalogBookId ?? selectedBook.id })} onOpenUser={openUserProfile} onOpenEvent={(event) => setSelectedEvent(event)} onOpenReview={(review, user) => { setSelectedMaterial({ id: review.id, kind: "review", title: review.bookTitle, author: user.profile.name, text: review.fullText, bodyHtml: review.bodyHtml, linkedBookId: review.bookId, ownerId: user.id, createdAt: review.createdAt, preview: review.preview, bookAuthor: review.bookAuthor, rating: review.rating }); }} />}
       {selectedMaterial && <ReadingModal item={selectedMaterial} currentUser={currentUser} users={visibleUsers} catalog={catalog} likedUserIds={likes[`${selectedMaterial.kind}-${selectedMaterial.id}`] ?? []} saved={Boolean(saves[`${selectedMaterial.kind}-${selectedMaterial.id}`]?.includes(currentUser.id))} savesCount={saveCounts[`${selectedMaterial.kind}-${selectedMaterial.id}`] ?? 0} onToggleLike={() => toggleLike(selectedMaterial)} onToggleSave={() => toggleSave(selectedMaterial)} onComment={(text) => addComment(selectedMaterial, text)} onOpenUser={openUserProfile} onClose={() => setSelectedMaterial(null)} onReport={selectedMaterial.ownerId !== currentUser.id && !currentUser.isAdmin ? () => openReportDialog({ kind: selectedMaterial.kind, id: selectedMaterial.id }) : undefined} onEdit={currentUser.isAdmin || selectedMaterial.ownerId === currentUser.id ? () => void editReadingMaterial(selectedMaterial, currentUser) : undefined} onDelete={currentUser.isAdmin || selectedMaterial.ownerId === currentUser.id ? () => void deleteReadingMaterial(selectedMaterial, currentUser) : undefined} />}
       {adminEditingMaterial && <AdminCatalogEditor item={adminEditingMaterial} users={users} catalog={catalog} onClose={() => setAdminEditingMaterial(null)} onSave={async (payload) => { const response = await apiFetch(`/api/admin/materials/${adminEditingMaterial.kind}/${adminEditingMaterial.id}`, { method: "PATCH", credentials: "same-origin", headers: { "content-type": "application/json" }, body: JSON.stringify(payload) }); const data = await response.json().catch(() => ({})) as { error?: string }; if (!response.ok) { window.alert(localizedApiError(data.error, t("common.saveChangesError"))); return; } setAdminEditingMaterial(null); await refreshBootstrap(); }} />}

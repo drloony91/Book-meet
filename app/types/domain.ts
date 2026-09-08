@@ -1,3 +1,4 @@
+import type { BookShelf } from "./shelves";
 import type { Message } from "../components/chat/types";
 
 export type FriendRequest = { id: number; fromId: number; toId: number; status: "pending" | "accepted" | "rejected"; message?: string; comment?: string };
@@ -6,7 +7,7 @@ export type CommunityMembership = { communityId: number; memberId: number };
 export type SocialRelationship = "none" | "outgoing" | "incoming" | "friends" | "community-member";
 export type Follow = { followerId: number; targetId: number };
 export type NotificationType = "friend_request" | "friendship_started" | "friend_rejected" | "new_message" | "new_follower" | "publication" | "friendship_ended" | "like" | "comment" | "event_submitted" | "event_moderation" | "event_reminder" | "author_book_activity" | "gift_reserved";
-export type SocialNotification = { id: number; userId: number; actorId: number; type: NotificationType; title: string; text: string; unread: boolean; createdAt: string; materialId?: number; materialKind?: "review" | "excerpt" | "event" | "occasion" | "publisher_news" | "book" | "wishlist" };
+export type SocialNotification = { id: number; userId: number; actorId: number; type: NotificationType; title: string; text: string; unread: boolean; createdAt: string; materialId?: number; materialKind?: "review" | "excerpt" | "event" | "occasion" | "publisher_news" | "book" | "wishlist" | "shelf" };
 
 export type EventStatus = "pending" | "needs_changes" | "rejected" | "published";
 export type LinkedBookPreview = { id: number; title: string; author: string; annotation?: string; coverUrl?: string; coverTone?: string };
@@ -192,13 +193,13 @@ export type UserProfileData = {
 };
 export type UserSuspension = { permanent: boolean; until?: string; reason: string };
 export type UserBlock = { blockerId: number; blockedId: number; createdAt?: string };
-export type ReportMaterialKind = "book" | "review" | "excerpt" | "event" | "occasion" | "publisher_news";
+export type ReportMaterialKind = "book" | "review" | "excerpt" | "event" | "occasion" | "publisher_news" | "shelf";
 export type SafetyReport = {
   id: number;
   reference?: string;
   reporterId?: number;
   reporterName: string;
-  targetKind: "user" | ReportMaterialKind | "chat" | "comment";
+  targetKind: "user" | ReportMaterialKind | "chat" | "comment" | "book_note";
   targetId: number;
   targetUserId?: number;
   targetUserName?: string;
@@ -212,11 +213,14 @@ export type SafetyReport = {
   appealedAt?: string;
   appealText?: string;
   commentText?: string;
+  noteText?: string;
+  noteBookId?: number;
   materialKind?: ReportMaterialKind;
   materialId?: number;
   conversationMessages?: Message[];
 };
 export type ReadingHistoryEntry = { id: number; bookId: number; completedMonth?: number; completedYear?: number; book: Pick<LibraryBook, "id" | "author" | "title" | "coverUrl" | "coverTone"> };
+export type ReadingGoal = { id: number; goalKind: "month" | "year"; targetCount: number; targetMonth: number | null; targetYear: number; startMonth: number | null; createdAt?: string; updatedAt?: string };
 export type DemoUser = { id: number; username: string; usernameIsTemporary?: boolean; profileCompleted?: boolean; initials: string; color: string; avatarUrl?: string; joined: string; joinedAt?: string; online?: boolean; lastSeenAt?: string; isAdmin?: boolean; blockedByMe?: boolean; friendCount?: number; followerCount?: number; friendIds?: number[]; followerIds?: number[]; memberCount?: number; memberIds?: number[]; suspension?: UserSuspension; deletedAt?: string; deletionExpiresAt?: string; purged?: boolean; profile: UserProfileData; books: LibraryBook[]; readingHistory?: ReadingHistoryEntry[]; communityBooks?: CommunityBook[]; reviews: UserReview[]; authorBooks?: AuthorBook[]; excerpts?: UserExcerpt[]; publisherNews?: PublisherNews[]; wishBooks?: WishBook[] };
 
 export type AdultMaterialKind = "book" | "review" | "excerpt" | "event" | "occasion";
@@ -225,7 +229,7 @@ export type LegalDocument = { id: number; type: "user_agreement" | "privacy_poli
 export type AccessGate = { profileComplete: boolean; missingProfileFields: string[]; legalConfigured: boolean; pendingLegalDocuments: LegalDocument[]; legalDocuments?: LegalDocument[] };
 export type LinkedProfileCard = { id: number; name: string; type: "Читатель" | "Писатель" | "Блогер" | "Сообщество"; avatarUrl?: string; profileCompleted?: boolean };
 export type MaterialActionRef = { kind: ReportMaterialKind | "book"; id: number; createdAt: string };
-export type BootstrapData = { activeUserId: number; profileCompleted?: boolean; accessGate?: AccessGate; adultAccess?: AdultAccess; users: DemoUser[]; activeOrganizationIds?: number[]; books?: LibraryBook[]; linkedProfile?: LinkedProfileCard; messages: Record<string, Message[]>; friendRequests: FriendRequest[]; friendships: Friendship[]; communityMemberships?: CommunityMembership[]; follows: Follow[]; notifications: SocialNotification[]; likes: Record<string, number[]>; saves?: Record<string, number[]>; likedMaterialRefs?: MaterialActionRef[]; savedMaterialRefs?: MaterialActionRef[]; events?: BookEvent[]; occasions?: Occasion[]; blocks?: UserBlock[]; blockedByUserIds?: number[]; reports?: SafetyReport[] };
+export type BootstrapData = { shelves?: BookShelf[]; activeUserId: number; profileCompleted?: boolean; accessGate?: AccessGate; adultAccess?: AdultAccess; users: DemoUser[]; activeOrganizationIds?: number[]; books?: LibraryBook[]; linkedProfile?: LinkedProfileCard; messages: Record<string, Message[]>; friendRequests: FriendRequest[]; friendships: Friendship[]; communityMemberships?: CommunityMembership[]; follows: Follow[]; notifications: SocialNotification[]; likes: Record<string, number[]>; saves?: Record<string, number[]>; likedMaterialRefs?: MaterialActionRef[]; savedMaterialRefs?: MaterialActionRef[]; events?: BookEvent[]; occasions?: Occasion[]; blocks?: UserBlock[]; blockedByUserIds?: number[]; reports?: SafetyReport[] };
 export type PublicCatalogBook = Pick<LibraryBook, "id" | "author" | "title" | "isbn" | "publisher" | "genres" | "annotation" | "coverUrl" | "coverTone"> & { addedAt?: string; popularity: number };
 export type PublicCatalogOwner = { id: number; name: string; initials: string; color: string; avatarUrl?: string };
 export type PublicCatalogMaterial = { id: number; kind: "review" | "excerpt" | "publisher_news"; title: string; preview: string; ownerName: string; owner: PublicCatalogOwner; createdAt?: string };

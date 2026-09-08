@@ -39,6 +39,11 @@ export async function loadUsers(connection = getPool(), viewerId = null) {
     "SELECT blocker_user_id, blocked_user_id FROM user_blocks WHERE blocker_user_id = ? OR blocked_user_id = ?",
     [viewerId, viewerId],
   ) : [[]];
+  const [hideRows] = viewerId ? await connection.query(
+    "SELECT hidden_user_id FROM user_hides WHERE hider_user_id = ?",
+    [viewerId],
+  ) : [[]];
+  const hiddenOwnerIds = new Set(hideRows.map((row) => Number(row.hidden_user_id)));
   const [viewerFriendRows] = viewerId ? await connection.query(
     "SELECT user_low_id, user_high_id FROM friendships WHERE user_low_id = ? OR user_high_id = ?",
     [viewerId, viewerId],
@@ -106,6 +111,16 @@ export async function loadUsers(connection = getPool(), viewerId = null) {
     `SELECT id, user_id, title, preview_text, body_html, body, is_adult, created_at
        FROM publisher_news
       ORDER BY created_at DESC`,
+  );
+  const [shelfRows] = await connection.query(
+    `SELECT s.id, s.owner_user_id, s.title, s.description, s.created_at, s.updated_at,
+            i.book_id, i.position, i.description AS item_description,
+            b.author, b.title AS book_title, b.annotation, b.cover_path, b.cover_tone, b.is_adult, ub.rating
+       FROM book_shelves s
+       LEFT JOIN book_shelf_items i ON i.shelf_id = s.id
+       LEFT JOIN books b ON b.id = i.book_id
+       LEFT JOIN user_books ub ON ub.user_id = s.owner_user_id AND ub.book_id = i.book_id AND ub.is_author = 0
+      ORDER BY s.id DESC, i.position`,
   );
 
   const viewerIsAdmin = userRows.some((row) => Number(row.id) === Number(viewerId) && row.role === "admin");
@@ -316,6 +331,16 @@ export async function loadUsers(connection = getPool(), viewerId = null) {
         createdAt: formatDate(item.created_at),
         createdAtValue: new Date(item.created_at).toISOString(),
       })),
+      shelves: blockedPair || crossAge || deletedView || hiddenOwnerIds.has(Number(row.id)) ? [] : [...new Map(shelfRows.filter((item) => Number(item.owner_user_id) === Number(row.id)).map((item) => [Number(item.id), item])).values()].map((shelf) => {
+        const allItems = shelfRows.filter((item) => Number(item.id) === Number(shelf.id));
+        return {
+          id: Number(shelf.id), ownerId: Number(shelf.owner_user_id), title: shelf.title, description: shelf.description ?? "",
+          createdAt: new Date(shelf.created_at).toISOString(), updatedAt: new Date(shelf.updated_at).toISOString(),
+          owner: { id: Number(row.id), name: row.display_name, initials: row.initials, avatarUrl: row.avatar_path ?? undefined },
+          bookCount: allItems.length,
+          items: allItems.map((item) => { const available = item.book_id && (!hideAdultMaterials || !item.is_adult); return { bookId: available ? Number(item.book_id) : null, position: Number(item.position), description: available ? item.item_description ?? "" : "", book: available ? { id: Number(item.book_id), title: item.book_title, author: item.author, annotation: item.annotation ?? "", coverUrl: item.cover_path ?? undefined, coverTone: item.cover_tone ?? "blue", rating: item.rating == null ? undefined : Number(item.rating) } : null }; }),
+        };
+      }),
     };
   });
 }
@@ -493,13 +518,16 @@ export async function loadBootstrap(userId, options = {}) {
               CASE WHEN r.target_kind = 'event' THEN (SELECT title FROM events WHERE id = r.target_id) END,
               CASE WHEN r.target_kind = 'occasion' THEN (SELECT primary_text FROM occasions WHERE id = r.target_id) END,
               CASE WHEN r.target_kind = 'publisher_news' THEN (SELECT title FROM publisher_news WHERE id = r.target_id) END,
+              CASE WHEN r.target_kind = 'book_note' THEN CONCAT('Заметка: ', (SELECT LEFT(body, 180) FROM book_progress_notes WHERE id = r.target_id)) END,
               CASE WHEN r.target_kind = 'chat' THEN CONCAT('Диалог с ', target.display_name) END,
               CASE WHEN r.target_kind = 'comment' THEN CONCAT('Комментарий: ', (SELECT LEFT(body, 180) FROM material_comments WHERE id = r.target_id)) END,
               'Удалённый материал'
             ) AS target_title,
             CASE WHEN r.target_kind = 'comment' THEN (SELECT body FROM material_comments WHERE id = r.target_id) END AS comment_text,
             CASE WHEN r.target_kind = 'comment' THEN (SELECT material_kind FROM material_comments WHERE id = r.target_id) END AS comment_material_kind,
-            CASE WHEN r.target_kind = 'comment' THEN (SELECT material_id FROM material_comments WHERE id = r.target_id) END AS comment_material_id
+            CASE WHEN r.target_kind = 'comment' THEN (SELECT material_id FROM material_comments WHERE id = r.target_id) END AS comment_material_id,
+            CASE WHEN r.target_kind = 'book_note' THEN (SELECT body FROM book_progress_notes WHERE id = r.target_id) END AS note_text,
+            CASE WHEN r.target_kind = 'book_note' THEN (SELECT book_id FROM book_progress_notes WHERE id = r.target_id) END AS note_book_id
        FROM reports r
        LEFT JOIN profiles reporter ON reporter.user_id = r.reporter_user_id
        LEFT JOIN profiles target ON target.user_id = r.target_user_id
@@ -667,9 +695,10 @@ export async function loadBootstrap(userId, options = {}) {
     activeOrganizationIds: activeOrganizationRows.map((row) => Number(row.id)),
     linkedProfile: linkedProfileRow ? { id: Number(linkedProfileRow.id), name: linkedProfileRow.display_name, type: linkedProfileRow.profile_type, avatarUrl: linkedProfileRow.avatar_path ?? undefined, profileCompleted: Boolean(linkedProfileRow.profile_completed) } : undefined,
     books: profileGate.complete ? catalogBooks : catalogBooks.map((book) => ({ ...book, annotation: "", isbn: undefined, publisher: undefined, links: [], flipUrl: undefined })),
+    shelves: users.flatMap((user) => user.shelves ?? []),
     blocks: blockRows.map((row) => ({ blockerId: Number(row.blocker_user_id), blockedId: Number(row.blocked_user_id), createdAt: new Date(row.created_at).toISOString() })),
     blockedByUserIds: blockRows.filter((row) => Number(row.blocked_user_id) === Number(userId)).map((row) => Number(row.blocker_user_id)),
-    reports: reportRows.map((row) => ({ id: Number(row.id), reference: row.reference_code, reporterId: row.reporter_user_id ? Number(row.reporter_user_id) : undefined, reporterName: row.reporter_anonymized ? "Удалённый пользователь" : row.reporter_name, targetKind: row.target_kind, targetId: Number(row.target_id), targetUserId: row.target_user_id ? Number(row.target_user_id) : undefined, targetUserName: row.target_user_name ?? undefined, targetTitle: row.target_title, reason: row.reason, status: row.status, createdAt: new Date(row.created_at).toISOString(), dueAt: row.due_at ? new Date(row.due_at).toISOString() : undefined, motivatedResponse: row.motivated_response ?? undefined, responseAt: row.response_at ? new Date(row.response_at).toISOString() : undefined, appealedAt: row.appealed_at ? new Date(row.appealed_at).toISOString() : undefined, appealText: row.appeal_text ?? undefined, commentText: row.comment_text ?? undefined, materialKind: row.comment_material_kind ?? undefined, materialId: row.comment_material_id ? Number(row.comment_material_id) : undefined, conversationMessages: conversationByReport.get(Number(row.id)) })),
+    reports: reportRows.map((row) => ({ id: Number(row.id), reference: row.reference_code, reporterId: row.reporter_user_id ? Number(row.reporter_user_id) : undefined, reporterName: row.reporter_anonymized ? "Удалённый пользователь" : row.reporter_name, targetKind: row.target_kind, targetId: Number(row.target_id), targetUserId: row.target_user_id ? Number(row.target_user_id) : undefined, targetUserName: row.target_user_name ?? undefined, targetTitle: row.target_title, reason: row.reason, status: row.status, createdAt: new Date(row.created_at).toISOString(), dueAt: row.due_at ? new Date(row.due_at).toISOString() : undefined, motivatedResponse: row.motivated_response ?? undefined, responseAt: row.response_at ? new Date(row.response_at).toISOString() : undefined, appealedAt: row.appealed_at ? new Date(row.appealed_at).toISOString() : undefined, appealText: row.appeal_text ?? undefined, commentText: row.comment_text ?? undefined, materialKind: row.comment_material_kind ?? undefined, materialId: row.comment_material_id ? Number(row.comment_material_id) : undefined, noteText: row.note_text ?? undefined, noteBookId: row.note_book_id ? Number(row.note_book_id) : undefined, conversationMessages: conversationByReport.get(Number(row.id)) })),
     friendRequests: requestRows.filter((row) => currentUser?.isAdmin || (!hiddenUserIds.has(Number(row.from_user_id)) && !hiddenUserIds.has(Number(row.to_user_id)))).map((row) => ({ id: Number(row.id), fromId: Number(row.from_user_id), toId: Number(row.to_user_id), status: row.status, message: row.message ?? undefined, comment: row.rejection_comment ?? undefined })),
     friendships: friendshipRows.filter((row) => currentUser?.isAdmin || (!hiddenUserIds.has(Number(row.user_low_id)) && !hiddenUserIds.has(Number(row.user_high_id)))).map((row) => ({ userA: Number(row.user_low_id), userB: Number(row.user_high_id) })),
     communityMemberships: communityMembershipRows.filter((row) => currentUser?.isAdmin || (!hiddenUserIds.has(Number(row.community_user_id)) && !hiddenUserIds.has(Number(row.member_user_id)))).map((row) => ({ communityId: Number(row.community_user_id), memberId: Number(row.member_user_id) })),
