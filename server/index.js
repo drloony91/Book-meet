@@ -5,6 +5,9 @@ import { fileURLToPath } from "node:url";
 import { mkdir } from "node:fs/promises";
 import { apiRateLimit } from "./modules/request-limits.js";
 import { createTelegramOutboxDispatcher } from "./modules/telegram-outbox.js";
+import { getPool } from "./db.js";
+import { createMysqlNotificationDeliveryStore, createNotificationDeliveryWorker } from "./modules/notification-events.js";
+import { createEmailNotificationAdapter, createNotificationDeliveryDispatcher, createTelegramNotificationAdapter } from "./modules/notification-channels.js";
 import { authText, requestLocale } from "./modules/i18n.js";
 
 const app = express();
@@ -23,6 +26,13 @@ async function start() {
 
   const { default: api } = await import(demoMode ? "./demo-api.js" : "./api.js");
   const telegramDispatcher = demoMode ? null : createTelegramOutboxDispatcher();
+  const notificationDispatcher = demoMode ? null : createNotificationDeliveryDispatcher(createNotificationDeliveryWorker({
+    store: createMysqlNotificationDeliveryStore({ pool: getPool() }),
+    adapters: {
+      telegram: createTelegramNotificationAdapter(),
+      email: createEmailNotificationAdapter(),
+    },
+  }));
 
   app.disable("x-powered-by");
   app.set("trust proxy", 1);
@@ -52,7 +62,7 @@ async function start() {
   app.use("/api", (request, response, next) => {
     if (telegramDispatcher && !["GET", "HEAD", "OPTIONS"].includes(request.method)) {
       response.once("finish", () => {
-        if (response.statusCode < 400) telegramDispatcher.wake();
+        if (response.statusCode < 400) { telegramDispatcher.wake(); notificationDispatcher?.wake(); }
       });
     }
     next();
@@ -89,9 +99,11 @@ async function start() {
     console.log(`Book Meet запущен на http://localhost:${port}`);
   });
   telegramDispatcher?.start();
+  notificationDispatcher?.start();
 
   function shutdown(signal) {
     telegramDispatcher?.stop();
+    notificationDispatcher?.stop();
     console.log(`${signal}: останавливаем Book Meet`);
     server.close(() => process.exit(0));
     setTimeout(() => process.exit(1), 10_000).unref();

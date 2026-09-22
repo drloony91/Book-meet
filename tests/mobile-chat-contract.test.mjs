@@ -28,9 +28,18 @@ test("mobile chat list and dialog are routed screens while desktop chat stays is
   assert.match(screen, /friend\.username/);
   assert.match(chat, /chat-mobile-back/);
   assert.match(chat, /mobileDialog/);
+  assert.match(chat, /message-like-button/);
+  assert.match(chat, /aria-pressed=\{Boolean\(message\.likedByViewer\)\}/);
+  assert.match(chat, /<div className="message-inline-actions">[\s\S]+message-like-button/, "message controls must stay outside the message bubble");
+  assert.match(chat, /message\.mine && !message\.attachment && !message\.sticker && <button className="message-edit-button"/);
+  assert.match(chat, /message\.mine && <button className="message-delete-button"/);
+  assert.match(chat, /className="message-edit-form"/);
   assert.match(css, /\.app-shell\.mobile-chat-route \.topbar/);
   assert.match(css, /\.app-shell\.mobile-chat-dialog-active \.mobile-bottom-navigation/);
   assert.match(css, /\.desktop-chat-page \{ display: contents; \}/);
+  assert.match(css, /\.message-like-button, \.message-edit-button, \.message-delete-button \{[^}]*display: inline-flex/);
+  assert.match(css, /@media \(max-width: 800px\)[\s\S]*\.message-like-button, \.message-edit-button, \.message-delete-button \{ flex-basis: 32px/);
+  assert.match(css, /@media \(max-width: 800px\)[\s\S]*\.message-bubble\.is-editing \{ width: 86%/);
   assert.match(css, /@media \(min-width: 801px\)[\s\S]*\.workspace-chat-page > \.workspace-main/);
   assert.match(packageJson, /tests\/mobile-chat-contract\.test\.mjs/);
 });

@@ -131,6 +131,7 @@ const notificationKeys: Record<string, MessageKey> = {
   new_message: "notification.newMessage", new_follower: "notification.newFollower", publication: "notification.publication", friendship_ended: "notification.friendshipEnded",
   like: "notification.like", comment: "notification.comment", event_submitted: "notification.eventSubmitted", event_moderation: "notification.eventModeration",
   event_reminder: "notification.eventReminder", author_book_activity: "notification.authorBookActivity", gift_reserved: "notification.giftReserved",
+  mention: "notification.mention", repost: "notification.repost", postponed_book: "notification.postponedBook", system: "notification.system", security: "notification.security",
 };
 
 export function localizedNotificationTitle(locale: Locale, type: string, fallback: string) {

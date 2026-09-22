@@ -1,6 +1,6 @@
 # Book Meet Web MVP
 
-Самостоятельное web-приложение Book Meet для размещения на Hoster.kz/Plesk. Telegram-бот, Cloudflare Workers и D1 приложению не нужны.
+Самостоятельное web-приложение Book Meet для размещения на Hoster.kz/Plesk. Cloudflare Workers и D1 приложению не нужны; Telegram-бот используется только как опциональный канал пользовательских уведомлений и административных алертов.
 
 Канонический production-адрес приложения — `https://bookmeet.club`. Retired `bot.oqyastana.kz` не входит в текущую конфигурацию: DNS, `LEGACY_ORIGIN` и runtime redirect для него не требуются.
 

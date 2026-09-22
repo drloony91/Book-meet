@@ -35,6 +35,7 @@ import { safeReturnTo } from "../lib/navigation-security";
 import { CommunitiesDirectoryPage, PublishingDirectoryPage, UsersDirectoryPage } from "../screens/UsersDirectoryScreen";
 import { AllBooksDirectoryPage, EventsDirectoryPage, HomeContent, MaterialsDirectoryPage, OccasionsDirectoryPage, PersonalMaterialFeed, SimpleDirectoryPage } from "../screens/ContentScreens";
 import { ContentHubControls } from "../components/content/ContentHubControls";
+import { HideUserAction } from "../components/content/SocialMaterialActions";
 import { AdminProfile, MyProfile } from "../screens/ProfileScreens";
 import {
   AdminCatalogEditor,
@@ -105,6 +106,7 @@ import type {
   PublisherNews,
   ReadingItem,
   Review,
+  NotificationCategory,
   SocialNotification,
   SafetyReport,
   UserBlock,
@@ -136,11 +138,16 @@ export function useBookMeetController() {
   const mobileSearchQueryRef = useRef(typeof window !== "undefined" && normalizedPathname(window.location.pathname) === "/search" ? new URLSearchParams(window.location.search).get("q") ?? "" : "");
   if (currentRoute.view === "search") mobileSearchQueryRef.current = new URLSearchParams(window.location.search).get("q") ?? "";
   const [selectedFriend, setSelectedFriend] = useState<Friend | null>(null);
+  const selectedFriendIdRef = useRef<number | null>(null);
   const [mobileFriendsOpen, setMobileFriendsOpen] = useState(false);
   const [mobileNavigationOpen, setMobileNavigationOpen] = useState(false);
   const [chatExpanded, setChatExpanded] = useState(false);
+  const [chatTargetMessageId, setChatTargetMessageId] = useState<number | null>(null);
   const [profileUserId, setProfileUserId] = useState<number | null>(null);
   const [messages, setMessages] = useState<Record<string, Message[]>>({});
+  const messageEditRequestRef = useRef(0);
+  const messageDeleteRequestRef = useRef(new Map<number, number>());
+  useEffect(() => { selectedFriendIdRef.current = selectedFriend?.id ?? null; }, [selectedFriend?.id]);
   const [friendRequests, setFriendRequests] = useState<FriendRequest[]>([]);
   const [friendships, setFriendships] = useState<Friendship[]>([]);
   const [communityMemberships, setCommunityMemberships] = useState<CommunityMembership[]>([]);
@@ -321,32 +328,39 @@ export function useBookMeetController() {
     if (!activeUserId || authLoading || authTransition) return;
     let active = true;
     let refreshing = false;
+    let socialRefreshing = false;
+    let socialPending = false;
+    let socialProjectionEpoch = 0;
+    const applySocialProjection = (data: BootstrapData) => {
+      setMessages(data.messages ?? {});
+      setFriendRequests(data.friendRequests ?? []);
+      setFriendships(data.friendships ?? []);
+      setCommunityMemberships(data.communityMemberships ?? []);
+      setFollows(data.follows ?? []);
+      setNotifications(data.notifications ?? []);
+      setLikes(data.likes ?? {});
+      setSaves(data.saves ?? {});
+      setLikedMaterialRefs(data.likedMaterialRefs ?? []);
+      setSavedMaterialRefs(data.savedMaterialRefs ?? []);
+      setBlocks(data.blocks ?? []);
+      setBlockedByUserIds(data.blockedByUserIds ?? []);
+    };
     const refresh = async () => {
       if (refreshing || document.hidden) return;
       refreshing = true;
+      const projectionEpoch = ++socialProjectionEpoch;
       try {
         const startedAtMutationEpoch = libraryMutationEpoch.current;
         const data = await loadApplicationData(["catalog", "social", "moderation"]);
-        if (!active) return;
+        if (!active || Number(data.activeUserId) !== activeUserId) return;
         if (startedAtMutationEpoch === libraryMutationEpoch.current) setUsers(data.users);
         else setUsers((current) => data.users.map((incoming) => incoming.id === activeUserId ? current.find((user) => user.id === incoming.id) ?? incoming : incoming));
         setCatalogBooks(data.books ?? []);
         setActiveOrganizationIds(data.activeOrganizationIds ?? []);
-        setMessages(data.messages ?? {});
-        setFriendRequests(data.friendRequests ?? []);
-        setFriendships(data.friendships ?? []);
-        setCommunityMemberships(data.communityMemberships ?? []);
-        setFollows(data.follows ?? []);
-        setNotifications(data.notifications ?? []);
-        setLikes(data.likes ?? {});
-        setSaves(data.saves ?? {});
-        setLikedMaterialRefs(data.likedMaterialRefs ?? []);
-        setSavedMaterialRefs(data.savedMaterialRefs ?? []);
+        if (projectionEpoch === socialProjectionEpoch) applySocialProjection(data);
         setEvents(data.events ?? []);
         setOccasions(data.occasions ?? []);
         setAdultAccess(data.adultAccess ?? { status: "adult", restricted: {} });
-        setBlocks(data.blocks ?? []);
-        setBlockedByUserIds(data.blockedByUserIds ?? []);
         setReports(data.reports ?? []);
         setShelves(Array.isArray(data.shelves) ? data.shelves.filter(isBookShelf) : []);
       } catch (error) {
@@ -359,11 +373,44 @@ export function useBookMeetController() {
         refreshing = false;
       }
     };
+    const refreshSocial = async () => {
+      if (document.hidden) {
+        socialPending = true;
+        return;
+      }
+      if (socialRefreshing) {
+        socialPending = true;
+        return;
+      }
+      socialRefreshing = true;
+      try {
+        do {
+          socialPending = false;
+          const projectionEpoch = ++socialProjectionEpoch;
+          const data = await loadApplicationData(["social"]);
+          if (!active || Number(data.activeUserId) !== activeUserId) return;
+          if (projectionEpoch === socialProjectionEpoch) applySocialProjection(data);
+        } while (active && !document.hidden && socialPending);
+      } catch (error) {
+        if (error instanceof BootstrapRequestError && error.status === 423) {
+          setSuspension({ permanent: Boolean(error.data.permanent), until: typeof error.data.until === "string" ? error.data.until : undefined, reason: typeof error.data.reason === "string" ? error.data.reason : "" });
+          return;
+        }
+        console.warn("Chat realtime refresh failed", error);
+      } finally {
+        socialRefreshing = false;
+      }
+    };
     const eventsSource = new EventSource("/api/realtime", { withCredentials: true });
     eventsSource.addEventListener("update", refresh);
     eventsSource.addEventListener("update", () => window.dispatchEvent(new CustomEvent("bookmeet:materials-refreshed")));
+    eventsSource.addEventListener("chat", () => { void refreshSocial(); });
     const timer = window.setInterval(refresh, 30_000);
-    const onVisible = () => { if (!document.hidden) void refresh(); };
+    const onVisible = () => {
+      if (document.hidden) return;
+      socialPending = false;
+      void refresh();
+    };
     document.addEventListener("visibilitychange", onVisible);
     return () => { active = false; eventsSource.close(); window.clearInterval(timer); document.removeEventListener("visibilitychange", onVisible); };
   }, [activeUserId, authLoading, authTransition]);
@@ -599,8 +646,8 @@ export function useBookMeetController() {
     if (request.message) row.message = request.message;
     return [row];
   }) : [];
-  const allReviews: Review[] = visibleUsers.flatMap((user, userIndex) => user.reviews.map((review, reviewIndex) => ({ id: review.id, ownerId: user.id, quote: review.preview, fullText: review.fullText, bodyHtml: review.bodyHtml, linkedBookId: review.bookId, book: `«${review.bookTitle}»`, author: review.bookAuthor, user: user.profile.name, rating: String(review.rating), tone: ["blue", "green", "red"][(userIndex + reviewIndex) % 3], createdAt: review.createdAt, createdAtValue: review.createdAtValue, isAdult: review.isAdult })));
-  const allExcerpts: Excerpt[] = visibleUsers.flatMap((user) => (user.excerpts ?? []).map((excerpt) => ({ id: excerpt.id, ownerId: user.id, text: excerpt.previewText || excerpt.text.slice(0, 500), fullText: excerpt.text || excerpt.previewText, bodyHtml: excerpt.bodyHtml, linkedBookId: excerpt.bookId, linkedBookIds: excerpt.bookIds, title: excerpt.bookTitle || t("content.publications"), author: user.profile.name, genre: "", createdAt: excerpt.createdAt, createdAtValue: excerpt.createdAtValue, isAdult: excerpt.isAdult })));
+  const allReviews: Review[] = visibleUsers.flatMap((user, userIndex) => user.reviews.map((review, reviewIndex) => ({ id: review.id, ownerId: user.id, quote: review.preview, fullText: review.fullText, bodyHtml: review.bodyHtml, mentions: review.mentions, linkedBookId: review.bookId, book: `«${review.bookTitle}»`, author: review.bookAuthor, user: user.profile.name, rating: String(review.rating), tone: ["blue", "green", "red"][(userIndex + reviewIndex) % 3], createdAt: review.createdAt, createdAtValue: review.createdAtValue, isAdult: review.isAdult })));
+  const allExcerpts: Excerpt[] = visibleUsers.flatMap((user) => (user.excerpts ?? []).map((excerpt) => ({ id: excerpt.id, ownerId: user.id, text: excerpt.previewText || excerpt.text.slice(0, 500), fullText: excerpt.text || excerpt.previewText, bodyHtml: excerpt.bodyHtml, mentions: excerpt.mentions, linkedBookId: excerpt.bookId, linkedBookIds: excerpt.bookIds, title: excerpt.bookTitle || t("content.publications"), author: user.profile.name, genre: "", createdAt: excerpt.createdAt, createdAtValue: excerpt.createdAtValue, isAdult: excerpt.isAdult })));
   const allPublisherNews = visibleUsers.flatMap((user) => user.publisherNews ?? []);
   const shareItems = useMemo<ChatShareItem[]>(() => {
     const books: ChatShareItem[] = catalog.map((book) => ({ kind: "book", id: book.id, title: book.title, subtitle: book.author, preview: book.annotation, imageUrl: book.coverUrl, path: `/books/${book.id}` }));
@@ -1030,7 +1077,7 @@ export function useBookMeetController() {
     setProfileUserId(userId); setNotificationsOpen(false);
   }
 
-  function openChat(userId: number) {
+  function openChat(userId: number, targetMessageId?: number) {
     if (!currentUser) return;
     const user = users.find((item) => item.id === userId);
     if (!user || (!isFriendPair(currentUser.id, userId) && !isCommunityMemberPair(currentUser.id, userId) && !currentUser.isAdmin && !user.isAdmin && currentUser.profile.type !== "Издатель" && user.profile.type !== "Издатель")) return;
@@ -1045,18 +1092,20 @@ export function useBookMeetController() {
     document.title = `${user.isAdmin && !currentUser.isAdmin ? t("chat.support") : user.profile.name} — ${t("header.chats")} Book Meet`;
     setSelectedFriend({ id: user.id, name: user.isAdmin && !currentUser.isAdmin ? t("chat.support") : user.profile.name, username: user.username, type: user.profile.type, city: user.profile.city, initials: user.initials, avatarUrl: user.avatarUrl, color: user.isAdmin ? "navy" : user.color, online: Boolean(user.online), support: Boolean(user.isAdmin && !currentUser.isAdmin), lastMessage: "", time: "", bio: user.profile.bio, books: user.profile.favoriteGenres.join(", ") });
     setChatExpanded(false);
+    setChatTargetMessageId(targetMessageId ?? null);
     if (!desktopChat) setView("chat");
     setProfileUserId(null); setNotificationsOpen(false);
   }
 
-  async function sendMessage(text: string, attachment?: ChatAttachment) {
+  async function sendMessage(text: string, attachment?: ChatAttachment, mentions?: import("../types/domain").MentionRef[], stickerId?: string) {
     if (!selectedFriend || !currentUser) return;
-    const response = await apiFetch("/api/social/messages", { method: "POST", credentials: "same-origin", headers: { "content-type": "application/json" }, body: JSON.stringify({ targetId: selectedFriend.id, body: text, attachment }) });
+    const response = await apiFetch("/api/social/messages", { method: "POST", credentials: "same-origin", headers: { "content-type": "application/json" }, body: JSON.stringify({ targetId: selectedFriend.id, body: text, attachment, mentions, stickerId }) });
     if (!response.ok) { alert(t("chat.sendError")); return; }
     const data = await response.json() as { message?: Message };
     const createdAt = data.message?.createdAt ?? new Date().toISOString();
     const key = conversationKey(currentUser.id, selectedFriend.id);
-    setMessages((current) => ({ ...current, [key]: [...(current[key] ?? []), { id: data.message?.id ?? Date.now(), mine: true, senderId: currentUser.id, text, attachment, time: "", createdAt, read: false }] }));
+    const message = { id: data.message?.id ?? Date.now(), mine: true, senderId: currentUser.id, text: data.message?.text ?? text, attachment, sticker: data.message?.sticker, kind: data.message?.kind, mentions: data.message?.mentions ?? mentions, time: "", createdAt, read: false, likeCount: 0, likedByViewer: false, likedByUserIds: [] } satisfies Message;
+    setMessages((current) => ({ ...current, [key]: (current[key] ?? []).some((item) => item.id === message.id) ? current[key] : [...(current[key] ?? []), message] }));
   }
 
   async function shareMaterial(targetId: number, attachment: ChatAttachment) {
@@ -1065,7 +1114,107 @@ export function useBookMeetController() {
     const data = await response.json().catch(() => ({})) as { error?: string; message?: Message };
     if (!response.ok) throw new Error(localizedApiError(data.error, t("share.error")));
     const key = conversationKey(currentUser.id, targetId);
-    setMessages((current) => ({ ...current, [key]: [...(current[key] ?? []), { id: data.message?.id ?? Date.now(), mine: true, senderId: currentUser.id, text: "", attachment, time: "", createdAt: data.message?.createdAt ?? new Date().toISOString(), read: false }] }));
+    const message = { id: data.message?.id ?? Date.now(), mine: true, senderId: currentUser.id, text: "", attachment, time: "", createdAt: data.message?.createdAt ?? new Date().toISOString(), read: false, likeCount: 0, likedByViewer: false, likedByUserIds: [] } satisfies Message;
+    setMessages((current) => ({ ...current, [key]: (current[key] ?? []).some((item) => item.id === message.id) ? current[key] : [...(current[key] ?? []), message] }));
+  }
+
+  async function toggleMessageLike(messageId: number, liked: boolean) {
+    if (!selectedFriend || !currentUser) return;
+    const key = conversationKey(currentUser.id, selectedFriend.id);
+    try {
+      const response = await apiFetch(`/api/messages/${messageId}/reactions/like`, { method: liked ? "POST" : "DELETE", credentials: "same-origin" });
+      const data = await response.json().catch(() => ({})) as { error?: string; messageId?: number; likeCount?: number; likedByViewer?: boolean; likedByUserIds?: number[] };
+      if (!response.ok || data.messageId !== messageId || !Number.isInteger(data.likeCount) || !Array.isArray(data.likedByUserIds)) {
+        window.alert(localizedApiError(data.error, t("chat.likeError")));
+        return;
+      }
+      setMessages((current) => ({
+        ...current,
+        [key]: (current[key] ?? []).map((message) => message.id === messageId ? {
+          ...message,
+          likeCount: data.likeCount,
+          likedByViewer: Boolean(data.likedByViewer),
+          likedByUserIds: data.likedByUserIds,
+        } : message),
+      }));
+    } catch {
+      window.alert(t("chat.likeError"));
+    }
+  }
+
+  async function editMessage(messageId: number, body: string, mentions?: import("../types/domain").MentionRef[]) {
+    if (!selectedFriend || !currentUser) return false;
+    const friendId = selectedFriend.id;
+    const userId = currentUser.id;
+    const key = conversationKey(userId, friendId);
+    const requestId = ++messageEditRequestRef.current;
+    try {
+      const response = await apiFetch(`/api/messages/${messageId}`, { method: "PATCH", credentials: "same-origin", headers: { "content-type": "application/json" }, body: JSON.stringify({ body, mentions }) });
+      const data = await response.json().catch(() => ({})) as { error?: string; message?: Message };
+      if (selectedFriendIdRef.current !== friendId || messageEditRequestRef.current !== requestId) return false;
+      if (!response.ok || data.message?.id !== messageId || typeof data.message.text !== "string") {
+        window.alert(localizedApiError(data.error, t("chat.editError")));
+        return false;
+      }
+      setMessages((current) => ({
+        ...current,
+        [key]: (current[key] ?? []).map((message) => message.id === messageId ? {
+          ...message,
+          text: data.message!.text,
+          mentions: data.message!.mentions ?? [],
+          editedAt: data.message!.editedAt,
+          read: data.message!.read,
+          likeCount: data.message!.likeCount,
+          likedByViewer: data.message!.likedByViewer,
+          likedByUserIds: data.message!.likedByUserIds,
+        } : message),
+      }));
+      return true;
+    } catch {
+      if (selectedFriendIdRef.current !== friendId || messageEditRequestRef.current !== requestId) return false;
+      window.alert(t("chat.editError"));
+      return false;
+    }
+  }
+
+  async function deleteMessage(messageId: number) {
+    if (!selectedFriend || !currentUser) return false;
+    const friendId = selectedFriend.id;
+    const key = conversationKey(currentUser.id, friendId);
+    const requestId = (messageDeleteRequestRef.current.get(messageId) ?? 0) + 1;
+    messageDeleteRequestRef.current.set(messageId, requestId);
+    try {
+      const response = await apiFetch(`/api/messages/${messageId}`, { method: "DELETE", credentials: "same-origin" });
+      const data = await response.json().catch(() => ({})) as { error?: string; messageId?: number; deletedBeforeRead?: boolean };
+      if (selectedFriendIdRef.current !== friendId || messageDeleteRequestRef.current.get(messageId) !== requestId) return false;
+      if (!response.ok || data.messageId !== messageId || typeof data.deletedBeforeRead !== "boolean") {
+        window.alert(localizedApiError(data.error, t("chat.deleteMessageError")));
+        return false;
+      }
+      setMessages((current) => ({
+        ...current,
+        [key]: data.deletedBeforeRead
+          ? (current[key] ?? []).filter((message) => message.id !== messageId)
+          : (current[key] ?? []).map((message) => message.id === messageId ? {
+            ...message,
+            text: t("chat.messageDeleted"),
+            deleted: true,
+            attachment: undefined,
+            mentions: [],
+            editedAt: undefined,
+            unread: false,
+            read: true,
+            likeCount: 0,
+            likedByViewer: false,
+            likedByUserIds: [],
+          } : message),
+      }));
+      return true;
+    } catch {
+      if (selectedFriendIdRef.current !== friendId || messageDeleteRequestRef.current.get(messageId) !== requestId) return false;
+      window.alert(t("chat.deleteMessageError"));
+      return false;
+    }
   }
 
   async function clearChatHistory() {
@@ -1288,8 +1437,8 @@ export function useBookMeetController() {
     if (["like", "comment"].includes(notification.type) && notification.materialId && notification.materialKind) {
       const owner = users.find((user) => user.id === notification.userId);
       if (notification.materialKind === "shelf") setSelectedShelfId(notification.materialId ?? null);
-      else if (notification.materialKind === "review") { const review = owner?.reviews.find((item) => item.id === notification.materialId); if (review) setSelectedMaterial({ id: review.id, kind: "review", title: review.bookTitle, author: owner!.profile.name, text: review.fullText, ownerId: owner!.id, createdAt: review.createdAt, preview: review.preview, bookAuthor: review.bookAuthor, rating: review.rating }); }
-      else if (notification.materialKind === "excerpt") { const excerpt = owner?.excerpts?.find((item) => item.id === notification.materialId); if (excerpt) setSelectedMaterial({ id: excerpt.id, kind: "excerpt", title: excerpt.bookTitle || t("content.publications"), author: owner!.profile.name, text: excerpt.text, preview: excerpt.previewText, bodyHtml: excerpt.bodyHtml, linkedBookId: excerpt.bookId, linkedBookIds: excerpt.bookIds, ownerId: owner!.id, createdAt: excerpt.createdAt }); }
+      else if (notification.materialKind === "review") { const review = owner?.reviews.find((item) => item.id === notification.materialId); if (review) setSelectedMaterial({ id: review.id, kind: "review", title: review.bookTitle, author: owner!.profile.name, text: review.fullText, ownerId: owner!.id, createdAt: review.createdAt, preview: review.preview, bookAuthor: review.bookAuthor, rating: review.rating, mentions: review.mentions }); }
+      else if (notification.materialKind === "excerpt") { const excerpt = owner?.excerpts?.find((item) => item.id === notification.materialId); if (excerpt) setSelectedMaterial({ id: excerpt.id, kind: "excerpt", title: excerpt.bookTitle || t("content.publications"), author: owner!.profile.name, text: excerpt.text, preview: excerpt.previewText, bodyHtml: excerpt.bodyHtml, linkedBookId: excerpt.bookId, linkedBookIds: excerpt.bookIds, ownerId: owner!.id, createdAt: excerpt.createdAt, mentions: excerpt.mentions }); }
       else if (notification.materialKind === "event") setSelectedEvent(events.find((item) => item.id === notification.materialId) ?? null);
       else if (notification.materialKind === "occasion") setSelectedOccasion(occasions.find((item) => item.id === notification.materialId) ?? null);
       else setDetailNotification(notification);
@@ -1298,6 +1447,29 @@ export function useBookMeetController() {
     else if (["friend_request", "new_follower", "publication", "friendship_ended", "author_book_activity", "gift_reserved"].includes(notification.type)) openUserProfile(notification.actorId);
     else if (["friendship_started", "new_message"].includes(notification.type)) openChat(notification.actorId);
     else setDetailNotification(notification);
+  }
+
+  async function markNotificationRangeRead(category: "all" | NotificationCategory): Promise<boolean> {
+    async function request(confirmed: boolean) {
+      const response = await apiFetch("/api/notifications/read-all", { method: "PATCH", credentials: "same-origin", body: JSON.stringify({ category, confirmed }) });
+      const payload = await response.json().catch(() => ({})) as { code?: string; error?: string; affectedCount?: number; changedIds?: number[] };
+      return { response, payload };
+    }
+    try {
+      let result = await request(false);
+      if (result.response.status === 409 && result.payload.code === "NOTIFICATION_READ_CONFIRMATION_REQUIRED") {
+        if (!window.confirm(t("notifications.readConfirm", { count: result.payload.affectedCount ?? 0 }))) return false;
+        result = await request(true);
+      }
+      if (!result.response.ok) throw new Error(result.payload.error || t("notifications.readError"));
+      const changedIds = new Set((result.payload.changedIds ?? []).map(Number));
+      setNotifications((current) => current.map((notification) => changedIds.has(notification.id) ? { ...notification, unread: false } : notification));
+      return true;
+    } catch (error) {
+      console.warn(error);
+      window.alert(error instanceof Error ? error.message : t("notifications.readError"));
+      return false;
+    }
   }
 
   async function login(email: string, password: string, totp = ""): Promise<AuthResult> {
@@ -1349,7 +1521,7 @@ export function useBookMeetController() {
 
   async function logout() {
     await apiFetch("/api/auth/logout", { method: "POST", credentials: "same-origin" }).catch(() => undefined);
-    setUsers([]); setCatalogBooks([]); setActiveOrganizationIds([]); setActiveUserId(null); setMessages({}); setFriendRequests([]); setFriendships([]); setCommunityMemberships([]); setFollows([]); setNotifications([]); setLikes({}); setSaves({}); setLikedMaterialRefs([]); setSavedMaterialRefs([]); setEvents([]); setOccasions([]); setBlocks([]); setBlockedByUserIds([]); setReports([]); setSuspension(null); setCommenters({}); setCommentCounts({}); setSaveCounts({}); setSelectedFriend(null); setChatExpanded(false);
+    setUsers([]); setCatalogBooks([]); setActiveOrganizationIds([]); setActiveUserId(null); setMessages({}); setFriendRequests([]); setFriendships([]); setCommunityMemberships([]); setFollows([]); setNotifications([]); setLikes({}); setSaves({}); setLikedMaterialRefs([]); setSavedMaterialRefs([]); setEvents([]); setOccasions([]); setBlocks([]); setBlockedByUserIds([]); setReports([]); setSuspension(null); setCommenters({}); setCommentCounts({}); setSaveCounts({}); setSelectedFriend(null); setChatExpanded(false); setChatTargetMessageId(null);
     navigateMainView("home", { replace: true }); setNotificationsOpen(false); setProfileAction(null); setNewlyRegistered(false); setAuthTransition(false);
   }
 
@@ -1396,6 +1568,7 @@ export function useBookMeetController() {
     setView("chat");
     setSelectedFriend(null);
     setChatExpanded(false);
+    setChatTargetMessageId(null);
     setMobileFriendsOpen(false);
     document.title = localizedViewTitle("chat");
   };
@@ -1426,14 +1599,14 @@ export function useBookMeetController() {
     const source = allPublisherNews.find((item) => item.id === id);
     if (window.matchMedia("(min-width: 801px)").matches) {
       const owner = source ? users.find((user) => user.id === source.ownerId) : undefined;
-      setSelectedMaterial(source ? { id: source.id, kind: "publisher_news", title: source.title, author: owner?.profile.name ?? t("content.publisherNews"), text: source.body, preview: source.previewText, bodyHtml: source.bodyHtml, ownerId: source.ownerId, createdAt: source.createdAt } : null);
+      setSelectedMaterial(source ? { id: source.id, kind: "publisher_news", title: source.title, author: owner?.profile.name ?? t("content.publisherNews"), text: source.body, preview: source.previewText, bodyHtml: source.bodyHtml, ownerId: source.ownerId, createdAt: source.createdAt, mentions: source.mentions } : null);
       return;
     }
     setSelectedPublisherNews(source ?? null);
   };
-  const chat = selectedFriend ? <ChatView friend={selectedFriend} messages={activeChatMessages} profileEnabled={!selectedFriend.support} onOpenProfile={() => openUserProfile(selectedFriend.id)} onSend={sendMessage} onClearHistory={clearChatHistory} shareItems={shareItems} onOpenAttachment={openChatAttachment} onReport={!currentUser.isAdmin && !selectedFriend.support ? () => openReportDialog({ kind: "chat", id: selectedFriend.id }) : undefined} expanded={chatExpanded} onToggleExpanded={toggleChatExpanded} onClose={closeChat} /> : null;
-  const mobileChatPage = currentRoute.overlay?.kind === "chat" && selectedFriend ? <div className="mobile-chat-dialog"><ChatView friend={selectedFriend} messages={activeChatMessages} profileEnabled={!selectedFriend.support} onOpenProfile={() => openUserProfile(selectedFriend.id)} onSend={sendMessage} onClearHistory={clearChatHistory} shareItems={shareItems} onOpenAttachment={openChatAttachment} onReport={!currentUser.isAdmin && !selectedFriend.support ? () => openReportDialog({ kind: "chat", id: selectedFriend.id }) : undefined} expanded={false} onToggleExpanded={() => undefined} onClose={closeChat} fullPage mobileDialog /> </div> : <MobileMessagesPage friends={currentFriends} requests={mobileMessageRequests} onSelectFriend={(friend) => openChat(friend.id)} onOpenRequest={openUserProfile} />;
-  const chatPage = selectedFriend ? <ChatView friend={selectedFriend} messages={activeChatMessages} profileEnabled={!selectedFriend.support} onOpenProfile={() => openUserProfile(selectedFriend.id)} onSend={sendMessage} onClearHistory={clearChatHistory} shareItems={shareItems} onOpenAttachment={openChatAttachment} onReport={!currentUser.isAdmin && !selectedFriend.support ? () => openReportDialog({ kind: "chat", id: selectedFriend.id }) : undefined} expanded={false} onToggleExpanded={() => undefined} onClose={() => undefined} fullPage /> : <ChatScreen hasFriends={currentFriends.length > 0} />;
+  const chat = selectedFriend ? <ChatView friend={selectedFriend} messages={activeChatMessages} initialTargetMessageId={chatTargetMessageId} onSelectMessageSearchResult={openChat} profileEnabled={!selectedFriend.support} onOpenProfile={() => openUserProfile(selectedFriend.id)} onSend={sendMessage} onEditMessage={editMessage} onDeleteMessage={deleteMessage} onToggleLike={toggleMessageLike} onClearHistory={clearChatHistory} shareItems={shareItems} onOpenAttachment={openChatAttachment} onReport={!currentUser.isAdmin && !selectedFriend.support ? () => openReportDialog({ kind: "chat", id: selectedFriend.id }) : undefined} expanded={chatExpanded} onToggleExpanded={toggleChatExpanded} onClose={closeChat} /> : null;
+  const mobileChatPage = currentRoute.overlay?.kind === "chat" && selectedFriend ? <div className="mobile-chat-dialog"><ChatView friend={selectedFriend} messages={activeChatMessages} initialTargetMessageId={chatTargetMessageId} onSelectMessageSearchResult={openChat} profileEnabled={!selectedFriend.support} onOpenProfile={() => openUserProfile(selectedFriend.id)} onSend={sendMessage} onEditMessage={editMessage} onDeleteMessage={deleteMessage} onToggleLike={toggleMessageLike} onClearHistory={clearChatHistory} shareItems={shareItems} onOpenAttachment={openChatAttachment} onReport={!currentUser.isAdmin && !selectedFriend.support ? () => openReportDialog({ kind: "chat", id: selectedFriend.id }) : undefined} expanded={false} onToggleExpanded={() => undefined} onClose={closeChat} fullPage mobileDialog /> </div> : <MobileMessagesPage friends={currentFriends} requests={mobileMessageRequests} onSelectFriend={(friend) => openChat(friend.id)} onOpenRequest={openUserProfile} onSelectMessageSearchResult={openChat} />;
+  const chatPage = selectedFriend ? <ChatView friend={selectedFriend} messages={activeChatMessages} initialTargetMessageId={chatTargetMessageId} onSelectMessageSearchResult={openChat} profileEnabled={!selectedFriend.support} onOpenProfile={() => openUserProfile(selectedFriend.id)} onSend={sendMessage} onEditMessage={editMessage} onDeleteMessage={deleteMessage} onToggleLike={toggleMessageLike} onClearHistory={clearChatHistory} shareItems={shareItems} onOpenAttachment={openChatAttachment} onReport={!currentUser.isAdmin && !selectedFriend.support ? () => openReportDialog({ kind: "chat", id: selectedFriend.id }) : undefined} expanded={false} onToggleExpanded={() => undefined} onClose={() => undefined} fullPage /> : <ChatScreen hasFriends={currentFriends.length > 0} onSelectMessageSearchResult={openChat} />;
   const routedChatPage = <><div className="desktop-chat-page">{chatPage}</div>{mobileChatPage}</>;
   const upcomingEvents = events.filter((item) => eventTimestamp(item) > eventClock);
   const visibleHomeEvents = upcomingEvents.filter((item) => item.creatorId === currentUser.id && item.status !== "rejected" || item.status === "published").sort((a, b) => eventTimestamp(a) - eventTimestamp(b));
@@ -1499,13 +1672,13 @@ export function useBookMeetController() {
          onChats={() => { setMobileNavigationOpen(false); setNotificationsOpen(false); navigateMainView("chat"); }}
         onProfile={() => { setProfileAction(null); setProfileEditId(null); openOwnProfile(); }}
         onLogout={logout}
-        notificationsMenu={notificationsOpen ? <NotificationsMenu notifications={currentNotifications} users={users} onOpen={openNotification} onClose={() => setNotificationsOpen(false)} onMarkAllRead={() => { setNotifications((current) => current.map((notification) => notification.userId === currentUser.id ? { ...notification, unread: false } : notification)); void apiFetch("/api/notifications/read-all", { method: "PATCH", credentials: "same-origin" }).catch((error) => console.warn(error)); }} /> : null}
+        notificationsMenu={notificationsOpen ? <NotificationsMenu notifications={currentNotifications} users={users} onOpen={openNotification} onClose={() => setNotificationsOpen(false)} onMarkAllRead={markNotificationRangeRead} /> : null}
       />}
 
       {view === "search" ? (
         <MobileGlobalSearchPage userId={currentUser.id} initialQuery={mobileSearchQuery} users={visibleUsers} likes={likes} saves={saves} commentCounts={commentCounts} saveCounts={saveCounts} onBack={closeMobileSearch} onOpenResult={openMobileSearchResult} onOpenUser={openUserProfile} onToggleLike={toggleLike} onToggleSave={toggleSave} />
       ) : view === "notifications" ? (
-        <NotificationsPage notifications={currentNotifications} users={users} onOpen={openNotification} onMarkAllRead={() => { setNotifications((current) => current.map((notification) => notification.userId === currentUser.id ? { ...notification, unread: false } : notification)); void apiFetch("/api/notifications/read-all", { method: "PATCH", credentials: "same-origin" }).catch((error) => console.warn(error)); }} />
+        <NotificationsPage notifications={currentNotifications} users={users} onOpen={openNotification} onMarkAllRead={markNotificationRangeRead} />
       ) : view === "profile" && !chatExpanded ? (
         currentUser.isAdmin ? <AdminProfile onBack={closeOwnProfile} onLogout={logout} events={events} occasions={occasions} users={users} catalog={catalog} reports={reports} onModerateEvent={moderateEvent} onModerateOccasion={moderateOccasion} onModeratePublisher={moderatePublisher} onOpenChat={openChat} onOpenUser={openUserProfile} onRefresh={() => void refreshBootstrap()} onDeleteMaterial={deleteMaterial} /> : <MyProfile key={`${currentUser.id}-${profileAction ?? "profile"}-${profileEditId ?? "new"}-${newlyRegistered || completionProfileEditing ? "setup" : "ready"}`} onBack={closeOwnProfile} user={currentUser} users={users} catalog={catalog} friends={currentUser.profile.type === "Сообщество" ? currentMembershipUsers : currentFriendUsers} friendRequests={friendRequests} communityMemberships={communityMemberships} follows={follows} events={events} occasions={occasions} likes={likes} saves={saves} commentCounts={commentCounts} saveCounts={saveCounts} initialAction={profileAction} initialEditId={profileEditId} initialEditing={newlyRegistered || completionProfileEditing} onProfileCompleted={async () => { const response = await apiFetch("/api/users/me/profile-complete", { method: "PATCH", credentials: "same-origin" }); if (response.ok) await refreshBootstrap(); setNewlyRegistered(false); setCompletionProfileEditing(false); }} onToggleLike={toggleLike} onToggleSave={toggleSave} onComment={addComment} onEditEvent={startEventEditing} onDeleteEvent={(id) => setEvents((current) => current.filter((item) => item.id !== id))} onEditOccasion={startOccasionEditing} onDeleteOccasion={(id) => setOccasions((current) => current.filter((item) => item.id !== id))} onModerateEvent={moderateEvent} onModerateOccasion={moderateOccasion} onOpenUser={openUserProfile} onOpenChat={openChat} onUserChange={handleUserChange} onHomeViewChange={handleHomeViewChange} onLogout={logout} onAcceptFriend={acceptFriend} onRejectFriend={(id) => rejectFriend(id, "")} onCancelFriendRequest={(id) => { void cancelFriendRequest(id); }} onRemoveFriend={removeFriend} onFollow={(id) => { void followUser(id); }} />
       ) : (
@@ -1522,6 +1695,7 @@ export function useBookMeetController() {
           onCreateOccasion={startOccasionCreation}
           onCreatePublisherNews={startPublisherNewsCreation}
           onSelectFriend={(friend) => openChat(friend.id)}
+          onSelectMessageSearchResult={openChat}
           onNavigate={navigateMainView}
           activeView={view}
            expandedChat={chatExpanded && chat ? chat : undefined}
@@ -1554,9 +1728,9 @@ export function useBookMeetController() {
 
       <MobileNavigationDrawer open={mobileNavigationOpen} activeView={view} onClose={() => setMobileNavigationOpen(false)} onNavigate={navigateMainView} createOptions={mobileCreateOptions} />
 
-      {selectedShelfId && <BookShelfDialog id={selectedShelfId} viewer={currentUser} onClose={() => setSelectedShelfId(null)} onOpenBook={(id) => setSelectedBook(catalog.find((book) => book.id === id) ?? null)} renderActions={(shelf) => <MaterialEngagement kind="shelf" materialId={shelf.id} ownerId={shelf.ownerId} currentUser={currentUser} users={visibleUsers} onOpenUser={openUserProfile} shareAttachment={{ kind: "shelf", id: shelf.id }} />} />}
+      {selectedShelfId && <BookShelfDialog id={selectedShelfId} viewer={currentUser} onClose={() => setSelectedShelfId(null)} onOpenBook={(id) => setSelectedBook(catalog.find((book) => book.id === id) ?? null)} renderActions={(shelf) => <>{currentUser.id !== shelf.ownerId && <HideUserAction userId={shelf.ownerId} onHidden={() => setSelectedShelfId(null)} />}<MaterialEngagement kind="shelf" materialId={shelf.id} ownerId={shelf.ownerId} currentUser={currentUser} users={visibleUsers} onOpenUser={openUserProfile} shareAttachment={{ kind: "shelf", id: shelf.id }} /></>} />}
       {shelfEditorId !== undefined && <BookShelfEditor key={`${currentUser.id}-${shelfEditorId ?? "new"}`} id={shelfEditorId} viewer={currentUser} onClose={() => setShelfEditorId(undefined)} />}
-      {selectedBook && <UnifiedBookModal book={selectedBook} viewer={currentUser} users={visibleUsers} catalog={catalog} events={events} retainWhenInactive onClose={() => setSelectedBook(null)} onEdit={() => { const id = selectedBook.catalogBookId ?? selectedBook.id; setProfileAction("book"); setProfileEditId(id); setSelectedBook(null); setView("profile"); window.history.pushState({}, "", "/profile/library"); }} onDelete={async () => { const id = selectedBook.catalogBookId ?? selectedBook.id; const response = await apiFetch(`/api/books/${id}`, { method: "DELETE", credentials: "same-origin" }); if (!response.ok) { window.alert(t("book.deleteError")); return; } setUsers((current) => current.map((user) => user.id === currentUser.id ? { ...user, books: user.books.filter((book) => (book.catalogBookId ?? book.id) !== id) } : user)); setSelectedBook(null); }} onReport={currentUser.isAdmin || currentUser.books.some((book) => (book.catalogBookId ?? book.id) === (selectedBook.catalogBookId ?? selectedBook.id)) || selectedBook.creatorUserId === currentUser.id || (currentUser.authorBooks ?? []).some((book) => (book.catalogBookId ?? book.id) === (selectedBook.catalogBookId ?? selectedBook.id)) ? undefined : () => openReportDialog({ kind: "book", id: selectedBook.catalogBookId ?? selectedBook.id })} onOpenUser={openUserProfile} onOpenEvent={(event) => setSelectedEvent(event)} onOpenReview={(review, user) => { setSelectedMaterial({ id: review.id, kind: "review", title: review.bookTitle, author: user.profile.name, text: review.fullText, bodyHtml: review.bodyHtml, linkedBookId: review.bookId, ownerId: user.id, createdAt: review.createdAt, preview: review.preview, bookAuthor: review.bookAuthor, rating: review.rating }); }} />}
+       {selectedBook && <UnifiedBookModal book={selectedBook} viewer={currentUser} users={visibleUsers} catalog={catalog} events={events} retainWhenInactive onClose={() => setSelectedBook(null)} onEdit={() => { const id = selectedBook.catalogBookId ?? selectedBook.id; setProfileAction("book"); setProfileEditId(id); setSelectedBook(null); setView("profile"); window.history.pushState({}, "", "/profile/library"); }} onDelete={async () => { const id = selectedBook.catalogBookId ?? selectedBook.id; const response = await apiFetch(`/api/books/${id}`, { method: "DELETE", credentials: "same-origin" }); if (!response.ok) { window.alert(t("book.deleteError")); return; } setUsers((current) => current.map((user) => user.id === currentUser.id ? { ...user, books: user.books.filter((book) => (book.catalogBookId ?? book.id) !== id) } : user)); setSelectedBook(null); }} onReport={currentUser.isAdmin || currentUser.books.some((book) => (book.catalogBookId ?? book.id) === (selectedBook.catalogBookId ?? selectedBook.id)) || selectedBook.creatorUserId === currentUser.id || (currentUser.authorBooks ?? []).some((book) => (book.catalogBookId ?? book.id) === (selectedBook.catalogBookId ?? selectedBook.id)) ? undefined : () => openReportDialog({ kind: "book", id: selectedBook.catalogBookId ?? selectedBook.id })} onOpenUser={openUserProfile} onOpenEvent={(event) => setSelectedEvent(event)} onOpenReview={(review, user) => { setSelectedMaterial({ id: review.id, kind: "review", title: review.bookTitle, author: user.profile.name, text: review.fullText, bodyHtml: review.bodyHtml, linkedBookId: review.bookId, ownerId: user.id, createdAt: review.createdAt, preview: review.preview, bookAuthor: review.bookAuthor, rating: review.rating, mentions: review.mentions }); }} />}
       {selectedMaterial && <ReadingModal item={selectedMaterial} currentUser={currentUser} users={visibleUsers} catalog={catalog} likedUserIds={likes[`${selectedMaterial.kind}-${selectedMaterial.id}`] ?? []} saved={Boolean(saves[`${selectedMaterial.kind}-${selectedMaterial.id}`]?.includes(currentUser.id))} savesCount={saveCounts[`${selectedMaterial.kind}-${selectedMaterial.id}`] ?? 0} onToggleLike={() => toggleLike(selectedMaterial)} onToggleSave={() => toggleSave(selectedMaterial)} onComment={(text) => addComment(selectedMaterial, text)} onOpenUser={openUserProfile} onClose={() => setSelectedMaterial(null)} onReport={selectedMaterial.ownerId !== currentUser.id && !currentUser.isAdmin ? () => openReportDialog({ kind: selectedMaterial.kind, id: selectedMaterial.id }) : undefined} onEdit={currentUser.isAdmin || selectedMaterial.ownerId === currentUser.id ? () => void editReadingMaterial(selectedMaterial, currentUser) : undefined} onDelete={currentUser.isAdmin || selectedMaterial.ownerId === currentUser.id ? () => void deleteReadingMaterial(selectedMaterial, currentUser) : undefined} />}
       {adminEditingMaterial && <AdminCatalogEditor item={adminEditingMaterial} users={users} catalog={catalog} onClose={() => setAdminEditingMaterial(null)} onSave={async (payload) => { const response = await apiFetch(`/api/admin/materials/${adminEditingMaterial.kind}/${adminEditingMaterial.id}`, { method: "PATCH", credentials: "same-origin", headers: { "content-type": "application/json" }, body: JSON.stringify(payload) }); const data = await response.json().catch(() => ({})) as { error?: string }; if (!response.ok) { window.alert(localizedApiError(data.error, t("common.saveChangesError"))); return; } setAdminEditingMaterial(null); await refreshBootstrap(); }} />}
       {detailNotification && <NotificationDetail notification={detailNotification} actor={users.find((user) => user.id === detailNotification.actorId)} isFollowing={follows.some((follow) => follow.followerId === currentUser.id && follow.targetId === detailNotification.actorId)} onClose={() => setDetailNotification(null)} onFollow={() => followUser(detailNotification.actorId)} />}

@@ -6,8 +6,21 @@ export type Friendship = { userA: number; userB: number };
 export type CommunityMembership = { communityId: number; memberId: number };
 export type SocialRelationship = "none" | "outgoing" | "incoming" | "friends" | "community-member";
 export type Follow = { followerId: number; targetId: number };
-export type NotificationType = "friend_request" | "friendship_started" | "friend_rejected" | "new_message" | "new_follower" | "publication" | "friendship_ended" | "like" | "comment" | "event_submitted" | "event_moderation" | "event_reminder" | "author_book_activity" | "gift_reserved";
+export type NotificationType = "friend_request" | "friendship_started" | "friend_rejected" | "new_message" | "new_follower" | "publication" | "friendship_ended" | "like" | "comment" | "mention" | "repost" | "event_submitted" | "event_moderation" | "event_reminder" | "author_book_activity" | "postponed_book" | "gift_reserved" | "system" | "security";
 export type SocialNotification = { id: number; userId: number; actorId: number; type: NotificationType; title: string; text: string; unread: boolean; createdAt: string; materialId?: number; materialKind?: "review" | "excerpt" | "event" | "occasion" | "publisher_news" | "book" | "wishlist" | "shelf" };
+export type NotificationCategory = "friendships_follows" | "likes" | "comments_replies" | "mentions" | "reposts" | "events_communities" | "reading_reminders" | "system_security";
+export type NotificationFilter = "all" | NotificationCategory;
+export type NotificationEmailMode = "off" | "immediate" | "daily";
+export type NotificationPreference = { inAppEnabled: boolean; telegramEnabled: boolean; emailMode: NotificationEmailMode; mandatoryInApp: boolean };
+export type NotificationPreferencesState = {
+  categories: Record<NotificationCategory, NotificationPreference>;
+  timezone: string | null;
+  effectiveTimezone: string;
+  readiness: {
+    telegram: { available: boolean; serviceReady: boolean; connected: boolean; displayName: string | null; reason: string | null };
+    email: { available: boolean; serviceReady: boolean; verified: boolean; reason: string | null };
+  };
+};
 
 export type EventStatus = "pending" | "needs_changes" | "rejected" | "published";
 export type LinkedBookPreview = { id: number; title: string; author: string; annotation?: string; coverUrl?: string; coverTone?: string };
@@ -42,9 +55,10 @@ export type BookEvent = {
   reminderUserIds?: number[];
   reminderCount?: number;
   createdAt: string;
+  mentions?: MentionRef[];
 };
 export type OccasionType = "meet" | "discuss" | "invite";
-export type Occasion = { id: number; creatorId: number; type: OccasionType; primaryText: string; audienceText: string; isAdult?: boolean; targetGender: "Мужской" | "Женский" | "Все"; targetCities: string[]; targetProfileType: "Писатель" | "Читатель" | "Блогер" | "Все"; meetingDate?: string; meetingStartTime?: string; meetingEndTime?: string; meetingCity?: string; meetingCityId?: number; meetingAddress?: string; meetingMapUrl?: string; linkedBookId?: number; linkedBooks?: LinkedBookPreview[]; status: EventStatus; moderationNote?: string; creatorName: string; createdAt: string };
+export type Occasion = { id: number; creatorId: number; type: OccasionType; primaryText: string; audienceText: string; mentions?: MentionRef[]; isAdult?: boolean; targetGender: "Мужской" | "Женский" | "Все"; targetCities: string[]; targetProfileType: "Писатель" | "Читатель" | "Блогер" | "Все"; meetingDate?: string; meetingStartTime?: string; meetingEndTime?: string; meetingCity?: string; meetingCityId?: number; meetingAddress?: string; meetingMapUrl?: string; linkedBookId?: number; linkedBooks?: LinkedBookPreview[]; status: EventStatus; moderationNote?: string; creatorName: string; createdAt: string };
 export type CityOption = { id: number; name: string; countryCode: string; country: string };
 
 export type Review = {
@@ -62,6 +76,7 @@ export type Review = {
   createdAt: string;
   createdAtValue?: string;
   isAdult?: boolean;
+  mentions?: MentionRef[];
 };
 
 export type Excerpt = {
@@ -78,10 +93,15 @@ export type Excerpt = {
   linkedBookId?: number;
   linkedBookIds?: number[];
   isAdult?: boolean;
+  mentions?: MentionRef[];
 };
 
-export type ReadingItem = { id: number; kind: "review" | "excerpt" | "event" | "occasion" | "publisher_news"; title: string; author: string; text: string; ownerId?: number; createdAt?: string; preview?: string; bookAuthor?: string; rating?: number; bodyHtml?: string; linkedBookId?: number; linkedBookIds?: number[]; isAdult?: boolean };
-export type MaterialComment = { id: number; userId: number; text: string; createdAt: string };
+export type ReadingItem = { id: number; kind: "review" | "excerpt" | "event" | "occasion" | "publisher_news"; title: string; author: string; text: string; ownerId?: number; createdAt?: string; preview?: string; bookAuthor?: string; rating?: number; bodyHtml?: string; linkedBookId?: number; linkedBookIds?: number[]; isAdult?: boolean; mentions?: MentionRef[] };
+export type CommentAuthor = { displayName: string; username: string; initials: string; color: string; avatarUrl?: string };
+export type MaterialComment = { id: number; userId: number; text: string; createdAt: string; updatedAt?: string; deleted?: boolean; parentCommentId?: number; replyToCommentId?: number; author?: CommentAuthor; mentions?: MentionRef[]; likeCount?: number; likedByViewer?: boolean; replyCount?: number; nextRepliesCursor?: number | null };
+export type MentionRef = { userId: number; token: string; username?: string; displayName?: string };
+export type Repost = { id: number; clean: boolean; source?: { kind: string; id: number }; material?: { id: number; kind: "excerpt"; text: string } };
+export type CleanRepost = { id: number; createdAt: string; source: { available: false; label: "Материал недоступен" } | { available: true; kind: string; id: number; title: string } };
 
 export type ProfileTab = "main" | "author-books" | "excerpts" | "publisher-news" | "library" | "wishlist" | "communities" | "reviews" | "events" | "occasions" | "friends" | "admin";
 export type LibraryView = "grid" | "list";
@@ -141,11 +161,11 @@ export type WishBook = Pick<LibraryBook, "id" | "author" | "title" | "genres" | 
 export type MarketplaceProductPreview = { marketplace: "Flip" | "Marwin/Меломан" | "Яндекс.Книги"; productUrl: string; title: string; author: string; isbn?: string; publisher?: string; catalogBookId?: number; annotation: string; coverUrl?: string; price?: number; currency: string; suggestedAction: "Купить" | "Читать" | "Слушать" };
 export type FlipProductPreview = MarketplaceProductPreview & { marketplace: "Flip"; suggestedAction: "Купить" };
 
-export type UserReview = { id: number; bookId?: number; bookTitle: string; bookAuthor: string; rating: number; preview: string; fullText: string; bodyHtml?: string; isAdult?: boolean; createdAt: string; createdAtValue?: string };
-export type UserExcerpt = { id: number; bookId?: number; bookIds?: number[]; bookTitle: string; previewText: string; bodyHtml: string; text: string; link: string; isAdult?: boolean; createdAt: string; createdAtValue?: string };
+export type UserReview = { id: number; bookId?: number; bookTitle: string; bookAuthor: string; rating: number; preview: string; fullText: string; bodyHtml?: string; mentions?: MentionRef[]; isAdult?: boolean; createdAt: string; createdAtValue?: string };
+export type UserExcerpt = { id: number; bookId?: number; bookIds?: number[]; bookTitle: string; previewText: string; bodyHtml: string; text: string; link: string; mentions?: MentionRef[]; isAdult?: boolean; createdAt: string; createdAtValue?: string };
 export type PublisherVerificationStatus = "not_required" | "draft" | "pending" | "needs_changes" | "rejected" | "approved";
 export type PublisherSaleLink = { id: number; label: string; url: string };
-export type PublisherNews = { id: number; ownerId: number; title: string; previewText: string; bodyHtml: string; body: string; isAdult?: boolean; createdAt: string; createdAtValue?: string };
+export type PublisherNews = { id: number; ownerId: number; title: string; previewText: string; bodyHtml: string; body: string; mentions?: MentionRef[]; isAdult?: boolean; createdAt: string; createdAtValue?: string };
 export type UserProfileData = {
   name: string;
   city: string;
@@ -221,7 +241,7 @@ export type SafetyReport = {
 };
 export type ReadingHistoryEntry = { id: number; bookId: number; completedMonth?: number; completedYear?: number; book: Pick<LibraryBook, "id" | "author" | "title" | "coverUrl" | "coverTone"> };
 export type ReadingGoal = { id: number; goalKind: "month" | "year"; targetCount: number; targetMonth: number | null; targetYear: number; startMonth: number | null; createdAt?: string; updatedAt?: string };
-export type DemoUser = { id: number; username: string; usernameIsTemporary?: boolean; profileCompleted?: boolean; initials: string; color: string; avatarUrl?: string; joined: string; joinedAt?: string; online?: boolean; lastSeenAt?: string; isAdmin?: boolean; blockedByMe?: boolean; friendCount?: number; followerCount?: number; friendIds?: number[]; followerIds?: number[]; memberCount?: number; memberIds?: number[]; suspension?: UserSuspension; deletedAt?: string; deletionExpiresAt?: string; purged?: boolean; profile: UserProfileData; books: LibraryBook[]; readingHistory?: ReadingHistoryEntry[]; communityBooks?: CommunityBook[]; reviews: UserReview[]; authorBooks?: AuthorBook[]; excerpts?: UserExcerpt[]; publisherNews?: PublisherNews[]; wishBooks?: WishBook[] };
+export type DemoUser = { id: number; username: string; usernameIsTemporary?: boolean; profileCompleted?: boolean; initials: string; color: string; avatarUrl?: string; joined: string; joinedAt?: string; online?: boolean; lastSeenAt?: string; isAdmin?: boolean; blockedByMe?: boolean; hiddenByMe?: boolean; friendCount?: number; followerCount?: number; friendIds?: number[]; followerIds?: number[]; memberCount?: number; memberIds?: number[]; suspension?: UserSuspension; deletedAt?: string; deletionExpiresAt?: string; purged?: boolean; profile: UserProfileData; books: LibraryBook[]; readingHistory?: ReadingHistoryEntry[]; communityBooks?: CommunityBook[]; reviews: UserReview[]; authorBooks?: AuthorBook[]; excerpts?: UserExcerpt[]; publisherNews?: PublisherNews[]; cleanReposts?: CleanRepost[]; wishBooks?: WishBook[] };
 
 export type AdultMaterialKind = "book" | "review" | "excerpt" | "event" | "occasion";
 export type AdultAccess = { status: "adult" | "minor" | "missing"; restricted: Partial<Record<AdultMaterialKind, number[]>> };

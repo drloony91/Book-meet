@@ -1,7 +1,28 @@
 import { getPool } from "./db.js";
 import { readingStateDto } from "./modules/reading-state.js";
 import { legalAccessState, profileAccessState } from "./modules/compliance.js";
+import { archivedBookSticker, stickerDto } from "./modules/book-stickers.js";
 import { normalizeIdentity } from "./security.js";
+
+const NEUTRAL_MENTION_TOKEN = "@пользователь";
+
+function neutralizeMentionedText(value, mentions = []) {
+  let result = String(value ?? "");
+  let cursor = 0;
+  const replacements = mentions.map((mention) => {
+    const sourceToken = String(mention.sourceToken ?? "");
+    const replacementToken = String(mention.token ?? NEUTRAL_MENTION_TOKEN);
+    return { sourceToken, replacementToken, index: sourceToken ? result.indexOf(sourceToken) : -1 };
+  }).filter((entry) => entry.index >= 0 && entry.sourceToken && entry.replacementToken && entry.sourceToken !== entry.replacementToken)
+    .sort((left, right) => left.index - right.index);
+  for (const { sourceToken, replacementToken } of replacements) {
+    const index = result.indexOf(sourceToken, cursor);
+    if (index < 0) continue;
+    result = `${result.slice(0, index)}${replacementToken}${result.slice(index + sourceToken.length)}`;
+    cursor = index + replacementToken.length;
+  }
+  return result;
+}
 
 export function parseJson(value, fallback = []) {
   if (Array.isArray(value)) return value;
@@ -112,6 +133,31 @@ export async function loadUsers(connection = getPool(), viewerId = null) {
        FROM publisher_news
       ORDER BY created_at DESC`,
   );
+  const [contentMentionRows] = await connection.query(
+    `SELECT m.entity_type, m.entity_id, m.mentioned_user_id, m.mention_token, u.username, u.role, p.display_name, p.profile_type, p.birth_date, u.deleted_at, u.purged_at
+       FROM content_mentions m JOIN users u ON u.id = m.mentioned_user_id JOIN profiles p ON p.user_id = u.id
+      WHERE m.entity_type IN ('review', 'excerpt', 'publisher_news', 'event', 'occasion')`,
+  );
+  const [cleanRepostRows] = await connection.query(
+    `SELECT r.id, r.user_id, r.source_root_type, r.source_root_id, r.created_at,
+            COALESCE(rv.user_id, ex.user_id, pn.user_id, ev.creator_user_id, oc.creator_user_id, sh.owner_user_id) AS source_owner_id,
+            source_user.deleted_at AS source_owner_deleted_at, source_user.purged_at AS source_owner_purged_at,
+            source_profile.publisher_status AS source_owner_publisher_status,
+            COALESCE(b.title, NULLIF(ex.book_title, ''), pn.title, ev.title, oc.primary_text, sh.title, 'Материал') AS source_title,
+            COALESCE(rv.is_adult, ex.is_adult, pn.is_adult, ev.is_adult, oc.is_adult, 0) AS source_is_adult,
+            CASE WHEN r.source_root_type = 'review' THEN rv.id WHEN r.source_root_type = 'excerpt' THEN ex.id WHEN r.source_root_type = 'publisher_news' THEN pn.id WHEN r.source_root_type = 'event' AND ev.status = 'published' THEN ev.id WHEN r.source_root_type = 'occasion' AND oc.status = 'published' THEN oc.id WHEN r.source_root_type = 'shelf' THEN sh.id END AS source_exists
+       FROM reposts r
+       LEFT JOIN reviews rv ON r.source_root_type = 'review' AND rv.id = r.source_root_id
+       LEFT JOIN books b ON b.id = rv.book_id
+       LEFT JOIN excerpts ex ON r.source_root_type = 'excerpt' AND ex.id = r.source_root_id
+       LEFT JOIN publisher_news pn ON r.source_root_type = 'publisher_news' AND pn.id = r.source_root_id
+       LEFT JOIN events ev ON r.source_root_type = 'event' AND ev.id = r.source_root_id
+       LEFT JOIN occasions oc ON r.source_root_type = 'occasion' AND oc.id = r.source_root_id
+       LEFT JOIN book_shelves sh ON r.source_root_type = 'shelf' AND sh.id = r.source_root_id
+       LEFT JOIN users source_user ON source_user.id = COALESCE(rv.user_id, ex.user_id, pn.user_id, ev.creator_user_id, oc.creator_user_id, sh.owner_user_id)
+       LEFT JOIN profiles source_profile ON source_profile.user_id = source_user.id
+      WHERE r.clean_source_root_id IS NOT NULL ORDER BY r.created_at DESC`,
+  );
   const [shelfRows] = await connection.query(
     `SELECT s.id, s.owner_user_id, s.title, s.description, s.created_at, s.updated_at,
             i.book_id, i.position, i.description AS item_description,
@@ -132,6 +178,18 @@ export async function loadUsers(connection = getPool(), viewerId = null) {
   ) || (
     Number(friendship.user_high_id) === Number(viewerId) && Number(friendship.user_low_id) === Number(targetId)
   ));
+  const personalTypes = new Set(["Читатель", "Писатель", "Блогер"]);
+  const viewerPersonal = personalTypes.has(viewerRow?.profile_type);
+  const mentionsFor = (entityType, entityId) => contentMentionRows.filter((mention) => mention.entity_type === entityType && Number(mention.entity_id) === Number(entityId)).map((mention) => {
+    const targetId = Number(mention.mentioned_user_id);
+    const targetPersonal = personalTypes.has(mention.profile_type);
+    const ageCompatible = viewerIsAdmin || !viewerPersonal || !targetPersonal
+      || viewerAge !== null && ageFromBirthDate(mention.birth_date) !== null && (viewerAge < 18) === (ageFromBirthDate(mention.birth_date) < 18);
+    const unavailable = mention.deleted_at || mention.purged_at || hiddenOwnerIds.has(targetId) || !ageCompatible || blockRows.some((block) => (Number(block.blocker_user_id) === Number(viewerId) && Number(block.blocked_user_id) === targetId) || (Number(block.blocked_user_id) === Number(viewerId) && Number(block.blocker_user_id) === targetId));
+    const entry = { userId: targetId, token: unavailable ? NEUTRAL_MENTION_TOKEN : mention.mention_token, ...(unavailable ? {} : { username: mention.username, displayName: mention.display_name }) };
+    Object.defineProperty(entry, "sourceToken", { value: String(mention.mention_token ?? ""), enumerable: false });
+    return entry;
+  });
   return userRows.filter((row) => row.role === "admin"
     || !["Издатель", "Сообщество"].includes(row.profile_type)
     || row.publisher_status === "approved"
@@ -226,6 +284,9 @@ export async function loadUsers(connection = getPool(), viewerId = null) {
       avatarUrl: row.deleted_at || row.purged_at ? undefined : row.avatar_path ?? undefined,
       isAdmin: row.role === "admin",
       blockedByMe: blockRows.some((block) => Number(block.blocker_user_id) === Number(viewerId) && Number(block.blocked_user_id) === Number(row.id)),
+      // Hiding is deliberately one-way: profile identity remains readable, while
+      // social material is projected out below for this particular viewer.
+      hiddenByMe: hiddenOwnerIds.has(Number(row.id)),
       suspension: viewerIsAdmin && (row.suspended_permanently || row.suspended_until) ? {
         permanent: Boolean(row.suspended_permanently),
         until: row.suspended_until ? new Date(row.suspended_until).toISOString() : undefined,
@@ -293,44 +354,45 @@ export async function loadUsers(connection = getPool(), viewerId = null) {
       readingHistory: isOwner ? cycleRows.filter((cycle) => Number(cycle.user_id) === Number(row.id) && (!hideAdultMaterials || !cycle.is_adult)).map((cycle) => ({ id: Number(cycle.id), bookId: Number(cycle.book_id), completedMonth: cycle.completed_month ?? undefined, completedYear: cycle.completed_year ?? undefined, book: { id: Number(cycle.book_id), author: cycle.author, title: cycle.title, coverUrl: cycle.cover_path ?? undefined, coverTone: cycle.cover_tone ?? "blue" } })) : undefined,
       authorBooks,
       communityBooks,
-      reviews: reviewRows.filter((review) => Number(review.user_id) === Number(row.id) && (!hideAdultMaterials || !review.is_adult)).map((review) => ({
+      reviews: hiddenOwnerIds.has(Number(row.id)) ? [] : reviewRows.filter((review) => Number(review.user_id) === Number(row.id) && (!hideAdultMaterials || !review.is_adult)).map((review) => ({
         id: Number(review.id),
         bookId: Number(review.book_id),
         bookTitle: review.book_title,
         bookAuthor: review.book_author,
         rating: Number(review.rating),
-        preview: review.preview,
-        fullText: review.body,
-        bodyHtml: review.body,
+        preview: neutralizeMentionedText(review.preview, mentionsFor("review", review.id)),
+        fullText: neutralizeMentionedText(review.body, mentionsFor("review", review.id)),
+        bodyHtml: neutralizeMentionedText(review.body, mentionsFor("review", review.id)),
+        mentions: mentionsFor("review", review.id),
         bookIds: materialBookRows.filter((item) => item.material_kind === "review" && Number(item.material_id) === Number(review.id)).map((item) => Number(item.book_id)),
         isAdult: Boolean(review.is_adult),
         createdAt: formatDate(review.created_at),
         createdAtValue: new Date(review.created_at).toISOString(),
       })),
-      excerpts: excerptRows.filter((excerpt) => Number(excerpt.user_id) === Number(row.id) && (!hideAdultMaterials || !excerpt.is_adult)).map((excerpt) => ({
+      excerpts: hiddenOwnerIds.has(Number(row.id)) ? [] : excerptRows.filter((excerpt) => Number(excerpt.user_id) === Number(row.id) && (!hideAdultMaterials || !excerpt.is_adult)).map((excerpt) => ({
+        ...(() => { const mentions = mentionsFor("excerpt", excerpt.id); return { mentions, previewText: neutralizeMentionedText(excerpt.preview_text ?? excerpt.body?.slice(0, 500) ?? "", mentions), bodyHtml: neutralizeMentionedText(excerpt.body_html ?? "", mentions), text: neutralizeMentionedText(excerpt.body ?? "", mentions) }; })(),
         id: Number(excerpt.id),
         bookId: excerpt.book_id ? Number(excerpt.book_id) : undefined,
         bookTitle: excerpt.book_title ?? "",
-        previewText: excerpt.preview_text ?? excerpt.body?.slice(0, 500) ?? "",
-        bodyHtml: excerpt.body_html ?? "",
         bookIds: materialBookRows.filter((item) => item.material_kind === "excerpt" && Number(item.material_id) === Number(excerpt.id)).map((item) => Number(item.book_id)),
-        text: excerpt.body ?? "",
         isAdult: Boolean(excerpt.is_adult),
         link: excerpt.read_url ?? "",
         createdAt: formatDate(excerpt.created_at),
         createdAtValue: new Date(excerpt.created_at).toISOString(),
       })),
-      publisherNews: publisherNewsRows.filter((item) => Number(item.user_id) === Number(row.id) && (!hideAdultMaterials || !item.is_adult)).map((item) => ({
+      publisherNews: hiddenOwnerIds.has(Number(row.id)) ? [] : publisherNewsRows.filter((item) => Number(item.user_id) === Number(row.id) && (!hideAdultMaterials || !item.is_adult)).map((item) => ({
+        ...(() => { const mentions = mentionsFor("publisher_news", item.id); return { mentions, title: neutralizeMentionedText(item.title, mentions), previewText: neutralizeMentionedText(item.preview_text, mentions), bodyHtml: neutralizeMentionedText(item.body_html, mentions), body: neutralizeMentionedText(item.body, mentions) }; })(),
         id: Number(item.id),
         ownerId: Number(item.user_id),
-        title: item.title,
-        previewText: item.preview_text,
-        bodyHtml: item.body_html,
-        body: item.body,
         isAdult: Boolean(item.is_adult),
         createdAt: formatDate(item.created_at),
         createdAtValue: new Date(item.created_at).toISOString(),
       })),
+      cleanReposts: hiddenOwnerIds.has(Number(row.id)) ? [] : cleanRepostRows.filter((repost) => Number(repost.user_id) === Number(row.id)).map((repost) => {
+        const sourceOwnerId = Number(repost.source_owner_id);
+        const unavailable = !repost.source_exists || !sourceOwnerId || repost.source_owner_deleted_at || repost.source_owner_purged_at || (repost.source_root_type === "publisher_news" && repost.source_owner_publisher_status !== "approved") || hiddenOwnerIds.has(sourceOwnerId) || (!viewerIsAdmin && hideAdultMaterials && repost.source_is_adult) || blockRows.some((block) => (Number(block.blocker_user_id) === Number(viewerId) && Number(block.blocked_user_id) === sourceOwnerId) || (Number(block.blocked_user_id) === Number(viewerId) && Number(block.blocker_user_id) === sourceOwnerId));
+        return unavailable ? { id: Number(repost.id), createdAt: new Date(repost.created_at).toISOString(), source: { available: false, label: "Материал недоступен" } } : { id: Number(repost.id), createdAt: new Date(repost.created_at).toISOString(), source: { available: true, kind: repost.source_root_type, id: Number(repost.source_root_id), title: repost.source_title } };
+      }),
       shelves: blockedPair || crossAge || deletedView || hiddenOwnerIds.has(Number(row.id)) ? [] : [...new Map(shelfRows.filter((item) => Number(item.owner_user_id) === Number(row.id)).map((item) => [Number(item.id), item])).values()].map((shelf) => {
         const allItems = shelfRows.filter((item) => Number(item.id) === Number(shelf.id));
         return {
@@ -372,6 +434,10 @@ export async function loadBootstrap(userId, options = {}) {
     [userId, userId],
   ) : [[]];
   const hiddenUserIds = new Set(blockRows.flatMap((row) => [Number(row.blocker_user_id), Number(row.blocked_user_id)]).filter((id) => id !== Number(userId)));
+  const [hideRows] = includeCatalog ? await pool.query(
+    "SELECT hidden_user_id FROM user_hides WHERE hider_user_id = ?", [userId],
+  ) : [[]];
+  const hiddenContentOwnerIds = new Set(hideRows.map((row) => Number(row.hidden_user_id)));
   const users = includeCatalog ? await loadUsers(pool, userId) : [];
   const currentUser = users.find((user) => user.id === Number(userId)) ?? account;
   const [[linkedProfileRow]] = await pool.query(
@@ -447,10 +513,29 @@ export async function loadBootstrap(userId, options = {}) {
     [userId],
   ) : [[]];
   const [messageRows] = includeSocial ? await pool.query(
-    `SELECT id, sender_user_id, recipient_user_id, body, attachment_kind, attachment_id, is_system, read_at, created_at
+    `SELECT id, sender_user_id, recipient_user_id, body, attachment_kind, attachment_id, message_kind, sticker_id, is_system, read_at, edited_at,
+            deleted_at, deleted_before_read, created_at
       FROM messages
       WHERE sender_user_id = ? OR recipient_user_id = ?
       ORDER BY created_at, id`, [userId, userId],
+  ) : [[]];
+  const clearedThroughByPeer = new Map(chatHistoryClearRows.map((row) => [Number(row.peer_user_id), Number(row.cleared_through_message_id)]));
+  const selectedMessageRows = messageRows.filter((row) => {
+    if (row.deleted_before_read) return false;
+    const peerId = Number(row.sender_user_id) === Number(userId) ? Number(row.recipient_user_id) : Number(row.sender_user_id ?? row.recipient_user_id);
+    return Number(row.id) > (clearedThroughByPeer.get(peerId) ?? 0);
+  });
+  const messageIds = selectedMessageRows.map((row) => Number(row.id));
+  const [messageMentionRows] = messageIds.length ? await pool.query(
+    `SELECT m.entity_id, m.mentioned_user_id, m.mention_token, u.username, u.role, p.display_name, p.profile_type, p.birth_date, u.deleted_at, u.purged_at
+       FROM content_mentions m JOIN users u ON u.id = m.mentioned_user_id JOIN profiles p ON p.user_id = u.id
+      WHERE m.entity_type = 'message' AND m.entity_id IN (${messageIds.map(() => "?").join(",")})`, messageIds,
+  ) : [[]];
+  const [messageReactionRows] = messageIds.length ? await pool.query(
+    `SELECT message_id, user_id
+       FROM message_reactions
+      WHERE reaction_type = 'like' AND message_id IN (${messageIds.map(() => "?").join(",")})
+      ORDER BY message_id, created_at, user_id`, messageIds,
   ) : [[]];
   const [likeRows] = includeSocial ? await pool.query("SELECT user_id, material_kind, material_id, created_at FROM material_likes") : [[]];
   // Saves are deliberately private: the viewer gets only their own action history.
@@ -495,6 +580,25 @@ export async function loadBootstrap(userId, options = {}) {
       ORDER BY o.created_at DESC`,
     [currentUser?.isAdmin ? 1 : 0, userId],
   ) : [[]];
+  const eventOccasionIds = [...eventRows.map((row) => ["event", Number(row.id)]), ...occasionRows.map((row) => ["occasion", Number(row.id)])];
+  const [eventOccasionMentionRows] = includeCatalog && eventOccasionIds.length ? await pool.query(
+    `SELECT m.entity_type, m.entity_id, m.mentioned_user_id, m.mention_token, u.username, p.display_name, p.profile_type, p.birth_date, u.deleted_at, u.purged_at
+       FROM content_mentions m JOIN users u ON u.id = m.mentioned_user_id JOIN profiles p ON p.user_id = u.id
+      WHERE (${eventOccasionIds.map(() => "(m.entity_type = ? AND m.entity_id = ?)").join(" OR ")})`,
+    eventOccasionIds.flat(),
+  ) : [[]];
+  const catalogMentionTypes = new Set(["Читатель", "Писатель", "Блогер"]);
+  const catalogViewerPersonal = catalogMentionTypes.has(accountState?.profile_type);
+  const mentionForCatalog = (entityType, entityId) => eventOccasionMentionRows.filter((mention) => mention.entity_type === entityType && Number(mention.entity_id) === Number(entityId)).map((mention) => {
+    const targetId = Number(mention.mentioned_user_id);
+    const targetPersonal = catalogMentionTypes.has(mention.profile_type);
+    const ageCompatible = currentUser?.isAdmin || !catalogViewerPersonal || !targetPersonal
+      || viewerAge !== null && ageFromBirthDate(mention.birth_date) !== null && (viewerAge < 18) === (ageFromBirthDate(mention.birth_date) < 18);
+    const unavailable = mention.deleted_at || mention.purged_at || hiddenUserIds.has(targetId) || hiddenContentOwnerIds.has(targetId) || !ageCompatible;
+    const entry = { userId: targetId, token: unavailable ? NEUTRAL_MENTION_TOKEN : mention.mention_token, ...(unavailable ? {} : { username: mention.username, displayName: mention.display_name }) };
+    Object.defineProperty(entry, "sourceToken", { value: String(mention.mention_token ?? ""), enumerable: false });
+    return entry;
+  });
   const [materialBookRows] = includeCatalog ? await pool.query(
     `SELECT mb.material_kind, mb.material_id, mb.book_id, mb.position,
             b.title, b.author, b.annotation, b.cover_path, b.cover_tone
@@ -535,47 +639,79 @@ export async function loadBootstrap(userId, options = {}) {
   ) : [[]];
   const [reportedConversationRows] = includeModeration && currentUser?.isAdmin ? await pool.query(
     `SELECT r.id AS report_id, m.id, m.sender_user_id, m.recipient_user_id, m.body,
-            m.attachment_kind, m.attachment_id, m.is_system, m.read_at, m.created_at
+            m.attachment_kind, m.attachment_id, m.message_kind, m.sticker_id, m.is_system, m.read_at, m.edited_at, m.deleted_at, m.deleted_before_read, m.created_at
        FROM reports r
        JOIN messages m ON r.target_kind = 'chat' AND (
          (m.sender_user_id = r.reporter_user_id AND m.recipient_user_id = r.target_user_id)
          OR (m.sender_user_id = r.target_user_id AND m.recipient_user_id = r.reporter_user_id)
-       )
+       ) AND m.deleted_before_read = 0
       ORDER BY r.id, m.created_at, m.id`,
   ) : [[]];
   const conversationByReport = new Map();
   for (const row of reportedConversationRows) {
     const reportId = Number(row.report_id);
     if (!conversationByReport.has(reportId)) conversationByReport.set(reportId, []);
+    const deleted = Boolean(row.deleted_at);
     conversationByReport.get(reportId).push({
       id: Number(row.id),
       mine: false,
       senderId: row.sender_user_id ? Number(row.sender_user_id) : undefined,
-      text: row.body,
-      attachment: row.attachment_kind && row.attachment_id ? { kind: row.attachment_kind, id: Number(row.attachment_id) } : undefined,
+      text: deleted ? "Пользователь удалил это сообщение" : row.body,
+      attachment: !deleted && row.attachment_kind && row.attachment_id ? { kind: row.attachment_kind, id: Number(row.attachment_id) } : undefined,
+      ...(!deleted && row.message_kind === "sticker" ? { kind: "sticker", sticker: stickerDto(archivedBookSticker(row.sticker_id)) } : {}),
       system: Boolean(row.is_system),
-      read: Boolean(row.read_at),
+      read: deleted || Boolean(row.read_at),
+      deleted: deleted || undefined,
+      editedAt: !deleted && row.edited_at ? new Date(row.edited_at).toISOString() : undefined,
       createdAt: new Date(row.created_at).toISOString(),
       time: new Intl.DateTimeFormat("ru-RU", { hour: "2-digit", minute: "2-digit", timeZone: "Asia/Almaty" }).format(new Date(row.created_at)),
     });
   }
   const messages = {};
-  const clearedThroughByPeer = new Map(chatHistoryClearRows.map((row) => [Number(row.peer_user_id), Number(row.cleared_through_message_id)]));
-  for (const row of messageRows) {
+  const messageMentions = new Map();
+  const messageLikes = new Map();
+  for (const row of messageReactionRows) {
+    const items = messageLikes.get(Number(row.message_id)) ?? [];
+    items.push(Number(row.user_id));
+    messageLikes.set(Number(row.message_id), items);
+  }
+  const personalMentionTypes = new Set(["Читатель", "Писатель", "Блогер"]);
+  const viewerIsPersonal = personalMentionTypes.has(accountState?.profile_type);
+  const viewerMentionAge = ageFromBirthDate(accountState?.birth_date);
+  for (const row of messageMentionRows) {
+    const targetIsPersonal = personalMentionTypes.has(row.profile_type);
+    const ageCompatible = currentUser?.isAdmin || !viewerIsPersonal || !targetIsPersonal
+      || viewerMentionAge !== null && ageFromBirthDate(row.birth_date) !== null && (viewerMentionAge < 18) === (ageFromBirthDate(row.birth_date) < 18);
+    const unavailable = row.deleted_at || row.purged_at || hiddenUserIds.has(Number(row.mentioned_user_id)) || hiddenContentOwnerIds.has(Number(row.mentioned_user_id)) || !ageCompatible;
+    const items = messageMentions.get(Number(row.entity_id)) ?? [];
+    const item = { userId: Number(row.mentioned_user_id), token: unavailable ? NEUTRAL_MENTION_TOKEN : row.mention_token, ...(unavailable ? {} : { username: row.username, displayName: row.display_name }) };
+    Object.defineProperty(item, "sourceToken", { value: String(row.mention_token ?? ""), enumerable: false });
+    items.push(item);
+    messageMentions.set(Number(row.entity_id), items);
+  }
+  for (const row of selectedMessageRows) {
     const otherId = Number(row.sender_user_id) === Number(userId) ? Number(row.recipient_user_id) : Number(row.sender_user_id ?? row.recipient_user_id);
     if (!currentUser?.isAdmin && hiddenUserIds.has(otherId)) continue;
-    if (Number(row.id) <= (clearedThroughByPeer.get(otherId) ?? 0)) continue;
     const key = [Number(userId), otherId].sort((a, b) => a - b).join("-");
+    const deleted = Boolean(row.deleted_at);
+    const likedByUserIds = deleted ? [] : messageLikes.get(Number(row.id)) ?? [];
     messages[key] ??= [];
     messages[key].push({
       id: Number(row.id),
       mine: Number(row.sender_user_id) === Number(userId),
       senderId: row.sender_user_id ? Number(row.sender_user_id) : undefined,
-      text: row.body,
-      attachment: row.attachment_kind && row.attachment_id ? { kind: row.attachment_kind, id: Number(row.attachment_id) } : undefined,
+      text: deleted ? "Пользователь удалил это сообщение" : neutralizeMentionedText(row.body, messageMentions.get(Number(row.id)) ?? []),
+      mentions: deleted ? [] : messageMentions.get(Number(row.id)) ?? [],
+      attachment: !deleted && row.attachment_kind && row.attachment_id ? { kind: row.attachment_kind, id: Number(row.attachment_id) } : undefined,
+      ...(!deleted && row.message_kind === "sticker" ? { kind: "sticker", sticker: stickerDto(archivedBookSticker(row.sticker_id)) } : {}),
       system: Boolean(row.is_system),
-      unread: Number(row.recipient_user_id) === Number(userId) && !row.read_at && !row.is_system,
-      read: Boolean(row.read_at),
+      unread: !deleted && Number(row.recipient_user_id) === Number(userId) && !row.read_at && !row.is_system,
+      read: deleted || Boolean(row.read_at),
+      deleted: deleted || undefined,
+      editedAt: !deleted && row.edited_at ? new Date(row.edited_at).toISOString() : undefined,
+      likeCount: likedByUserIds.length,
+      likedByViewer: likedByUserIds.includes(Number(userId)),
+      likedByUserIds,
       createdAt: new Date(row.created_at).toISOString(),
       time: new Intl.DateTimeFormat("ru-RU", { hour: "2-digit", minute: "2-digit", timeZone: "Asia/Almaty" }).format(new Date(row.created_at)),
     });
@@ -709,9 +845,10 @@ export async function loadBootstrap(userId, options = {}) {
     saves,
     likedMaterialRefs,
     savedMaterialRefs,
-    events: eventRows.filter((row) => (currentUser?.isAdmin || !hiddenUserIds.has(Number(row.creator_user_id))) && (currentUser?.isAdmin || !row.is_adult || Number(currentUser?.profile.age ?? -1) >= 18)).map((row) => ({
-      id: Number(row.id), creatorId: Number(row.creator_user_id), creatorName: row.creator_name, title: row.title,
-      summary: row.summary, description: profileGate.complete ? row.description : "", date: sqlDate(row.event_date),
+    events: eventRows.filter((row) => (currentUser?.isAdmin || (!hiddenUserIds.has(Number(row.creator_user_id)) && !hiddenContentOwnerIds.has(Number(row.creator_user_id)))) && (currentUser?.isAdmin || !row.is_adult || Number(currentUser?.profile.age ?? -1) >= 18)).map((row) => ({
+      ...(() => { const mentions = mentionForCatalog("event", row.id); return { mentions, title: neutralizeMentionedText(row.title, mentions), summary: neutralizeMentionedText(row.summary, mentions), description: profileGate.complete ? neutralizeMentionedText(row.description, mentions) : "" }; })(),
+      id: Number(row.id), creatorId: Number(row.creator_user_id), creatorName: row.creator_name,
+      date: sqlDate(row.event_date),
       isAdult: Boolean(row.is_adult),
       time: String(row.event_time).slice(0, 5), city: row.city, country: row.city_country ?? undefined,
       cityId: row.city_id ? Number(row.city_id) : undefined, address: profileGate.complete ? row.address : "",
@@ -728,9 +865,9 @@ export async function loadBootstrap(userId, options = {}) {
       reminderCount: Number(row.reminder_count ?? 0),
       createdAt: new Date(row.created_at).toISOString(),
     })),
-    occasions: visibleOccasionRows.filter((row) => currentUser?.isAdmin || !hiddenUserIds.has(Number(row.creator_user_id))).map((row) => ({
+    occasions: visibleOccasionRows.filter((row) => currentUser?.isAdmin || (!hiddenUserIds.has(Number(row.creator_user_id)) && !hiddenContentOwnerIds.has(Number(row.creator_user_id)))).map((row) => ({
+      ...(() => { const mentions = mentionForCatalog("occasion", row.id); return { mentions, primaryText: neutralizeMentionedText(row.primary_text, mentions), audienceText: profileGate.complete ? neutralizeMentionedText(row.audience_text, mentions) : "" }; })(),
       id: Number(row.id), creatorId: Number(row.creator_user_id), type: row.occasion_type,
-      primaryText: row.primary_text, audienceText: profileGate.complete ? row.audience_text : "",
       isAdult: Boolean(row.is_adult),
       targetGender: row.target_gender, targetCities: parseJson(row.target_cities),
       targetProfileType: row.target_profile_type,

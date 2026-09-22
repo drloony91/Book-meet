@@ -22,7 +22,7 @@ Browser
 - проверяет production invariants (`DEMO_MODE`, `AUDIT_HASH_SECRET`), configured `APP_ORIGIN` и `PORT`;
 - ставит JSON/urlencoded limits, security headers (CSP, HSTS в production, `nosniff`, frame/referrer/permissions policies), Origin guard и `apiRateLimit`;
 - публикует `/uploads`, монтирует `/api`, затем Vite middleware в development или `dist/client` + SPA fallback в production/demo;
-- запускает Telegram outbox dispatcher и graceful shutdown.
+- запускает независимые admin Telegram и user-notification outbox dispatchers и останавливает их при graceful shutdown.
 
 `server/api.js` владеет auth, sessions, profile/account, books/materials, social, events, moderation, legal and admin endpoints. `server/modules/` owns reusable validation/security/search/bootstrap/location/mail/Telegram helpers. Новую большую группу сначала выделять в module/router без изменения public contract.
 
@@ -40,7 +40,9 @@ UI visibility does not grant access. `authenticatedUser`/server handlers, `serve
 
 ## Realtime and scheduled work
 
-SSE `/api/realtime` keeps connected sessions informed; writes call `broadcastRealtime()`. Event reminders run on a timer and insert notifications transactionally. Deleted-profile maintenance purges expired rows through explicit cleanup plus foreign-key cascades. Telegram alerts use `telegram_alert_outbox` and a dispatcher; personal message text is not sent.
+SSE `/api/realtime` keeps connected sessions informed. Ordinary writes use the legacy `update` invalidation, while successful message create/edit/delete/reaction/read mutations enqueue a minimal `chat` invalidation only for the two dialog participants; per-viewer history clearing targets only that viewer. The event carries no message content or authorization facts and the client treats it only as a signal to reload `/bootstrap/social`. Failed writes emit nothing. Event and postponed-book reminders create domain notification events transactionally. Every active producer uses `server/modules/notification-events.js`, which persists an append-only event, the selected in-app projection, and readiness-filtered channel jobs under the caller transaction.
+
+The generic user-delivery worker claims due jobs with row locks, reclaims an expired `processing` lease after a worker crash, and retains stable idempotency keys, bounded exponential retry and sanitized errors. `server/index.js` injects the Telegram and SMTP adapters and starts the dispatcher; readiness switches still fail closed until live delivery is separately verified. Telegram receives only a generic title/summary/link. Daily email jobs become due at the next 09:00 in the effective user timezone; all claimed jobs for one user and immutable digest window are delivered through one safe `payloads[]` adapter call and completed or retried by one batch update. Email uses deterministic message IDs and a signed optional-notification unsubscribe link. Admin `telegram_alert_outbox` and its existing runtime dispatcher remain separate. Deleted-profile maintenance purges expired rows through explicit cleanup plus foreign-key cascades; personal message text is never a general notification event.
 
 ## Deliberate non-goals
 

@@ -1,4 +1,5 @@
 import { postponedOverdue } from "./reading-state.js";
+import { createNotificationEvent } from "./notification-events.js";
 
 // Kept dependency-injected so the real-MySQL suite can run deterministic
 // periods without booting a minute timer or relying on wall-clock time.
@@ -27,7 +28,16 @@ export async function deliverDuePostponedBookReminders({ withTransaction, now = 
         if (!user) continue;
         const [[book]] = await connection.query("SELECT postponed_month, postponed_year, postponed_timezone, postponed_notified_at FROM user_books WHERE user_id = ? AND book_id = ? AND reading_status = 'postponed' FOR UPDATE", [candidate.user_id, candidate.book_id]);
         if (!book || book.postponed_notified_at || !postponedOverdue(book.postponed_month, book.postponed_year, book.postponed_timezone ?? "UTC", now)) continue;
-        await connection.query("INSERT INTO notifications (user_id, actor_user_id, notification_type, title, body, material_kind, material_id, group_key) VALUES (?, NULL, 'postponed_book', 'Пора вернуться к книге', 'Срок отложенной книги уже наступил.', 'book', ?, NULL)", [candidate.user_id, candidate.book_id]);
+        const [[generation]] = await connection.query("SELECT COUNT(*) AS total FROM notification_events WHERE recipient_user_id = ? AND event_type = 'postponed_book' AND material_kind = 'book' AND material_id = ?", [candidate.user_id, candidate.book_id]);
+        await createNotificationEvent(connection, {
+          recipientUserId: candidate.user_id,
+          eventType: "postponed_book",
+          title: "Пора вернуться к книге",
+          body: "Срок отложенной книги уже наступил.",
+          materialKind: "book",
+          materialId: candidate.book_id,
+          dedupeKey: `postponed-book:${candidate.user_id}:${candidate.book_id}:generation-${Number(generation.total) + 1}`,
+        });
         const [updated] = await connection.query("UPDATE user_books SET postponed_notified_at = UTC_TIMESTAMP() WHERE user_id = ? AND book_id = ? AND postponed_notified_at IS NULL", [candidate.user_id, candidate.book_id]);
         if (updated.affectedRows) count += 1;
       }

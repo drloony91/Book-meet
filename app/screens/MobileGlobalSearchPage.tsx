@@ -163,9 +163,9 @@ export function MobileGlobalSearchPage({ userId, initialQuery, users, likes, sav
     const owner = users.find((user) => user.id === entry.ownerId);
     const source = entry.item;
     const actionItem: ReadingItem = entry.kind === "event"
-      ? { id: entry.id, kind: "event", title: (source as BookEvent).title, author: owner?.profile.name ?? (source as BookEvent).creatorName, text: (source as BookEvent).description, preview: (source as BookEvent).summary, ownerId: entry.ownerId, createdAt: entry.createdAt }
+      ? { id: entry.id, kind: "event", title: (source as BookEvent).title, author: owner?.profile.name ?? (source as BookEvent).creatorName, text: (source as BookEvent).description, preview: (source as BookEvent).summary, ownerId: entry.ownerId, createdAt: entry.createdAt, mentions: (source as BookEvent).mentions }
       : entry.kind === "occasion"
-        ? { id: entry.id, kind: "occasion", title: (source as Occasion).primaryText, author: owner?.profile.name ?? (source as Occasion).creatorName, text: (source as Occasion).audienceText, preview: (source as Occasion).primaryText, ownerId: entry.ownerId, createdAt: entry.createdAt }
+        ? { id: entry.id, kind: "occasion", title: (source as Occasion).primaryText, author: owner?.profile.name ?? (source as Occasion).creatorName, text: (source as Occasion).audienceText, preview: (source as Occasion).primaryText, ownerId: entry.ownerId, createdAt: entry.createdAt, mentions: (source as Occasion).mentions }
         : { ...(source as ReadingItem), ownerId: entry.ownerId };
     const key = `${actionItem.kind}-${actionItem.id}`;
     const actions = {

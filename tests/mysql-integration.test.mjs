@@ -130,7 +130,32 @@ test("MySQL production migrations, seed and critical relational behavior", async
     "user_hides.hidden_user_id",
     "book_shelves.owner_user_id",
     "book_shelf_items.book_id",
+    "material_comments.parent_comment_id",
+    "material_comments.reply_to_comment_id",
+    "content_mentions.mention_token",
+    "reposts.source_root_id",
+    "excerpts.provenance_repost_id",
+    "message_reactions.reaction_type",
+    "messages.edited_at",
+    "messages.deleted_at",
+    "messages.deleted_before_read",
+    "messages.moderation_retained_until",
+    "message_edit_history.message_reference_id",
+    "message_edit_history.previous_body",
+    "message_deletion_evidence.message_reference_id",
+    "message_deletion_evidence.original_body",
+    "users.telegram_display_name",
+    "users.telegram_delivery_error_at",
+    "telegram_link_tokens.token_hash",
+    "telegram_link_tokens.expires_at",
+    "telegram_link_tokens.consumed_at",
   ]) assert.ok(columns.has(column), `missing late-schema column ${column}`);
+
+  const [messageSearchIndexes] = await rootPool.query(
+    "SELECT index_name, index_type, column_name FROM information_schema.statistics WHERE table_schema = ? AND table_name = 'messages' AND index_name = 'messages_body_fulltext'",
+    [databaseName],
+  );
+  assert.deepEqual(messageSearchIndexes.map((row) => [row.INDEX_NAME ?? row.index_name, row.INDEX_TYPE ?? row.index_type, row.COLUMN_NAME ?? row.column_name]), [["messages_body_fulltext", "FULLTEXT", "body"]]);
 
   const [foreignKeys] = await rootPool.query(
     `SELECT table_name, referenced_table_name, delete_rule
@@ -139,7 +164,7 @@ test("MySQL production migrations, seed and critical relational behavior", async
     [databaseName],
   );
   const rules = new Set(foreignKeys.map((row) => `${row.TABLE_NAME ?? row.table_name}->${row.REFERENCED_TABLE_NAME ?? row.referenced_table_name}:${row.DELETE_RULE ?? row.delete_rule}`));
-  for (const rule of ["profiles->users:CASCADE", "messages->users:SET NULL", "chat_history_clears->users:CASCADE", "legal_acceptances->legal_documents:RESTRICT", "book_progress_notes->reading_cycles:SET NULL", "book_progress_notes->users:CASCADE", "user_hides->users:CASCADE", "book_shelves->users:CASCADE", "book_shelf_items->book_shelves:CASCADE", "book_shelf_items->books:SET NULL"]) {
+  for (const rule of ["profiles->users:CASCADE", "messages->users:SET NULL", "chat_history_clears->users:CASCADE", "legal_acceptances->legal_documents:RESTRICT", "book_progress_notes->reading_cycles:SET NULL", "book_progress_notes->users:CASCADE", "user_hides->users:CASCADE", "book_shelves->users:CASCADE", "book_shelf_items->book_shelves:CASCADE", "book_shelf_items->books:SET NULL", "material_comment_likes->material_comments:CASCADE", "content_mentions->users:CASCADE", "reposts->users:CASCADE", "excerpts->reposts:SET NULL", "message_reactions->messages:CASCADE", "message_reactions->users:CASCADE", "message_edit_history->messages:SET NULL", "message_edit_history->users:SET NULL", "message_deletion_evidence->messages:SET NULL", "message_deletion_evidence->users:SET NULL", "telegram_link_tokens->users:CASCADE"]) {
     assert.ok(rules.has(rule), `missing foreign-key rule ${rule}`);
   }
 
@@ -202,6 +227,52 @@ test("MySQL production migrations, seed and critical relational behavior", async
   assert.ok(Number(laterMessage.insertId) > Number(viewerCursor.cleared_through_message_id), "messages sent after clearing must remain visible above the cursor");
   assert.ok(Number(olderMessage.insertId) <= Number(viewerCursor.cleared_through_message_id));
 
+  await rootPool.query("INSERT INTO message_reactions (message_id, user_id) VALUES (?, ?)", [laterMessage.insertId, clearViewerId]);
+  await assert.rejects(rootPool.query("INSERT INTO message_reactions (message_id, user_id) VALUES (?, ?)", [laterMessage.insertId, clearViewerId]), /duplicate/i, "one user reaction per message must stay unique");
+  await rootPool.query("DELETE FROM messages WHERE id = ?", [laterMessage.insertId]);
+  let [[reactionCount]] = await rootPool.query("SELECT COUNT(*) AS count FROM message_reactions WHERE message_id = ?", [laterMessage.insertId]);
+  assert.equal(Number(reactionCount.count), 0, "message deletion must cascade to reactions");
+  const reactionOnlyUserId = await insertUser("reaction-cascade-user");
+  const [reactionTargetMessage] = await rootPool.query("INSERT INTO messages (sender_user_id, recipient_user_id, body) VALUES (?, ?, 'reaction user cascade')", [clearPeerId, clearViewerId]);
+  await rootPool.query("INSERT INTO message_reactions (message_id, user_id) VALUES (?, ?)", [reactionTargetMessage.insertId, reactionOnlyUserId]);
+  await rootPool.query("DELETE FROM users WHERE id = ?", [reactionOnlyUserId]);
+  [[reactionCount]] = await rootPool.query("SELECT COUNT(*) AS count FROM message_reactions WHERE message_id = ?", [reactionTargetMessage.insertId]);
+  assert.equal(Number(reactionCount.count), 0, "user deletion must cascade to reactions without deleting an unrelated message");
+  const [[retainedReactionTarget]] = await rootPool.query("SELECT COUNT(*) AS count FROM messages WHERE id = ?", [reactionTargetMessage.insertId]);
+  assert.equal(Number(retainedReactionTarget.count), 1);
+
+  const editEvidenceUserId = await insertUser("message-edit-evidence-user");
+  const [editEvidenceMessage] = await rootPool.query("INSERT INTO messages (sender_user_id, recipient_user_id, body) VALUES (?, ?, 'current evidence')", [editEvidenceUserId, clearViewerId]);
+  await rootPool.query("INSERT INTO message_edit_history (message_id, message_reference_id, editor_user_id, previous_body) VALUES (?, ?, ?, 'previous evidence')", [editEvidenceMessage.insertId, editEvidenceMessage.insertId, editEvidenceUserId]);
+  await rootPool.query("DELETE FROM messages WHERE id = ?", [editEvidenceMessage.insertId]);
+  let [[editEvidence]] = await rootPool.query("SELECT message_id, message_reference_id, editor_user_id, previous_body FROM message_edit_history WHERE message_reference_id = ?", [editEvidenceMessage.insertId]);
+  assert.equal(editEvidence.message_id, null, "message removal must retain private edit evidence");
+  assert.equal(Number(editEvidence.message_reference_id), Number(editEvidenceMessage.insertId));
+  await rootPool.query("DELETE FROM users WHERE id = ?", [editEvidenceUserId]);
+  [[editEvidence]] = await rootPool.query("SELECT editor_user_id, previous_body FROM message_edit_history WHERE message_reference_id = ?", [editEvidenceMessage.insertId]);
+  assert.equal(editEvidence.editor_user_id, null, "user removal must anonymize retained edit evidence");
+  assert.equal(editEvidence.previous_body, "previous evidence");
+
+  const deletionEvidenceUserId = await insertUser("message-deletion-evidence-user");
+  const [deletionEvidenceMessage] = await rootPool.query("INSERT INTO messages (sender_user_id, recipient_user_id, body) VALUES (?, ?, 'private deletion evidence')", [deletionEvidenceUserId, clearViewerId]);
+  await rootPool.query(
+    `INSERT INTO message_deletion_evidence
+       (message_id, message_reference_id, sender_user_id, sender_reference_id, recipient_user_id, recipient_reference_id, original_body, was_read, deleted_before_read, deleted_at)
+     VALUES (?, ?, ?, ?, ?, ?, 'private deletion evidence', 0, 1, UTC_TIMESTAMP())`,
+    [deletionEvidenceMessage.insertId, deletionEvidenceMessage.insertId, deletionEvidenceUserId, deletionEvidenceUserId, clearViewerId, clearViewerId],
+  );
+  await rootPool.query("DELETE FROM messages WHERE id = ?", [deletionEvidenceMessage.insertId]);
+  let [[deletionEvidence]] = await rootPool.query("SELECT message_id, message_reference_id, sender_user_id, original_body, moderation_retained_until FROM message_deletion_evidence WHERE message_reference_id = ?", [deletionEvidenceMessage.insertId]);
+  assert.equal(deletionEvidence.message_id, null, "message removal must retain private deletion evidence");
+  assert.equal(Number(deletionEvidence.message_reference_id), Number(deletionEvidenceMessage.insertId));
+  assert.equal(deletionEvidence.original_body, "private deletion evidence");
+  assert.equal(deletionEvidence.moderation_retained_until, null, "retention deadline stays unset until policy approval");
+  await rootPool.query("DELETE FROM users WHERE id = ?", [deletionEvidenceUserId]);
+  [[deletionEvidence]] = await rootPool.query("SELECT sender_user_id, sender_reference_id, original_body FROM message_deletion_evidence WHERE message_reference_id = ?", [deletionEvidenceMessage.insertId]);
+  assert.equal(deletionEvidence.sender_user_id, null, "user removal must anonymize the live deletion-evidence FK");
+  assert.equal(Number(deletionEvidence.sender_reference_id), Number(deletionEvidenceUserId));
+  assert.equal(deletionEvidence.original_body, "private deletion evidence");
+
   const cascadeUserId = await insertUser("cascade-user-test");
   await rootPool.query("INSERT INTO material_saves (user_id, material_kind, material_id) VALUES (?, 'book', 1)", [cascadeUserId]);
   await rootPool.query("DELETE FROM users WHERE id = ?", [cascadeUserId]);
@@ -229,8 +300,16 @@ test("MySQL production migrations, seed and critical relational behavior", async
   assert.equal(Number(noteAfterBook.count), 0, "book deletion must cascade to notes");
   assertSucceeded(runNode("tests/reading-http-mysql.mjs"), "TZ2 authenticated HTTP transaction and privacy matrix");
   assertSucceeded(runNode("tests/reading-goals-http-mysql.mjs"), "TZ3 goals authenticated HTTP, privacy, uniqueness and cascade");
+  assertSucceeded(runNode("tests/message-reactions-http-mysql.mjs"), "TZ5 message reactions authenticated HTTP authorization and idempotency");
+  assertSucceeded(runNode("tests/message-edits-http-mysql.mjs"), "TZ5 message edits authenticated HTTP ownership, privacy and transactionality");
+  assertSucceeded(runNode("tests/message-deletions-http-mysql.mjs"), "TZ5 message deletions authenticated HTTP evidence, race and transactionality");
+  assertSucceeded(runNode("tests/message-stickers-http-mysql.mjs"), "TZ5 stickers authenticated HTTP persistence and deletion evidence");
+  assertSucceeded(runNode("tests/message-search-http-mysql.mjs"), "TZ5 message search FULLTEXT authorization, visibility, pagination and grouping");
+  assertSucceeded(runNode("tests/notification-preferences-http-mysql.mjs"), "TZ5 notification preferences persistence, constraints, readiness and range read-all");
+  assertSucceeded(runNode("tests/notification-events-http-mysql.mjs"), "TZ5 notification domain events, delivery outbox and worker claim state");
   assertSucceeded(runNode("tests/book-progress-notes-http-mysql.mjs"), "TZ3 notes authenticated HTTP, spoiler/privacy and moderation matrix");
   assertSucceeded(runNode("tests/book-shelves-http-mysql.mjs"), "TZ3 shelves authenticated HTTP, visibility, material actions and atomic batch matrix");
+  assertSucceeded(runNode("tests/social-content-http-mysql.mjs"), "TZ4 social content authenticated HTTP, privacy, mention, comment and repost matrix");
 });
 
 test("039 upgrades populated legacy libraries without losing unknown completion dates", async () => {

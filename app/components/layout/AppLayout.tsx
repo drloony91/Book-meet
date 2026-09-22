@@ -218,6 +218,7 @@ export function WorkspaceScreen({
   onFindFriends,
   onCreateOccasion,
   onSelectFriend,
+  onSelectMessageSearchResult,
   onCloseMobileFriends,
   onNavigate,
   activeView,
@@ -238,6 +239,7 @@ export function WorkspaceScreen({
   onFindFriends: () => void;
   onCreateOccasion: () => void;
   onSelectFriend: (friend: Friend) => void;
+  onSelectMessageSearchResult?: (peerId: number, messageId: number) => void;
   onCloseMobileFriends?: () => void;
   onNavigate?: (view: RoutableMainView) => void;
   activeView?: string;
@@ -278,7 +280,7 @@ export function WorkspaceScreen({
         <div className="desktop-navigation-block">{navItems.map((item) => <button type="button" key={item.view} className={navActive(item.view) ? "is-active" : ""} onClick={() => navigate(item.view)} aria-current={navActive(item.view) ? "page" : undefined}><strong>{item.label}</strong></button>)}</div>
         <div className="desktop-navigation-block">{libraryItems.map((item) => <button type="button" key={item.view} className={navActive(item.view) ? "is-active" : ""} onClick={() => navigate(item.view)} aria-current={navActive(item.view) ? "page" : undefined}><strong>{item.label}</strong></button>)}</div>
       </aside>}
-      {(chatPage || mobileFriendsOpen) && <FriendsPanel friends={friends} selectedId={selectedId} adminMode={adminMode} variant={chatPage ? "page" : "default"} collapsed={chatPage ? false : friendsCollapsed} onToggleCollapsed={() => setFriendsCollapsed((value) => !value)} onExpandCollapsed={() => { if (friendsCollapsed) setFriendsCollapsed(false); }} onFindFriends={onFindFriends} onCreateOccasion={onCreateOccasion} onSelect={(friend) => { if (friendsCollapsed) setFriendsCollapsed(false); onSelectFriend(friend); }} />}
+      {(chatPage || mobileFriendsOpen) && <FriendsPanel friends={friends} selectedId={selectedId} adminMode={adminMode} variant={chatPage ? "page" : "default"} onSelectMessageSearchResult={chatPage ? onSelectMessageSearchResult : undefined} collapsed={chatPage ? false : friendsCollapsed} onToggleCollapsed={() => setFriendsCollapsed((value) => !value)} onExpandCollapsed={() => { if (friendsCollapsed) setFriendsCollapsed(false); }} onFindFriends={onFindFriends} onCreateOccasion={onCreateOccasion} onSelect={(friend) => { if (friendsCollapsed) setFriendsCollapsed(false); onSelectFriend(friend); }} />}
       <section className="workspace-main">
         {expandedChat ?? children}
       </section>

@@ -148,11 +148,11 @@ export async function profileAccessState(connection, userId) {
   return { complete: missing.length === 0, missing };
 }
 
-export async function assertAgeCompatible(connection, firstUserId, secondUserId) {
+export async function assertAgeCompatible(connection, firstUserId, secondUserId, { lock = true } = {}) {
   const [rows] = await connection.query(
     `SELECT u.id, u.role, p.profile_type, p.birth_date
        FROM users u JOIN profiles p ON p.user_id = u.id
-      WHERE u.id IN (?, ?) ORDER BY u.id FOR UPDATE`,
+      WHERE u.id IN (?, ?) ORDER BY u.id${lock ? " FOR UPDATE" : ""}`,
     [firstUserId, secondUserId],
   );
   if (rows.length !== 2 || rows.some((row) => row.role === "admin" || row.profile_type === "Сообщество")) return;

@@ -347,8 +347,8 @@ test("Telegram alerts use a transactional outbox and environment-only credential
 test("occasion preview and modal render primary and audience fields as label-value rows", async () => {
   const content = await readFile(path.join(root, "app", "components", "content", "ContentComponents.tsx"), "utf8");
   assert.match(content, /occasion-audience-row/);
-  assert.match(content, /<strong>\{t\(labels\.primary\)\}:<\/strong> <span data-i18n-skip>\{item\.primaryText\}<\/span>/);
-  assert.match(content, /<strong>\{t\(labels\.audience\)\}:<\/strong> <span data-i18n-skip>\{item\.audienceText\}<\/span>/);
+  assert.match(content, /<strong>\{t\(labels\.primary\)\}:<\/strong> <span data-i18n-skip><MentionText text=\{item\.primaryText\} mentions=\{item\.mentions\}/);
+  assert.match(content, /<strong>\{t\(labels\.audience\)\}:<\/strong> <span data-i18n-skip><MentionText text=\{item\.audienceText\} mentions=\{item\.mentions\}/);
   assert.doesNotMatch(content, /<h[23]>\{labels\.primary\}: \{item\.primaryText\}<\/h[23]>/);
   assert.match(content, /CityAutocomplete label=\{t\("occasion\.cityOptional"\)\} value=\{targetCityDraft\}/);
   assert.match(content, /targetCities: \[name\]/);
@@ -705,8 +705,8 @@ test("профиль, фотографии и вложения сообщени�
   assert.match(migration, /attachment_kind VARCHAR\(20\)/);
   assert.match(migration, /attachment_id BIGINT UNSIGNED/);
   assert.match(api, /validatedChatAttachment/);
-  assert.match(api, /INSERT INTO messages \(sender_user_id, recipient_user_id, body, attachment_kind, attachment_id\)/);
-  assert.match(data, /attachment: row\.attachment_kind/);
+  assert.match(api, /INSERT INTO messages \(sender_user_id, recipient_user_id, body, attachment_kind, attachment_id, message_kind, sticker_id\)/);
+  assert.match(data, /attachment: !deleted && row\.attachment_kind/);
   assertLocalized(profile, "form.requiredFields");
   assert.match(profile, /!profile\.cityId/);
   assert.match(profile, /canvas\.toDataURL\("image\/webp", 0\.82\)/);

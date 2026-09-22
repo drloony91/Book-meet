@@ -11,9 +11,14 @@ import { authText, requestLocale } from "./modules/i18n.js";
 import { LoginAttemptTracker } from "./modules/login-attempts.js";
 import { normalizeUsername, usernameValidationError } from "./modules/username.js";
 import { searchBootstrapMaterials } from "./modules/material-search.js";
+import { decodeMessageSearchCursor, encodeMessageSearchCursor, messageMatchesSearch, messageSearchLimit, messageSearchSnippet, normalizeMessageSearchQuery, MESSAGE_SEARCH_GROUP_LIMIT, MESSAGE_SEARCH_GROUP_MATCH_LIMIT } from "./modules/message-search.js";
+import { activeBookSticker, archivedBookSticker, bookStickerCatalog, stickerDto } from "./modules/book-stickers.js";
 import { normalizeReadingState, postponedOverdue, readingStateDto, readingStateStorage, validTimezone } from "./modules/reading-state.js";
 import { annualPlan, eligibleGoalPeriods, monthPace, validateGoalPayload } from "./modules/reading-goals.js";
 import { expectedProgress, noteBody, noteCursor, progressSnapshot, sameProgress } from "./modules/book-progress-notes.js";
+import { LEGACY_TELEGRAM_NOTIFICATION_CATEGORIES, NOTIFICATION_CATEGORIES, NOTIFICATION_READ_CONFIRMATION_THRESHOLD, canonicalCategoriesForLegacyTelegram, legacyTelegramCategoriesForPreferences, notificationCategoryFor, notificationPreferencesState, validateNotificationPreferencesPayload } from "./modules/notification-preferences.js";
+import { nextDailyNotificationAt } from "./modules/notification-events.js";
+import { createTelegramLinkToken, safeTelegramDisplayName, telegramWebhookAuthorized, verifyEmailUnsubscribeToken } from "./modules/notification-channels.js";
 
 const router = Router();
 const sessions = new Map();
@@ -23,8 +28,30 @@ const passwords = new Map([
   [3, process.env.READER_TEST_PASSWORD || "reader2026"],
 ]);
 const demoRealtimeClients = new Set();
+const demoTelegramLinkTokens = new Map();
+
+function queueDemoChatRealtime(response, userIds, payload) {
+  response.locals.chatRealtime = {
+    userIds: [...new Set(userIds.map(Number).filter((userId) => Number.isSafeInteger(userId) && userId > 0))],
+    payload,
+  };
+}
+
+function broadcastDemoRealtime(eventName = "update", data = Date.now(), userIds = null) {
+  const recipients = userIds ? new Set(userIds) : null;
+  const event = `event: ${eventName}\ndata: ${typeof data === "string" ? data : JSON.stringify(data)}\n\n`;
+  for (const client of demoRealtimeClients) {
+    if (recipients && !recipients.has(client.userId)) continue;
+    try { client.response.write(event); } catch { demoRealtimeClients.delete(client); }
+  }
+}
 const demoAccountActionTokens = new Map();
 const loginAttempts = new LoginAttemptTracker({ limit: 10, windowMs: 15 * 60 * 1000 });
+const messageReactionAttempts = new LoginAttemptTracker({ limit: 120, windowMs: 60 * 1000 });
+const messageEditAttempts = new LoginAttemptTracker({ limit: 30, windowMs: 60 * 1000 });
+const messageSearchAttempts = new LoginAttemptTracker({ limit: 60, windowMs: 60 * 1000 });
+const notificationPreferenceAttempts = new LoginAttemptTracker({ limit: 20, windowMs: 60 * 1000 });
+const notificationReadAttempts = new LoginAttemptTracker({ limit: 60, windowMs: 60 * 1000 });
 const demoLegalAcceptances = new Map([
   [1, new Set([1, 2, 3])],
   [2, new Set([1, 2, 3])],
@@ -239,6 +266,9 @@ const state = {
     { id: 24, catalogBookId: 24, author: "Айгерим Жансугурова", title: "Точки на карте", genres: ["Современная проза"], annotation: "Каталожная книга без записи в личной библиотеке.", pages: "", format: "Бумажная", durationHours: "", durationMinutes: "", rating: 0, review: "", coverTone: "mint", links: [] },
   ].map((book) => [book.catalogBookId ?? book.id, demoCanonicalBookDto(book)])).values()],
   messages: {},
+  messageReactions: {},
+  messageEditHistory: [],
+  messageDeletionEvidence: [],
   chatHistoryClears: {},
   friendRequests: [],
   // Keep one deterministic reader/publisher conversation available to the
@@ -249,6 +279,9 @@ const state = {
   blocks: [],
   reports: [],
   notifications: [],
+  notificationEvents: [],
+  notificationDeliveries: [],
+  notificationPreferences: {},
   likes: {},
   saves: {},
   readingGoals: [],
@@ -256,6 +289,7 @@ const state = {
   userHides: [],
   shelves: [],
   comments: {},
+  reposts: [],
   events: [{
     id: 41, creatorId: 2, creatorName: "Издательство Тест", title: "Встреча с авторами издательства «Тест»",
     summary: "Разговор о новых казахстанских книгах и автограф-сессия.",
@@ -278,12 +312,17 @@ const demoInitialLegalAcceptances = new Map([...demoLegalAcceptances].map(([user
 
 function resetDemoState() {
   for (const client of demoRealtimeClients) {
-    try { client.end(); } catch { /* client may already be closed */ }
+    try { client.response.end(); } catch { /* client may already be closed */ }
   }
   demoRealtimeClients.clear();
+  demoTelegramLinkTokens.clear();
   sessions.clear();
   demoAccountActionTokens.clear();
   loginAttempts.buckets.clear();
+  messageReactionAttempts.buckets.clear();
+  messageEditAttempts.buckets.clear();
+  notificationPreferenceAttempts.buckets.clear();
+  notificationReadAttempts.buckets.clear();
   passwords.clear();
   for (const [userId, password] of demoInitialPasswords) passwords.set(userId, password);
   demoLegalAcceptances.clear();
@@ -363,6 +402,26 @@ function requireUser(request, response, next) {
   next();
 }
 
+function demoMaterialSource(kind, id) {
+  const materialId = Number(id);
+  for (const user of users) {
+    if (kind === "review") { const item = (user.reviews ?? []).find((entry) => entry.id === materialId); if (item) return { ownerId: user.id, title: item.bookTitle }; }
+    if (kind === "excerpt") { const item = (user.excerpts ?? []).find((entry) => entry.id === materialId); if (item) return { ownerId: user.id, title: item.bookTitle || "Публикация" }; }
+    if (kind === "publisher_news") { const item = (user.publisherNews ?? []).find((entry) => entry.id === materialId); if (item) return { ownerId: user.id, title: item.title }; }
+  }
+  if (kind === "event") { const item = state.events.find((entry) => entry.id === materialId); if (item) return { ownerId: item.creatorId, title: item.title }; }
+  if (kind === "occasion") { const item = state.occasions.find((entry) => entry.id === materialId); if (item) return { ownerId: item.creatorId, title: item.primaryText || "Повод" }; }
+  if (kind === "shelf") { const item = state.shelves.find((entry) => entry.id === materialId); if (item) return { ownerId: item.ownerId, title: item.title }; }
+  return null;
+}
+
+function demoCleanRepostDto(repost, viewerId) {
+  const source = demoMaterialSource(repost.sourceKind, repost.sourceId);
+  const unavailable = !source || state.userHides.some((hide) => hide.hiderUserId === viewerId && hide.hiddenUserId === source.ownerId)
+    || state.blocks.some((block) => [block.blockerId, block.blockedId].includes(viewerId) && [block.blockerId, block.blockedId].includes(source.ownerId));
+  return { id: repost.id, createdAt: repost.createdAt, source: unavailable ? { available: false, label: "Материал недоступен" } : { available: true, kind: repost.sourceKind, id: repost.sourceId, title: source.title } };
+}
+
 function bootstrap(userId) {
   const viewer = users.find((user) => user.id === userId);
   const profileGate = demoProfileAccess(viewer);
@@ -377,6 +436,7 @@ function bootstrap(userId) {
   };
   const relatedBlocks = state.blocks.filter((block) => block.blockerId === userId || block.blockedId === userId);
   const blockedByUserIds = relatedBlocks.filter((block) => block.blockedId === userId).map((block) => block.blockerId);
+  const hiddenOwnerIds = new Set(state.userHides.filter((hide) => hide.hiderUserId === userId).map((hide) => hide.hiddenUserId));
   const friendCountByUser = new Map(users.map((user) => [user.id, state.friendships.filter((entry) => entry.userA === user.id || entry.userB === user.id).length]));
   const followerCountByUser = new Map(users.map((user) => [user.id, state.follows.filter((entry) => entry.targetId === user.id && !state.friendships.some((friendship) => [friendship.userA, friendship.userB].includes(user.id) && [friendship.userA, friendship.userB].includes(entry.followerId))).length]));
   const visibleUsers = users.map((user) => {
@@ -415,12 +475,13 @@ function bootstrap(userId) {
     const readerBlocked = relatedBlocks.some((block) => block.blockerId === user.id || block.blockedId === user.id);
     const readerSameAgeGroup = (Number(user.profile.age ?? -1) >= 18) === (adultStatus === "adult");
     const safeBooks = (isOwner || !readerBlocked && (viewer?.isAdmin || readerSameAgeGroup) ? user.books ?? [] : []).filter((item) => adultStatus === "adult" || !item.isAdult).map((item) => demoViewerBookDto(item, isOwner, user.readingHistory ?? []));
-    return { ...user, books: user.profile.type === "Сообщество" ? [] : safeBooks, readingHistory: isOwner ? structuredClone((user.readingHistory ?? []).filter((entry) => entry.status === "completed")) : undefined, authorBooks: (user.authorBooks ?? []).filter((item) => adultStatus === "adult" || !item.isAdult), communityBooks: user.profile.type === "Сообщество" ? (user.communityBooks ?? []).filter((item) => adultStatus === "adult" || !item.isAdult) : undefined, memberIds, memberCount: memberIds?.length, reviews: (user.reviews ?? []).filter((item) => adultStatus === "adult" || !item.isAdult), excerpts: (user.excerpts ?? []).filter((item) => adultStatus === "adult" || !item.isAdult), blockedByMe: relatedBlocks.some((block) => block.blockerId === userId && block.blockedId === user.id), profile, wishBooks: canViewWishlist ? (user.wishBooks ?? []).map((item) => privateVisible ? { ...item, productUrl: user.id === userId ? item.productUrl : undefined, privateVisible: true } : { id: item.id, ownerId: item.ownerId, catalogBookId: item.catalogBookId, author: item.author, title: item.title, genres: item.genres, annotation: item.annotation, coverUrl: item.coverUrl, coverTone: item.coverTone, marketplace: item.marketplace, reservedByUserId: item.reservedByUserId, privateVisible: false }) : undefined };
+    const hiddenContent = hiddenOwnerIds.has(user.id);
+    return { ...user, books: user.profile.type === "Сообщество" ? [] : safeBooks, readingHistory: isOwner ? structuredClone((user.readingHistory ?? []).filter((entry) => entry.status === "completed")) : undefined, authorBooks: (user.authorBooks ?? []).filter((item) => adultStatus === "adult" || !item.isAdult), communityBooks: user.profile.type === "Сообщество" ? (user.communityBooks ?? []).filter((item) => adultStatus === "adult" || !item.isAdult) : undefined, memberIds, memberCount: memberIds?.length, reviews: hiddenContent ? [] : (user.reviews ?? []).filter((item) => adultStatus === "adult" || !item.isAdult), excerpts: hiddenContent ? [] : (user.excerpts ?? []).filter((item) => adultStatus === "adult" || !item.isAdult), publisherNews: hiddenContent ? [] : user.publisherNews, cleanReposts: hiddenContent ? [] : state.reposts.filter((repost) => repost.userId === user.id && repost.clean).map((repost) => demoCleanRepostDto(repost, userId)), blockedByMe: relatedBlocks.some((block) => block.blockerId === userId && block.blockedId === user.id), hiddenByMe: hiddenContent, profile, wishBooks: canViewWishlist ? (user.wishBooks ?? []).map((item) => privateVisible ? { ...item, productUrl: user.id === userId ? item.productUrl : undefined, privateVisible: true } : { id: item.id, ownerId: item.ownerId, catalogBookId: item.catalogBookId, author: item.author, title: item.title, genres: item.genres, annotation: item.annotation, coverUrl: item.coverUrl, coverTone: item.coverTone, marketplace: item.marketplace, reservedByUserId: item.reservedByUserId, privateVisible: false }) : undefined };
   });
   const link = state.linkedProfiles.find((item) => item.personalUserId === userId || item.communityUserId === userId);
   const previewOnlyUsers = !profileGate.complete ? visibleUsers.map((entry) => ({ ...entry, reviews: (entry.reviews ?? []).map((review) => ({ ...review, fullText: "", bodyHtml: "" })), excerpts: (entry.excerpts ?? []).map((excerpt) => ({ ...excerpt, text: "", bodyHtml: "" })), publisherNews: (entry.publisherNews ?? []).map((news) => ({ ...news, body: "", bodyHtml: "" })) })) : visibleUsers;
   const linked = link ? users.find((item) => item.id === (link.personalUserId === userId ? link.communityUserId : link.personalUserId)) : undefined;
-  const { linkedProfiles: _linkedProfiles, saves: saveEntries, messages: _messages, notifications: _notifications, chatHistoryClears: _chatHistoryClears, ...publicState } = state;
+  const { linkedProfiles: _linkedProfiles, saves: saveEntries, messages: _messages, messageReactions: _messageReactions, messageEditHistory: _messageEditHistory, messageDeletionEvidence: _messageDeletionEvidence, notifications: _notifications, notificationEvents: _notificationEvents, notificationDeliveries: _notificationDeliveries, notificationPreferences: _notificationPreferences, chatHistoryClears: _chatHistoryClears, userHides: _userHides, reposts: _reposts, ...publicState } = state;
   const saves = {};
   const savedMaterialRefs = [];
   for (const [key, entries] of Object.entries(saveEntries)) {
@@ -436,19 +497,30 @@ function bootstrap(userId) {
     return { kind, id: Number(id), createdAt: new Date().toISOString() };
   });
   const visibleBooks = state.catalogBooks.filter((item) => adultStatus === "adult" || !item.isAdult).map((item) => profileGate.complete ? item : { ...item, annotation: "", isbn: undefined, publisher: undefined, links: [], flipUrl: undefined });
-  const visibleEvents = state.events.filter((item) => (viewer?.isAdmin || adultStatus === "adult" || !item.isAdult) && (viewer?.isAdmin || item.status === "published" || item.creatorId === userId)).map((item) => profileGate.complete ? item : { ...item, description: "", address: "", mapUrl: "", detailsUrl: "" });
-  const visibleOccasions = state.occasions.filter((item) => (viewer?.isAdmin || adultStatus === "adult" || !item.isAdult) && (viewer?.isAdmin || item.creatorId === userId || item.status === "published" && (item.targetGender === "Все" || item.targetGender === viewer?.profile.gender) && (item.targetProfileType === "Все" || item.targetProfileType === viewer?.profile.type))).map((item) => profileGate.complete ? item : { ...item, audienceText: "", meetingDate: undefined, meetingStartTime: undefined, meetingEndTime: undefined, meetingCity: undefined, meetingCityId: undefined, meetingAddress: undefined, meetingMapUrl: undefined });
-  const visibleShelves = state.shelves.filter((shelf) => demoShelfVisible(userId, shelf)).map((shelf) => demoShelfDto(userId, shelf));
+  const visibleEvents = state.events.filter((item) => !hiddenOwnerIds.has(item.creatorId) && (viewer?.isAdmin || adultStatus === "adult" || !item.isAdult) && (viewer?.isAdmin || item.status === "published" || item.creatorId === userId)).map((item) => profileGate.complete ? item : { ...item, description: "", address: "", mapUrl: "", detailsUrl: "" });
+  const visibleOccasions = state.occasions.filter((item) => !hiddenOwnerIds.has(item.creatorId) && (viewer?.isAdmin || adultStatus === "adult" || !item.isAdult) && (viewer?.isAdmin || item.creatorId === userId || item.status === "published" && (item.targetGender === "Все" || item.targetGender === viewer?.profile.gender) && (item.targetProfileType === "Все" || item.targetProfileType === viewer?.profile.type))).map((item) => profileGate.complete ? item : { ...item, audienceText: "", meetingDate: undefined, meetingStartTime: undefined, meetingEndTime: undefined, meetingCity: undefined, meetingCityId: undefined, meetingAddress: undefined, meetingMapUrl: undefined });
+  const visibleShelves = state.shelves.filter((shelf) => !hiddenOwnerIds.has(shelf.ownerId) && demoShelfVisible(userId, shelf)).map((shelf) => demoShelfDto(userId, shelf));
   const viewerMessages = Object.fromEntries(Object.entries(state.messages).filter(([key]) => key.split("-").map(Number).includes(userId)).map(([key, entries]) => {
     const peerId = key.split("-").map(Number).find((id) => id !== userId);
     const cursor = Number(state.chatHistoryClears[`${userId}:${peerId}`] ?? 0);
-    return [key, entries.filter((item) => Number(item.id) > cursor).map((item) => ({
+    return [key, entries.filter((item) => Number(item.id) > cursor && !item.deletedBeforeRead).map((item) => {
+      const deleted = Boolean(item.deletedAt);
+      return {
       ...item,
+      text: deleted ? "Пользователь удалил это сообщение" : item.text,
+      attachment: deleted ? undefined : item.attachment,
+      ...(!deleted && item.kind === "sticker" ? { kind: "sticker", sticker: stickerDto(archivedBookSticker(item.stickerId)) } : {}),
+      mentions: deleted ? [] : item.mentions,
       mine: Number(item.senderId) === userId,
-      unread: Number(item.recipientId) === userId && !item.readAt && !item.system,
-      read: Boolean(item.readAt),
+      unread: !deleted && Number(item.recipientId) === userId && !item.readAt && !item.system,
+      read: deleted || Boolean(item.readAt),
+      deleted: deleted || undefined,
+      editedAt: deleted ? undefined : item.editedAt,
+      likeCount: deleted ? 0 : (state.messageReactions[item.id] ?? []).length,
+      likedByViewer: deleted ? false : (state.messageReactions[item.id] ?? []).includes(userId),
+      likedByUserIds: deleted ? [] : [...(state.messageReactions[item.id] ?? [])],
       time: "",
-    }))];
+    }; })];
   }));
   const activeOrganizationIds = users.filter((user) => !user.deletedAt && !user.purged && ["Издатель", "Сообщество"].includes(user.profile.type) && user.profile.publisherStatus === "approved").map((user) => user.id);
   const visibleNotifications = state.notifications.filter((item) => item.userId === userId && item.type !== "new_message");
@@ -493,6 +565,170 @@ function assertDemoMessagePairAccess(userId, targetId) {
   return { sender, target };
 }
 
+function messageReactionRateLimit(request, response, next) {
+  const client = request.ip || request.socket.remoteAddress || "unknown";
+  const attempt = messageReactionAttempts.state([`message-reaction:ip:${client}`, `message-reaction:user:${request.demoUserId}`]);
+  if (attempt.blocked) {
+    response.setHeader("Retry-After", String(attempt.retryAfterSeconds));
+    return response.status(429).json({ code: "MESSAGE_REACTION_RATE_LIMITED", error: "Слишком много реакций. Попробуйте позже" });
+  }
+  attempt.fail();
+  next();
+}
+
+function assertDemoMessageReactionAccess(userId, messageId) {
+  if (!Number.isInteger(messageId) || messageId <= 0) return { status: 404, code: "MESSAGE_NOT_FOUND", error: "Сообщение не найдено" };
+  let message;
+  for (const entries of Object.values(state.messages)) {
+    message = entries.find((item) => Number(item.id) === messageId && (Number(item.senderId) === userId || Number(item.recipientId) === userId));
+    if (message) break;
+  }
+  if (!message || message.deletedAt) return { status: 404, code: "MESSAGE_NOT_FOUND", error: "Сообщение не найдено" };
+  const peerId = Number(message.senderId) === Number(userId) ? Number(message.recipientId) : Number(message.senderId);
+  const clearedThroughMessageId = Number(state.chatHistoryClears[`${userId}:${peerId}`] ?? 0);
+  if (!Number.isInteger(peerId) || Number(message.id) <= clearedThroughMessageId) return { status: 404, code: "MESSAGE_NOT_FOUND", error: "Сообщение не найдено" };
+  const pairAccess = assertDemoMessagePairAccess(userId, peerId);
+  if (pairAccess.error) return pairAccess;
+  if (message.system) return { status: 409, code: "MESSAGE_REACTION_NOT_ALLOWED", error: "Системные сообщения не поддерживают реакции" };
+  return { message, peerId };
+}
+
+function demoMessageReactionDto(messageId, viewerId) {
+  const likedByUserIds = [...(state.messageReactions[messageId] ?? [])];
+  return { messageId, likeCount: likedByUserIds.length, likedByViewer: likedByUserIds.includes(viewerId), likedByUserIds };
+}
+
+function normalizeDemoMessageBody(value) {
+  const normalized = String(value ?? "").replace(/[\u200B-\u200D\u2060\uFEFF]/gu, "").trim();
+  return Array.from(normalized).slice(0, 5000).join("");
+}
+
+function messageEditRateLimit(request, response, next) {
+  const client = request.ip || request.socket.remoteAddress || "unknown";
+  const attempt = messageEditAttempts.state([`message-edit:ip:${client}`, `message-edit:user:${request.demoUserId}`]);
+  if (attempt.blocked) {
+    response.setHeader("Retry-After", String(attempt.retryAfterSeconds));
+    return response.status(429).json({ code: "MESSAGE_EDIT_RATE_LIMITED", error: "Слишком много изменений сообщений. Попробуйте позже" });
+  }
+  attempt.fail();
+  next();
+}
+
+function messageSearchRateLimit(request, response, next) {
+  const client = request.ip || request.socket.remoteAddress || "unknown";
+  const attempt = messageSearchAttempts.state([`message-search:ip:${client}`, `message-search:user:${request.demoUserId}`]);
+  if (attempt.blocked) {
+    response.setHeader("Retry-After", String(attempt.retryAfterSeconds));
+    return response.status(429).json({ code: "MESSAGE_SEARCH_RATE_LIMITED", error: "Слишком много поисковых запросов. Попробуйте позже" });
+  }
+  attempt.fail();
+  next();
+}
+
+function demoNotificationRateLimit(tracker, code, message) {
+  return (request, response, next) => {
+    const client = request.ip || request.socket.remoteAddress || "unknown";
+    const attempt = tracker.state([`${code}:ip:${client}`, `${code}:user:${request.demoUserId}`]);
+    if (attempt.blocked) {
+      response.setHeader("Retry-After", String(attempt.retryAfterSeconds));
+      return response.status(429).json({ code, error: message });
+    }
+    attempt.fail();
+    next();
+  };
+}
+
+const demoNotificationPreferenceRateLimit = demoNotificationRateLimit(notificationPreferenceAttempts, "NOTIFICATION_PREFERENCES_RATE_LIMITED", "Слишком много изменений настроек. Попробуйте позже");
+const demoNotificationReadRateLimit = demoNotificationRateLimit(notificationReadAttempts, "NOTIFICATION_READ_RATE_LIMITED", "Слишком много операций с уведомлениями. Попробуйте позже");
+
+function assertDemoMessageEditAccess(userId, messageId) {
+  if (!Number.isInteger(messageId) || messageId <= 0) return { status: 404, code: "MESSAGE_NOT_FOUND", error: "Сообщение не найдено" };
+  let message;
+  for (const entries of Object.values(state.messages)) {
+    message = entries.find((item) => Number(item.id) === messageId && Number(item.senderId) === Number(userId));
+    if (message) break;
+  }
+  if (!message || message.deletedAt) return { status: 404, code: "MESSAGE_NOT_FOUND", error: "Сообщение не найдено" };
+  const peerId = Number(message.recipientId);
+  const pairAccess = assertDemoMessagePairAccess(userId, peerId);
+  if (pairAccess.error) return pairAccess;
+  const clearedThroughMessageId = Number(state.chatHistoryClears[`${userId}:${peerId}`] ?? 0);
+  if (Number(message.id) <= clearedThroughMessageId) return { status: 404, code: "MESSAGE_NOT_FOUND", error: "Сообщение не найдено" };
+  if (message.system) return { status: 409, code: "MESSAGE_SYSTEM_NOT_EDITABLE", error: "Системные сообщения нельзя редактировать" };
+  if (message.kind === "sticker") return { status: 409, code: "MESSAGE_STICKER_NOT_EDITABLE", error: "Стикеры нельзя редактировать" };
+  if (message.attachment) return { status: 409, code: "MESSAGE_ATTACHMENT_NOT_EDITABLE", error: "Сообщения с вложениями нельзя редактировать" };
+  return { message, peerId };
+}
+
+function assertDemoMessageDeleteAccess(userId, messageId) {
+  if (!Number.isInteger(messageId) || messageId <= 0) return { status: 404, code: "MESSAGE_NOT_FOUND", error: "Сообщение не найдено" };
+  let message;
+  for (const entries of Object.values(state.messages)) {
+    message = entries.find((item) => Number(item.id) === messageId && Number(item.senderId) === Number(userId) && !item.deletedAt);
+    if (message) break;
+  }
+  if (!message) return { status: 404, code: "MESSAGE_NOT_FOUND", error: "Сообщение не найдено" };
+  const peerId = Number(message.recipientId);
+  const pairAccess = assertDemoMessagePairAccess(userId, peerId);
+  if (pairAccess.error) return pairAccess;
+  const clearedThroughMessageId = Number(state.chatHistoryClears[`${userId}:${peerId}`] ?? 0);
+  if (Number(message.id) <= clearedThroughMessageId) return { status: 404, code: "MESSAGE_NOT_FOUND", error: "Сообщение не найдено" };
+  if (message.system) return { status: 409, code: "MESSAGE_SYSTEM_NOT_DELETABLE", error: "Системные сообщения нельзя удалять" };
+  return { message, peerId };
+}
+
+function demoMessageMentions(authorUserId, value, text) {
+  const raw = Array.isArray(value) ? value : Array.isArray(value?.userIds) ? value.userIds : [];
+  const seen = new Set();
+  const refs = raw.map((entry) => typeof entry === "object" ? entry : { userId: entry })
+    .map((entry) => ({ userId: Number(entry.userId ?? entry.id), token: typeof entry.token === "string" ? entry.token.trim() : "" }))
+    .filter((entry) => Number.isInteger(entry.userId) && entry.userId > 0 && entry.userId !== Number(authorUserId) && !seen.has(entry.userId) && (seen.add(entry.userId), true))
+    .filter((entry) => /^@[\w.-]{1,30}$/u.test(entry.token) && String(text).includes(entry.token))
+    .slice(0, 30);
+  const author = users.find((user) => user.id === Number(authorUserId));
+  return refs.map((ref) => {
+    const target = users.find((user) => user.id === ref.userId && !user.deletedAt && !user.purged);
+    const unavailable = !target
+      || state.blocks.some((item) => [item.blockerId, item.blockedId].includes(Number(authorUserId)) && [item.blockerId, item.blockedId].includes(ref.userId))
+      || state.userHides.some((item) => item.hiderUserId === Number(authorUserId) && item.hiddenUserId === ref.userId);
+    if (unavailable) throw Object.assign(new Error("Упомянутый пользователь недоступен"), { statusCode: 400 });
+    if (["Читатель", "Писатель", "Блогер"].includes(author?.profile.type) && ["Читатель", "Писатель", "Блогер"].includes(target.profile.type)) {
+      const ages = [demoInteractionAge(author), demoInteractionAge(target)];
+      if (ages.some((age) => age === null) || (ages[0] < 18) !== (ages[1] < 18)) throw Object.assign(new Error("Упомянутый пользователь недоступен"), { statusCode: 400 });
+    }
+    return { userId: target.id, token: ref.token, username: target.username, displayName: target.profile.name };
+  });
+}
+
+function demoEditableMessageDto(message, viewerId) {
+  const likedByUserIds = [...(state.messageReactions[message.id] ?? [])];
+  return {
+    id: Number(message.id), senderId: Number(message.senderId), mine: Number(message.senderId) === Number(viewerId),
+    text: message.text, mentions: structuredClone(message.mentions ?? []), read: Boolean(message.readAt),
+    ...(message.kind === "sticker" ? { kind: "sticker", sticker: stickerDto(archivedBookSticker(message.stickerId)) } : {}),
+    editedAt: message.editedAt, createdAt: message.createdAt,
+    likeCount: likedByUserIds.length, likedByViewer: likedByUserIds.includes(Number(viewerId)), likedByUserIds,
+  };
+}
+
+function demoVisibleSearchMessages(userId, peerId, search, cursor = null) {
+  const clearedThrough = Number(state.chatHistoryClears[`${userId}:${peerId}`] ?? 0);
+  return (state.messages[conversationKey(userId, peerId)] ?? [])
+    .filter((message) => Number(message.id) > clearedThrough && !message.deletedAt && !message.deletedBeforeRead && messageMatchesSearch(message.text, search.tokens))
+    .filter((message) => !cursor || new Date(message.createdAt).getTime() < cursor.createdAt.getTime() || new Date(message.createdAt).getTime() === cursor.createdAt.getTime() && Number(message.id) < cursor.id)
+    .sort((first, second) => new Date(second.createdAt).getTime() - new Date(first.createdAt).getTime() || Number(second.id) - Number(first.id));
+}
+
+function demoMessageSearchResult(message, tokens) {
+  const author = users.find((user) => user.id === Number(message.senderId));
+  return {
+    messageId: Number(message.id),
+    snippet: messageSearchSnippet(message.text, tokens),
+    createdAt: new Date(message.createdAt).toISOString(),
+    author: { id: Number(message.senderId), name: author?.profile.name ?? "Пользователь", username: author?.username ?? "" },
+  };
+}
+
 function demoCatalogOwner(book) {
   return book.creatorUserId ? users.find((user) => user.id === book.creatorUserId) : users.find((user) => [...(user.authorBooks ?? []), ...(user.communityBooks ?? [])].some((item) => item.id === book.id));
 }
@@ -513,7 +749,30 @@ function demoViewerCanReadAttachment(user, attachment) {
 }
 
 function notification(userId, actorId, type, title, text, extra = {}) {
-  state.notifications.push({ id: nextId++, userId, actorId, type, title, text, unread: true, createdAt: "сейчас", ...extra });
+  const category = notificationCategoryFor(type);
+  const baseKey = `${type}:${userId}:${actorId ?? 0}:${extra.materialKind ?? "none"}:${extra.materialId ?? 0}`;
+  const occurrence = state.notificationEvents.filter((item) => item.userId === Number(userId) && item.actorId === (Number(actorId) || null) && item.type === type && (item.materialKind ?? null) === (extra.materialKind ?? null) && Number(item.materialId ?? 0) === Number(extra.materialId ?? 0)).length + 1;
+  const dedupeKey = String(extra.dedupeKey ?? `${baseKey}:g${occurrence}`);
+  const existing = state.notificationEvents.find((item) => item.userId === Number(userId) && item.dedupeKey === dedupeKey);
+  if (existing) return existing;
+  const event = { id: nextId++, userId: Number(userId), actorId: Number(actorId) || null, type, category, title, text, materialKind: extra.materialKind, materialId: extra.materialId, dedupeKey, createdAt: new Date().toISOString() };
+  state.notificationEvents.push(event);
+  const preferences = demoNotificationPreferences(Number(userId), "UTC");
+  if (category === "system_security" || preferences.categories[category].inAppEnabled) {
+    state.notificationDeliveries.push({ id: nextId++, eventId: event.id, userId: Number(userId), channel: "in_app", mode: "immediate", idempotencyKey: `notification:${event.id}:in_app:immediate`, status: "delivered", deliveredAt: new Date().toISOString() });
+    const projected = { id: nextId++, eventId: event.id, userId, actorId, type, title, text, unread: true, createdAt: "сейчас", materialKind: extra.materialKind, materialId: extra.materialId, groupKey: extra.groupKey };
+    const groupedIndex = extra.groupKey ? state.notifications.findIndex((item) => item.userId === Number(userId) && item.groupKey === extra.groupKey) : -1;
+    if (groupedIndex >= 0) state.notifications[groupedIndex] = { ...state.notifications[groupedIndex], ...projected };
+    else state.notifications.push(projected);
+  }
+  if (preferences.categories[category].telegramEnabled && preferences.readiness.telegram.available) {
+    state.notificationDeliveries.push({ id: nextId++, eventId: event.id, userId: Number(userId), channel: "telegram", mode: "immediate", idempotencyKey: `notification:${event.id}:telegram:immediate`, status: "pending", nextAttemptAt: new Date().toISOString() });
+  }
+  const emailMode = preferences.categories[category].emailMode;
+  if (emailMode !== "off" && preferences.readiness.email.available) {
+    state.notificationDeliveries.push({ id: nextId++, eventId: event.id, userId: Number(userId), channel: "email", mode: emailMode, idempotencyKey: `notification:${event.id}:email:${emailMode}`, status: "pending", nextAttemptAt: (emailMode === "daily" ? nextDailyNotificationAt(new Date(), preferences.effectiveTimezone) : new Date()).toISOString() });
+  }
+  return event;
 }
 
 router.get("/health", (_request, response) => {
@@ -550,6 +809,47 @@ if (process.env.DEMO_MODE === "1") {
     demoLegalAcceptances.set(peer.id, new Set(demoLegalDocuments.map((document) => document.id)));
     state.friendRequests.push({ id: nextId++, fromId: peer.id, toId: 3, status: "pending", message: "Проверка системного сообщения" });
     response.status(201).json({ peerId: peer.id, minorPeerId: minorPeer.id, deletedCommunityId: deletedCommunity.id, deletedPublisherId: deletedPublisher.id });
+  });
+  router.post("/__test__/notifications-scenario", (_request, response) => {
+    state.notifications = Array.from({ length: 24 }, (_, index) => ({
+      id: 20_000 + index,
+      userId: 3,
+      actorId: 2,
+      type: index < 22 ? "like" : index === 22 ? "mention" : "future_security_event",
+      title: `Тестовое уведомление ${index + 1}`,
+      text: "Сценарий проверки уведомлений",
+      unread: true,
+      createdAt: new Date(Date.now() - index * 1_000).toISOString(),
+    }));
+    response.status(201).json({ ok: true, count: state.notifications.length });
+  });
+  router.post("/__test__/telegram-legacy-scenario", (request, response) => {
+    const user = users.find((item) => item.id === 3);
+    user.telegramSubject = "legacy-auth-subject";
+    if (request.body?.verified === true) {
+      user.telegramUserId = 987654321;
+      user.telegramConnectedAt = new Date().toISOString();
+    } else {
+      delete user.telegramUserId;
+      delete user.telegramConnectedAt;
+    }
+    response.status(201).json({ ok: true, verified: Boolean(user.telegramUserId) });
+  });
+  router.post("/__test__/notification-event-scenario", (request, response) => {
+    const user = users.find((item) => item.id === 3);
+    user.emailVerifiedAt = new Date().toISOString();
+    user.telegramUserId = 987654321;
+    user.telegramConnectedAt = new Date().toISOString();
+    user.notificationTimezone = "Asia/Almaty";
+    state.notificationPreferences[user.id] = {
+      likes: { inAppEnabled: true, telegramEnabled: true, emailMode: "daily" },
+    };
+    if (request.body?.inspectOnly !== true) {
+      const input = { materialKind: "review", materialId: 51, dedupeKey: "demo-like:51:2", groupKey: "like:review:51" };
+      notification(user.id, 2, "like", "Нравится", "Внутренний текст, который не должен стать delivery payload.", input);
+      notification(user.id, 2, "like", "Нравится", "Повтор", input);
+    }
+    response.status(201).json({ events: structuredClone(state.notificationEvents), deliveries: structuredClone(state.notificationDeliveries), notifications: structuredClone(state.notifications) });
   });
 }
 
@@ -721,6 +1021,39 @@ router.post("/auth/deleted-profile/new", (request, response) => {
   response.status(201).json(bootstrap(user.id));
 });
 
+router.post("/integrations/telegram/webhook", (request, response) => {
+  if (!telegramWebhookAuthorized(request.get("X-Telegram-Bot-Api-Secret-Token"))) return response.status(403).json({ ok: false });
+  const message = request.body?.message;
+  const match = String(message?.text ?? "").trim().match(/^\/start(?:@[A-Za-z0-9_]+)?\s+([A-Za-z0-9_-]{20,100})$/);
+  const telegramUserId = Number(message?.from?.id);
+  const link = match ? demoTelegramLinkTokens.get(match[1]) : null;
+  if (!link || link.expiresAt <= Date.now() || !Number.isSafeInteger(telegramUserId) || telegramUserId < 1) return response.json({ ok: true, linked: false });
+  demoTelegramLinkTokens.delete(match[1]);
+  const user = users.find((item) => item.id === link.userId);
+  if (!user || users.some((item) => item.id !== user.id && item.telegramUserId === telegramUserId)) return response.json({ ok: true, linked: false });
+  user.telegramUserId = telegramUserId;
+  user.telegramConnectedAt = new Date().toISOString();
+  user.telegramDisplayName = safeTelegramDisplayName(message.from);
+  response.json({ ok: true, linked: true });
+});
+
+router.get("/notifications/email/unsubscribe", (request, response) => {
+  const token = String(request.query?.token ?? "");
+  if (!verifyEmailUnsubscribeToken(token)) return response.status(400).type("html").send("<!doctype html><meta charset=utf-8><title>Book Meet</title><p>Ссылка отписки недействительна или истекла.</p>");
+  const escaped = token.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/\"/g, "&quot;");
+  response.type("html").send(`<!doctype html><meta charset="utf-8"><title>Book Meet</title><main><h1>Отключить email-уведомления?</h1><p>Системные уведомления внутри Book Meet останутся включены.</p><form method="post" action="/api/notifications/email/unsubscribe"><input type="hidden" name="token" value="${escaped}"><button type="submit">Отключить необязательные письма</button></form></main>`);
+});
+
+router.post("/notifications/email/unsubscribe", (request, response) => {
+  const verified = verifyEmailUnsubscribeToken(request.body?.token);
+  if (!verified) return response.status(400).json({ code: "EMAIL_UNSUBSCRIBE_INVALID", error: "Ссылка отписки недействительна или истекла" });
+  const preferences = state.notificationPreferences[verified.userId] ??= {};
+  for (const category of NOTIFICATION_CATEGORIES) preferences[category] = { ...(preferences[category] ?? {}), emailMode: "off" };
+  for (const delivery of state.notificationDeliveries) if (delivery.userId === verified.userId && delivery.channel === "email" && ["pending", "failed"].includes(delivery.status)) delivery.status = "cancelled";
+  if (request.is("application/x-www-form-urlencoded")) return response.type("html").send("<!doctype html><meta charset=utf-8><title>Book Meet</title><p>Email-уведомления отключены.</p>");
+  response.json({ unsubscribed: true });
+});
+
 router.use(requireUser);
 
 // Demo-only realtime transport. The production server has its own realtime
@@ -734,17 +1067,19 @@ router.get("/realtime", (request, response) => {
   response.setHeader("X-Accel-Buffering", "no");
   response.flushHeaders?.();
   response.write("event: connected\ndata: demo\n\n");
-  demoRealtimeClients.add(response);
-  request.on("close", () => demoRealtimeClients.delete(response));
+  const client = { response, userId: Number(request.demoUserId) };
+  demoRealtimeClients.add(client);
+  request.on("close", () => demoRealtimeClients.delete(client));
 });
 
 router.use((request, response, next) => {
   if (!["GET", "HEAD", "OPTIONS"].includes(request.method)) {
     response.once("finish", () => {
       if (response.statusCode >= 400) return;
-      for (const client of demoRealtimeClients) {
-        try { client.write(`event: update\ndata: ${Date.now()}\n\n`); } catch { demoRealtimeClients.delete(client); }
-      }
+      if (response.locals.chatRealtime) {
+        const { userIds, payload } = response.locals.chatRealtime;
+        broadcastDemoRealtime("chat", payload, userIds);
+      } else broadcastDemoRealtime();
     });
   }
   next();
@@ -1743,8 +2078,59 @@ router.delete("/saves", (request, response) => {
   response.json({ ok: true });
 });
 
+router.post("/users/:userId/hide", (request, response) => {
+  const hiddenUserId = Number(request.params.userId);
+  if (!users.some((user) => user.id === hiddenUserId && !user.deletedAt && !user.purged)) return response.status(404).json({ error: "Пользователь не найден" });
+  if (hiddenUserId === request.demoUserId) return response.status(400).json({ error: "Нельзя скрыть этого пользователя" });
+  if (!state.userHides.some((hide) => hide.hiderUserId === request.demoUserId && hide.hiddenUserId === hiddenUserId)) state.userHides.push({ hiderUserId: request.demoUserId, hiddenUserId, createdAt: new Date().toISOString() });
+  response.status(201).json({ ok: true, hiddenUserId });
+});
+
+router.delete("/users/:userId/hide", (request, response) => {
+  const hiddenUserId = Number(request.params.userId);
+  state.userHides = state.userHides.filter((hide) => hide.hiderUserId !== request.demoUserId || hide.hiddenUserId !== hiddenUserId);
+  response.json({ ok: true });
+});
+
+router.get("/users/me/hidden-users", (request, response) => {
+  const cursor = Math.max(0, Number(request.query.cursor) || 0);
+  const entries = state.userHides.filter((hide) => hide.hiderUserId === request.demoUserId && hide.hiddenUserId > cursor).sort((left, right) => left.hiddenUserId - right.hiddenUserId).slice(0, 21);
+  const page = entries.slice(0, 20);
+  response.json({ users: page.flatMap((hide) => { const user = users.find((entry) => entry.id === hide.hiddenUserId); return user ? [{ id: user.id, displayName: user.profile.name, username: user.username, initials: user.initials, color: user.color, avatarUrl: user.avatarUrl, hiddenAt: hide.createdAt }] : []; }), nextCursor: entries.length > 20 ? page.at(-1)?.hiddenUserId ?? null : null });
+});
+
+router.get("/users/mentions", (request, response) => {
+  const query = String(request.query.q ?? "").trim().toLocaleLowerCase("ru");
+  const viewer = users.find((user) => user.id === request.demoUserId);
+  const adultViewer = viewer?.isAdmin || ["Издатель", "Сообщество"].includes(viewer?.profile.type) || Number(viewer?.profile.age ?? -1) >= 18;
+  const hidden = new Set(state.userHides.filter((hide) => hide.hiderUserId === request.demoUserId).map((hide) => hide.hiddenUserId));
+  const blocked = new Set(state.blocks.filter((block) => [block.blockerId, block.blockedId].includes(request.demoUserId)).flatMap((block) => [block.blockerId, block.blockedId]));
+  response.json({ users: users.filter((user) => user.id !== request.demoUserId && !hidden.has(user.id) && !blocked.has(user.id) && !user.deletedAt && !user.purged && (user.isAdmin || ["Издатель", "Сообщество"].includes(user.profile.type) || Number(user.profile.age ?? -1) >= 18) === adultViewer && `${user.username} ${user.profile.name}`.toLocaleLowerCase("ru").includes(query)).slice(0, 10).map((user) => ({ id: user.id, username: user.username, displayName: user.profile.name, initials: user.initials, color: user.color, avatarUrl: user.avatarUrl })) });
+});
+
+function demoCommentDto(comment, viewerId, redacted = false) {
+  const user = users.find((entry) => entry.id === comment.userId);
+  return { id: comment.id, userId: comment.userId, text: redacted || comment.deleted ? "Комментарий скрыт" : comment.text, createdAt: comment.createdAt, updatedAt: comment.updatedAt ?? comment.createdAt, deleted: Boolean(redacted || comment.deleted), parentCommentId: comment.parentCommentId, replyToCommentId: comment.replyToCommentId, author: redacted || comment.deleted || !user ? undefined : { displayName: user.profile.name, username: user.username, initials: user.initials, color: user.color, avatarUrl: user.avatarUrl }, mentions: redacted || comment.deleted ? [] : comment.mentions ?? [], likeCount: (comment.likedUserIds ?? []).length, likedByViewer: (comment.likedUserIds ?? []).includes(viewerId), replyCount: comment.replyCount ?? 0, nextRepliesCursor: comment.nextRepliesCursor ?? null };
+}
+
 router.get("/comments", (request, response) => {
-  response.json({ comments: state.comments[`${request.query.kind}-${request.query.id}`] ?? [] });
+  const entries = state.comments[`${request.query.kind}-${request.query.id}`] ?? [];
+  const hidden = new Set(state.userHides.filter((hide) => hide.hiderUserId === request.demoUserId).map((hide) => hide.hiddenUserId));
+  const cursor = Math.max(0, Number(request.query.cursor) || 0);
+  const rootId = Number(request.query.rootId) || null;
+  const visibleReplies = (id) => entries.filter((comment) => comment.parentCommentId === id && !hidden.has(comment.userId));
+  if (rootId) {
+    const rows = visibleReplies(rootId).filter((comment) => comment.id > cursor).sort((left, right) => left.id - right.id);
+    const page = rows.slice(0, 3);
+    return response.json({ comments: page.map((comment) => demoCommentDto(comment, request.demoUserId)), nextCursor: rows.length > 3 ? page.at(-1)?.id ?? null : null });
+  }
+  const roots = entries.filter((comment) => !comment.parentCommentId && comment.id > cursor).filter((comment) => !hidden.has(comment.userId) || visibleReplies(comment.id).length).sort((left, right) => left.id - right.id);
+  const page = roots.slice(0, 3);
+  const comments = page.flatMap((root) => {
+    const replies = visibleReplies(root.id);
+    return [demoCommentDto({ ...root, replyCount: replies.length, nextRepliesCursor: replies.length > 3 ? 3 : null }, request.demoUserId, hidden.has(root.userId)), ...replies.slice(0, 3).map((reply) => demoCommentDto(reply, request.demoUserId))];
+  });
+  response.json({ comments, nextCursor: roots.length > 3 ? page.at(-1)?.id ?? null : null });
 });
 
 router.get("/material-stats", (request, response) => {
@@ -1758,7 +2144,9 @@ router.get("/material-stats", (request, response) => {
     return [{ kind, id: Number(id), createdAt: entry.createdAt }];
   }).sort((left, right) => Date.parse(right.createdAt) - Date.parse(left.createdAt));
   const saveCounts = Object.fromEntries(Object.entries(state.saves).map(([key, entries]) => [key, entries.length]));
-  response.json({ commenters, commentCounts, savedMaterialRefs, saveCounts });
+  const repostCounts = {};
+  for (const repost of state.reposts) repostCounts[`${repost.sourceKind}-${repost.sourceId}`] = (repostCounts[`${repost.sourceKind}-${repost.sourceId}`] ?? 0) + 1;
+  response.json({ commenters, commentCounts, savedMaterialRefs, saveCounts, repostCounts });
 });
 
 router.get("/admin/statistics", (request, response) => {
@@ -1791,9 +2179,22 @@ router.get("/admin/statistics", (request, response) => {
 
 router.post("/comments", (request, response) => {
   const key = `${request.body.materialKind}-${request.body.materialId}`;
-  const comment = { id: nextId++, userId: request.demoUserId, text: String(request.body.body ?? ""), createdAt: new Date().toISOString() };
+  const entries = state.comments[key] ??= [];
+  const replyTo = request.body.replyToCommentId ? entries.find((entry) => entry.id === Number(request.body.replyToCommentId)) : null;
+  const root = replyTo ? (replyTo.parentCommentId ? entries.find((entry) => entry.id === replyTo.parentCommentId) : replyTo) : request.body.parentCommentId ? entries.find((entry) => entry.id === Number(request.body.parentCommentId) && !entry.parentCommentId) : null;
+  if ((request.body.parentCommentId || request.body.replyToCommentId) && !root) return response.status(400).json({ error: "Корневой комментарий не найден" });
+  let text = String(request.body.body ?? "").trim();
+  const mentions = (Array.isArray(request.body.mentions) ? request.body.mentions : []).map((entry) => typeof entry === "number" ? { userId: entry, token: "" } : entry).filter((entry) => users.some((user) => user.id === Number(entry?.userId)));
+  if (replyTo?.parentCommentId && replyTo.userId !== request.demoUserId) { const user = users.find((entry) => entry.id === replyTo.userId); const token = `@${user?.username ?? "user"}`; if (!text.startsWith(token)) text = `${token} ${text}`; if (!mentions.some((entry) => Number(entry.userId) === replyTo.userId)) mentions.push({ userId: replyTo.userId, token, username: user?.username, displayName: user?.profile.name }); }
+  const comment = { id: nextId++, userId: request.demoUserId, text, createdAt: new Date().toISOString(), parentCommentId: root?.id, replyToCommentId: replyTo?.id, mentions, likedUserIds: [] };
   (state.comments[key] ??= []).push(comment);
-  response.json({ comment });
+  response.status(201).json({ comment: demoCommentDto(comment, request.demoUserId) });
+});
+
+router.patch("/comments/:id", (request, response) => {
+  const commentId = Number(request.params.id);
+  for (const comments of Object.values(state.comments)) { const comment = comments.find((entry) => entry.id === commentId); if (!comment) continue; if (comment.userId !== request.demoUserId) return response.status(403).json({ error: "Редактировать комментарий может только автор" }); comment.text = String(request.body.body ?? "").trim(); comment.updatedAt = new Date().toISOString(); return response.json({ comment: demoCommentDto(comment, request.demoUserId) }); }
+  response.status(404).json({ error: "Комментарий не найден" });
 });
 
 router.delete("/comments/:id", (request, response) => {
@@ -1803,10 +2204,38 @@ router.delete("/comments/:id", (request, response) => {
     const comment = comments.find((entry) => entry.id === commentId);
     if (!comment) continue;
     if (comment.userId !== request.demoUserId && !user?.isAdmin) return response.status(403).json({ error: "Удалить комментарий может только его автор или администратор" });
+    if (!comment.parentCommentId && comments.some((entry) => entry.parentCommentId === commentId)) { comment.deleted = true; comment.text = ""; return response.json({ comment: { ...demoCommentDto(comment, request.demoUserId), removed: false } }); }
     state.comments[key] = comments.filter((entry) => entry.id !== commentId);
-    return response.json({ ok: true });
+    return response.json({ comment: { ...demoCommentDto(comment, request.demoUserId), removed: true } });
   }
   response.status(404).json({ error: "Комментарий не найден" });
+});
+
+for (const method of ["post", "delete"]) router[method]("/comments/:id/like", (request, response) => {
+  const commentId = Number(request.params.id);
+  for (const comments of Object.values(state.comments)) { const comment = comments.find((entry) => entry.id === commentId && !entry.deleted); if (!comment) continue; comment.likedUserIds ??= []; comment.likedUserIds = method === "post" ? [...new Set([...comment.likedUserIds, request.demoUserId])] : comment.likedUserIds.filter((id) => id !== request.demoUserId); return response.status(method === "post" ? 201 : 200).json({ ok: true, likeCount: comment.likedUserIds.length }); }
+  response.status(404).json({ error: "Комментарий не найден" });
+});
+
+router.post("/materials/:type/:id/repost", (request, response) => {
+  const sourceKind = request.params.type === "publication" ? "excerpt" : request.params.type;
+  const sourceId = Number(request.params.id); const source = demoMaterialSource(sourceKind, sourceId);
+  if (!source) return response.status(404).json({ error: "Материал не найден" });
+  if (source.ownerId === request.demoUserId) return response.status(409).json({ error: "Нельзя репостнуть собственный материал" });
+  const text = String(request.body?.text ?? "").replace(/[\u200B-\u200D\u2060\uFEFF]/g, "").trim();
+  if (!text && state.reposts.some((repost) => repost.userId === request.demoUserId && repost.sourceKind === sourceKind && repost.sourceId === sourceId && repost.clean)) return response.status(409).json({ error: "Такой репост уже есть" });
+  const repost = { id: nextId++, userId: request.demoUserId, sourceKind, sourceId, clean: !text, createdAt: new Date().toISOString() };
+  state.reposts.push(repost);
+  if (!text) return response.status(201).json({ repost: { id: repost.id, clean: true, source: { kind: sourceKind, id: sourceId } } });
+  const owner = users.find((user) => user.id === request.demoUserId); const materialId = nextId++;
+  owner.excerpts ??= []; owner.excerpts.push({ id: materialId, previewText: text.slice(0, 500), text, bodyHtml: `<p>${text.replace(/[&<>]/g, (character) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" })[character])}</p>`, bookTitle: "", bookIds: [], isAdult: false, mentions: request.body?.mentions ?? [], createdAt: "сегодня", createdAtValue: new Date().toISOString() });
+  response.status(201).json({ repost: { id: repost.id, clean: false, material: { id: materialId, kind: "excerpt", text } } });
+});
+
+router.delete("/reposts/:id", (request, response) => {
+  const id = Number(request.params.id); const index = state.reposts.findIndex((repost) => repost.id === id && repost.userId === request.demoUserId);
+  if (index < 0) return response.status(404).json({ error: "Репост не найден" });
+  state.reposts.splice(index, 1); response.json({ ok: true });
 });
 
 router.post("/social/friend-requests", (request, response) => {
@@ -1906,17 +2335,138 @@ router.delete("/social/follows/:targetId", (request, response) => {
   response.json({ ok: true });
 });
 
+router.get("/conversations/:id/messages/search", messageSearchRateLimit, (request, response) => {
+  const peerId = Number(request.params.id);
+  const access = assertDemoMessagePairAccess(request.demoUserId, peerId);
+  if (access.error) return response.status(404).json({ code: "MESSAGE_SEARCH_DIALOG_NOT_FOUND", error: "Диалог не найден" });
+  let search; let cursor;
+  try { search = normalizeMessageSearchQuery(request.query.q); cursor = decodeMessageSearchCursor(request.query.cursor); }
+  catch (error) { return response.status(error.statusCode ?? 422).json({ code: error.code, error: error.message }); }
+  const limit = messageSearchLimit(request.query.limit);
+  const allMatches = demoVisibleSearchMessages(request.demoUserId, peerId, search);
+  const matches = demoVisibleSearchMessages(request.demoUserId, peerId, search, cursor);
+  const page = matches.slice(0, limit);
+  const last = page[page.length - 1];
+  response.json({
+    query: search.text,
+    peerId,
+    total: allMatches.length,
+    matches: page.map((message) => demoMessageSearchResult(message, search.tokens)),
+    nextCursor: matches.length > limit && last ? encodeMessageSearchCursor({ id: Number(last.id), createdAt: last.createdAt }) : null,
+  });
+});
+
+router.get("/messages/search", messageSearchRateLimit, (request, response) => {
+  let search; let cursor;
+  try { search = normalizeMessageSearchQuery(request.query.q); cursor = decodeMessageSearchCursor(request.query.cursor); }
+  catch (error) { return response.status(error.statusCode ?? 422).json({ code: error.code, error: error.message }); }
+  const limit = messageSearchLimit(request.query.limit, MESSAGE_SEARCH_GROUP_LIMIT, 20);
+  const groups = [];
+  for (const peer of users) {
+    if (peer.id === request.demoUserId) continue;
+    const access = assertDemoMessagePairAccess(request.demoUserId, peer.id);
+    if (access.error) continue;
+    const matches = demoVisibleSearchMessages(request.demoUserId, peer.id, search);
+    if (!matches.length) continue;
+    const newest = matches[0];
+    if (cursor && !(new Date(newest.createdAt).getTime() < cursor.createdAt.getTime() || new Date(newest.createdAt).getTime() === cursor.createdAt.getTime() && Number(newest.id) < cursor.id)) continue;
+    const pageMatches = matches.slice(0, MESSAGE_SEARCH_GROUP_MATCH_LIMIT);
+    const matchLast = pageMatches[pageMatches.length - 1];
+    groups.push({
+      peer: { id: peer.id, name: peer.profile.name, username: peer.username, type: peer.profile.type, initials: peer.initials, color: peer.color, avatarUrl: peer.avatarUrl },
+      count: matches.length,
+      newestAt: newest.createdAt,
+      newestMessageId: Number(newest.id),
+      matches: pageMatches.map((message) => demoMessageSearchResult(message, search.tokens)),
+      matchesNextCursor: matches.length > MESSAGE_SEARCH_GROUP_MATCH_LIMIT && matchLast ? encodeMessageSearchCursor({ id: Number(matchLast.id), createdAt: matchLast.createdAt }) : null,
+    });
+  }
+  groups.sort((first, second) => new Date(second.newestAt).getTime() - new Date(first.newestAt).getTime() || second.newestMessageId - first.newestMessageId);
+  const page = groups.slice(0, limit);
+  const last = page[page.length - 1];
+  response.json({
+    query: search.text,
+    groups: page.map(({ newestMessageId: _newestMessageId, ...group }) => group),
+    nextCursor: groups.length > limit && last ? encodeMessageSearchCursor({ id: last.newestMessageId, createdAt: last.newestAt }) : null,
+  });
+});
+
+router.get("/stickers", (request, response) => response.json(bookStickerCatalog(requestLocale(request), { pickerOnly: true })));
+
 router.post("/social/messages", (request, response) => {
   const targetId = Number(request.body.targetId);
   const access = assertDemoMessagePairAccess(request.demoUserId, targetId);
   if (access.error) return response.status(access.status).json({ error: access.error, ...(access.code ? { code: access.code } : {}) });
-  const body = String(request.body.body ?? "").trim();
+  const body = normalizeDemoMessageBody(request.body.body);
+  const stickerId = typeof request.body?.stickerId === "string" ? request.body.stickerId.trim() : "";
+  const sticker = stickerId ? activeBookSticker(stickerId) : undefined;
+  if (stickerId && !sticker) return response.status(422).json({ code: "MESSAGE_STICKER_UNKNOWN", error: "Неизвестный или отключённый стикер" });
   const attachment = request.body.attachment && Number(request.body.attachment.id) ? { kind: String(request.body.attachment.kind), id: Number(request.body.attachment.id) } : undefined;
-  if (!body && !attachment) return response.status(400).json({ error: "Сообщение пусто" });
+  if (sticker && (body || attachment || request.body?.mentions || request.body?.mentionUserIds)) return response.status(422).json({ code: "MESSAGE_STICKER_MUST_BE_STANDALONE", error: "Стикер отправляется отдельным сообщением" });
+  if (!body && !attachment && !sticker) return response.status(400).json({ error: "Сообщение пусто" });
   if (attachment && (!demoViewerCanReadAttachment(access.sender, attachment) || !demoViewerCanReadAttachment(access.target, attachment))) return response.status(403).json({ error: "Материал недоступен для отправки" });
-  const message = { id: nextId++, senderId: request.demoUserId, recipientId: targetId, text: body, attachment, createdAt: new Date().toISOString(), readAt: null };
+  let mentions = [];
+  if (!sticker) try { mentions = demoMessageMentions(request.demoUserId, request.body.mentions, body); } catch (error) { return response.status(error.statusCode ?? 400).json({ error: error.message }); }
+  const message = { id: nextId++, senderId: request.demoUserId, recipientId: targetId, text: sticker ? "" : body, attachment: sticker ? undefined : attachment, kind: sticker ? "sticker" : "text", stickerId: sticker?.id, mentions, createdAt: new Date().toISOString(), readAt: null };
   (state.messages[conversationKey(request.demoUserId, targetId)] ??= []).push(message);
-  response.json({ ok: true, message: { ...message, mine: true, unread: false, read: false } });
+  queueDemoChatRealtime(response, [request.demoUserId, targetId], { type: "message.created", messageId: message.id });
+  response.json({ ok: true, message: { ...message, ...(sticker ? { sticker: stickerDto(sticker, requestLocale(request)) } : {}), mine: true, unread: false, read: false, likeCount: 0, likedByViewer: false, likedByUserIds: [] } });
+});
+
+router.patch("/messages/:id", messageEditRateLimit, (request, response) => {
+  const body = normalizeDemoMessageBody(request.body.body);
+  const access = assertDemoMessageEditAccess(request.demoUserId, Number(request.params.id));
+  if (access.error) return response.status(access.status).json({ error: access.error, ...(access.code ? { code: access.code } : {}) });
+  if (!body) return response.status(422).json({ code: "MESSAGE_BODY_REQUIRED", error: "Сообщение не может быть пустым. Для удаления используйте отдельное действие" });
+  let mentions;
+  try { mentions = demoMessageMentions(request.demoUserId, request.body.mentions, body); } catch (error) { return response.status(error.statusCode ?? 400).json({ error: error.message }); }
+  const editedAt = new Date().toISOString();
+  state.messageEditHistory.push({ id: nextId++, messageId: access.message.id, messageReferenceId: access.message.id, editorUserId: request.demoUserId, previousBody: access.message.text, createdAt: editedAt });
+  Object.assign(access.message, { text: body, mentions, editedAt });
+  queueDemoChatRealtime(response, [request.demoUserId, access.peerId], { type: "message.edited", messageId: access.message.id });
+  response.json({ ok: true, message: demoEditableMessageDto(access.message, request.demoUserId) });
+});
+
+router.delete("/messages/:id", messageEditRateLimit, (request, response) => {
+  const messageId = Number(request.params.id);
+  const access = assertDemoMessageDeleteAccess(request.demoUserId, messageId);
+  if (access.error) return response.status(access.status).json({ error: access.error, ...(access.code ? { code: access.code } : {}) });
+  const deletedAt = new Date().toISOString();
+  const deletedBeforeRead = !access.message.readAt;
+  state.messageDeletionEvidence.push({
+    id: nextId++, messageId, messageReferenceId: messageId,
+    senderUserId: request.demoUserId, senderReferenceId: request.demoUserId,
+    recipientUserId: access.peerId, recipientReferenceId: access.peerId,
+    originalBody: access.message.text, messageKind: access.message.kind ?? "text", stickerId: access.message.stickerId, attachment: structuredClone(access.message.attachment),
+    wasRead: !deletedBeforeRead, originalReadAt: access.message.readAt,
+    deletedBeforeRead, deletedAt, moderationRetainedUntil: null,
+  });
+  Object.assign(access.message, { text: "", attachment: undefined, kind: "text", stickerId: undefined, mentions: [], deletedAt, deletedBySenderAt: deletedAt, deletedBeforeRead, moderationRetainedUntil: null });
+  delete state.messageReactions[messageId];
+  state.notifications = state.notifications.filter((item) => !(item.type === "new_message" && item.userId === access.peerId && item.actorId === request.demoUserId && item.materialKind === "message" && Number(item.materialId) === messageId));
+  const cancelledEventIds = state.notificationEvents.filter((item) => item.type === "new_message" && item.userId === access.peerId && item.actorId === request.demoUserId && item.materialKind === "message" && Number(item.materialId) === messageId).map((item) => item.id);
+  state.notificationDeliveries = state.notificationDeliveries.map((item) => cancelledEventIds.includes(item.eventId) && ["pending", "failed"].includes(item.status) ? { ...item, status: "cancelled", cancelledAt: deletedAt, nextAttemptAt: undefined } : item);
+  queueDemoChatRealtime(response, [request.demoUserId, access.peerId], { type: "message.deleted", messageId });
+  response.json({ ok: true, messageId, deletedBeforeRead, ...(deletedBeforeRead ? {} : { tombstone: "Пользователь удалил это сообщение" }) });
+});
+
+router.post("/messages/:id/reactions/like", messageReactionRateLimit, (request, response) => {
+  const messageId = Number(request.params.id);
+  const access = assertDemoMessageReactionAccess(request.demoUserId, messageId);
+  if (access.error) return response.status(access.status).json({ error: access.error, ...(access.code ? { code: access.code } : {}) });
+  const likedByUserIds = state.messageReactions[messageId] ??= [];
+  if (!likedByUserIds.includes(request.demoUserId)) likedByUserIds.push(request.demoUserId);
+  queueDemoChatRealtime(response, [request.demoUserId, access.peerId], { type: "message.reaction.changed", messageId });
+  response.json(demoMessageReactionDto(messageId, request.demoUserId));
+});
+
+router.delete("/messages/:id/reactions/like", messageReactionRateLimit, (request, response) => {
+  const messageId = Number(request.params.id);
+  const access = assertDemoMessageReactionAccess(request.demoUserId, messageId);
+  if (access.error) return response.status(access.status).json({ error: access.error, ...(access.code ? { code: access.code } : {}) });
+  state.messageReactions[messageId] = (state.messageReactions[messageId] ?? []).filter((userId) => userId !== request.demoUserId);
+  queueDemoChatRealtime(response, [request.demoUserId, access.peerId], { type: "message.reaction.changed", messageId });
+  response.json(demoMessageReactionDto(messageId, request.demoUserId));
 });
 
 router.patch("/social/messages/:targetId/read", (request, response) => {
@@ -1924,7 +2474,8 @@ router.patch("/social/messages/:targetId/read", (request, response) => {
   const access = assertDemoMessagePairAccess(request.demoUserId, targetId);
   if (access.error) return response.status(access.status).json({ error: access.error, ...(access.code ? { code: access.code } : {}) });
   const key = conversationKey(request.demoUserId, targetId);
-  (state.messages[key] ?? []).forEach((item) => { if (item.senderId === targetId && item.recipientId === request.demoUserId && !item.readAt) item.readAt = new Date().toISOString(); });
+  (state.messages[key] ?? []).forEach((item) => { if (item.senderId === targetId && item.recipientId === request.demoUserId && !item.readAt && !item.deletedAt && !item.deletedBeforeRead) item.readAt = new Date().toISOString(); });
+  queueDemoChatRealtime(response, [request.demoUserId, targetId], { type: "messages.read" });
   response.json({ ok: true });
 });
 
@@ -1935,6 +2486,7 @@ router.delete("/social/messages/:targetId/history", (request, response) => {
   const entries = state.messages[conversationKey(request.demoUserId, targetId)] ?? [];
   const clearedThroughMessageId = entries.reduce((maximum, item) => Math.max(maximum, Number(item.id)), 0);
   state.chatHistoryClears[`${request.demoUserId}:${targetId}`] = Math.max(Number(state.chatHistoryClears[`${request.demoUserId}:${targetId}`] ?? 0), clearedThroughMessageId);
+  queueDemoChatRealtime(response, [request.demoUserId], { type: "history.cleared" });
   response.json({ ok: true, clearedThroughMessageId });
 });
 
@@ -2068,9 +2620,117 @@ router.delete("/admin/materials/:kind/:id", (request, response) => {
   response.json({ ok: true });
 });
 
-router.patch("/notifications/read-all", (request, response) => {
-  state.notifications.forEach((item) => { if (item.userId === request.demoUserId) item.unread = false; });
-  response.json({ ok: true });
+function demoNotificationPreferences(userId, requestTimezone) {
+  const user = users.find((item) => item.id === userId);
+  const rows = Object.entries(state.notificationPreferences[userId] ?? {}).map(([category, preference]) => ({
+    category,
+    in_app_enabled: preference.inAppEnabled,
+    telegram_enabled: preference.telegramEnabled,
+    email_mode: preference.emailMode,
+  }));
+  return notificationPreferencesState({
+    rows,
+    account: {
+      email: user?.email,
+      email_verified_at: user?.emailVerifiedAt,
+      notification_timezone: user?.notificationTimezone,
+      telegram_user_id: user?.telegramUserId,
+      telegram_connected_at: user?.telegramConnectedAt,
+      telegram_display_name: user?.telegramDisplayName,
+    },
+    requestTimezone,
+  });
+}
+
+router.get("/users/me/notification-preferences", (request, response) => {
+  response.json(demoNotificationPreferences(request.demoUserId, request.get("X-BookMeet-Timezone")));
+});
+
+router.put("/users/me/notification-preferences", demoNotificationPreferenceRateLimit, (request, response) => {
+  let payload;
+  try { payload = validateNotificationPreferencesPayload(request.body); } catch (error) { return response.status(error.statusCode ?? 400).json({ code: error.code, error: error.message }); }
+  const user = users.find((item) => item.id === request.demoUserId);
+  const current = demoNotificationPreferences(request.demoUserId, request.get("X-BookMeet-Timezone"));
+  for (const changes of Object.values(payload.categories ?? {})) {
+    if (changes.telegramEnabled === true && !current.readiness.telegram.available) return response.status(409).json({ code: "TELEGRAM_NOTIFICATIONS_UNAVAILABLE", error: "Telegram-уведомления недоступны: подключение аккаунта или доставка не подтверждены" });
+    if (changes.emailMode && changes.emailMode !== "off" && !current.readiness.email.available) return response.status(409).json({ code: "EMAIL_NOTIFICATIONS_UNAVAILABLE", error: "Email-уведомления недоступны: адрес или доставка не подтверждены" });
+  }
+  const preferences = state.notificationPreferences[request.demoUserId] ??= {};
+  for (const [category, changes] of Object.entries(payload.categories ?? {})) {
+    preferences[category] = { ...current.categories[category], ...changes };
+    if (changes.telegramEnabled === false) for (const delivery of state.notificationDeliveries) if (delivery.userId === request.demoUserId && delivery.channel === "telegram" && ["pending", "failed"].includes(delivery.status) && state.notificationEvents.find((event) => event.id === delivery.eventId)?.category === category) delivery.status = "cancelled";
+    if (changes.emailMode === "off") for (const delivery of state.notificationDeliveries) if (delivery.userId === request.demoUserId && delivery.channel === "email" && ["pending", "failed"].includes(delivery.status) && state.notificationEvents.find((event) => event.id === delivery.eventId)?.category === category) delivery.status = "cancelled";
+  }
+  if (Object.hasOwn(payload, "timezone")) user.notificationTimezone = payload.timezone ?? undefined;
+  response.json(demoNotificationPreferences(request.demoUserId, request.get("X-BookMeet-Timezone")));
+});
+
+function demoLegacyTelegramSettings(userId, requestTimezone) {
+  const current = demoNotificationPreferences(userId, requestTimezone);
+  const enabledCanonical = NOTIFICATION_CATEGORIES.filter((category) => current.categories[category].telegramEnabled);
+  return {
+    connected: current.readiness.telegram.connected,
+    available: current.readiness.telegram.available,
+    enabled: current.readiness.telegram.available && enabledCanonical.length > 0,
+    categories: legacyTelegramCategoriesForPreferences(enabledCanonical),
+  };
+}
+
+router.post("/users/me/telegram-link", demoNotificationPreferenceRateLimit, (request, response) => {
+  if (process.env.USER_TELEGRAM_NOTIFICATIONS_READY !== "1") return response.status(503).json({ code: "TELEGRAM_NOTIFICATIONS_UNAVAILABLE", error: "Подключение Telegram временно недоступно" });
+  for (const [token, link] of demoTelegramLinkTokens) if (link.userId === request.demoUserId) demoTelegramLinkTokens.delete(token);
+  const token = createTelegramLinkToken();
+  const expiresAt = Date.now() + 15 * 60_000;
+  demoTelegramLinkTokens.set(token, { userId: request.demoUserId, expiresAt });
+  response.status(201).json({ deepLink: `https://t.me/BookMeetDemoBot?start=${encodeURIComponent(token)}`, expiresAt: new Date(expiresAt).toISOString() });
+});
+
+router.post("/users/me/telegram/test", demoNotificationPreferenceRateLimit, (request, response) => {
+  const user = users.find((item) => item.id === request.demoUserId);
+  if (process.env.USER_TELEGRAM_NOTIFICATIONS_READY !== "1" || !user?.telegramUserId || !user?.telegramConnectedAt) return response.status(409).json({ code: "TELEGRAM_NOTIFICATIONS_UNAVAILABLE", error: "Telegram не подключён" });
+  response.json({ delivered: true });
+});
+
+router.get("/users/me/telegram-notifications", (request, response) => {
+  response.json(demoLegacyTelegramSettings(request.demoUserId, request.get("X-BookMeet-Timezone")));
+});
+
+router.patch("/users/me/telegram-notifications", demoNotificationPreferenceRateLimit, (request, response) => {
+  const requestedCategories = Array.isArray(request.body?.categories) ? request.body.categories.map(String) : [];
+  if (requestedCategories.some((category) => !LEGACY_TELEGRAM_NOTIFICATION_CATEGORIES.includes(category))) return response.status(400).json({ code: "INVALID_NOTIFICATION_PREFERENCES", error: "Некорректная категория Telegram-уведомлений" });
+  const enabled = request.body?.enabled === true;
+  const selectedCanonical = new Set(canonicalCategoriesForLegacyTelegram(requestedCategories));
+  if (enabled && selectedCanonical.size === 0) return response.status(400).json({ code: "INVALID_NOTIFICATION_PREFERENCES", error: "Выбранные категории не поддерживаются новым центром уведомлений" });
+  const current = demoNotificationPreferences(request.demoUserId, request.get("X-BookMeet-Timezone"));
+  if (enabled && !current.readiness.telegram.available) return response.status(409).json({ code: "TELEGRAM_NOTIFICATIONS_UNAVAILABLE", error: "Telegram-уведомления недоступны: подключение аккаунта или доставка не подтверждены" });
+  const preferences = state.notificationPreferences[request.demoUserId] ??= {};
+  for (const category of NOTIFICATION_CATEGORIES) preferences[category] = { ...current.categories[category], telegramEnabled: enabled && selectedCanonical.has(category) };
+  if (!enabled) for (const delivery of state.notificationDeliveries) if (delivery.userId === request.demoUserId && delivery.channel === "telegram" && ["pending", "failed"].includes(delivery.status)) delivery.status = "cancelled";
+  response.json(demoLegacyTelegramSettings(request.demoUserId, request.get("X-BookMeet-Timezone")));
+});
+
+router.delete("/users/me/telegram", demoNotificationPreferenceRateLimit, (request, response) => {
+  const user = users.find((item) => item.id === request.demoUserId);
+  delete user.telegramUserId;
+  delete user.telegramConnectedAt;
+  delete user.telegramDisplayName;
+  for (const [token, link] of demoTelegramLinkTokens) if (link.userId === request.demoUserId) demoTelegramLinkTokens.delete(token);
+  const preferences = state.notificationPreferences[request.demoUserId] ?? {};
+  for (const category of Object.keys(preferences)) preferences[category] = { ...preferences[category], telegramEnabled: false };
+  for (const delivery of state.notificationDeliveries) if (delivery.userId === request.demoUserId && delivery.channel === "telegram" && ["pending", "failed"].includes(delivery.status)) delivery.status = "cancelled";
+  response.json({ disconnected: true });
+});
+
+router.patch("/notifications/read-all", demoNotificationReadRateLimit, (request, response) => {
+  const category = String(request.body?.category ?? "");
+  if (category !== "all" && !NOTIFICATION_CATEGORIES.includes(category)) return response.status(400).json({ code: "INVALID_NOTIFICATION_CATEGORY", error: "Укажите диапазон уведомлений" });
+  if (request.body?.confirmed !== undefined && typeof request.body.confirmed !== "boolean") return response.status(400).json({ code: "INVALID_NOTIFICATION_CONFIRMATION", error: "Некорректное подтверждение" });
+  const selected = state.notifications.filter((item) => item.userId === request.demoUserId && item.unread && (category === "all" || notificationCategoryFor(item.type) === category));
+  if (selected.length > NOTIFICATION_READ_CONFIRMATION_THRESHOLD && request.body?.confirmed !== true) {
+    return response.status(409).json({ code: "NOTIFICATION_READ_CONFIRMATION_REQUIRED", error: "Требуется подтверждение массового прочтения", category, affectedCount: selected.length, threshold: NOTIFICATION_READ_CONFIRMATION_THRESHOLD });
+  }
+  selected.forEach((item) => { item.unread = false; });
+  response.json({ ok: true, category, affectedCount: selected.length, changedIds: selected.map((item) => item.id) });
 });
 
 router.patch("/notifications/:id/read", (request, response) => {

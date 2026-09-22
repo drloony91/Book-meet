@@ -37,12 +37,18 @@ function mimeHeader(value) {
   return `=?UTF-8?B?${Buffer.from(value, "utf8").toString("base64")}?=`;
 }
 
-function sendWithLocalMta({ to, subject, text }, config, environment) {
+function safeMessageId(value) {
+  const token = String(value ?? "").replace(/[^A-Za-z0-9._-]/g, "-").slice(0, 160);
+  return token ? `<${token}@bookmeet.club>` : undefined;
+}
+
+function sendWithLocalMta({ to, subject, text, messageId }, config, environment) {
   const sendmailPath = environment.SENDMAIL_PATH || "/usr/sbin/sendmail";
   const message = [
     `From: ${config.from}`,
     `To: ${to}`,
     `Subject: ${mimeHeader(subject)}`,
+    ...(safeMessageId(messageId) ? [`Message-ID: ${safeMessageId(messageId)}`] : []),
     "MIME-Version: 1.0",
     "Content-Type: text/plain; charset=UTF-8",
     "Content-Transfer-Encoding: 8bit",
@@ -111,7 +117,7 @@ async function smtpCommand(socket, next, command, accepted = [250]) {
   return reply;
 }
 
-async function sendWithSocketSmtp({ to, subject, text }, config) {
+async function sendWithSocketSmtp({ to, subject, text, messageId }, config) {
   const isLocal = config.host === "localhost" || config.host === "127.0.0.1";
   let socket = await connectSmtp(config);
   let next = smtpReplies(socket);
@@ -138,26 +144,40 @@ async function sendWithSocketSmtp({ to, subject, text }, config) {
   await smtpCommand(socket, next, `RCPT TO:<${recipient}>`);
   await smtpCommand(socket, next, "DATA", [354]);
   const body = Buffer.from(text, "utf8").toString("base64").match(/.{1,76}/g)?.join("\r\n") || "";
-  socket.write([`From: ${config.from}`, `To: ${recipient}`, `Subject: ${mimeHeader(subject)}`, "MIME-Version: 1.0", "Content-Type: text/plain; charset=UTF-8", "Content-Transfer-Encoding: base64", "", body, ".", ""].join("\r\n"), "utf8");
+  socket.write([`From: ${config.from}`, `To: ${recipient}`, `Subject: ${mimeHeader(subject)}`, ...(safeMessageId(messageId) ? [`Message-ID: ${safeMessageId(messageId)}`] : []), "MIME-Version: 1.0", "Content-Type: text/plain; charset=UTF-8", "Content-Transfer-Encoding: base64", "", body, ".", ""].join("\r\n"), "utf8");
   if ((await next()).code !== 250) throw new Error("SMTP message rejected");
   try { await smtpCommand(socket, next, "QUIT", [221]); } finally { socket.end(); }
 }
 
-export async function sendAccountEmail({ to, subject, text }, environment = process.env) {
+export async function verifyMailerConnection(environment = process.env) {
+  const config = mailConfiguration(environment);
+  if (!config) return { configured: false, verified: false, secure: false };
+  try {
+    const { default: nodemailer } = await import("nodemailer");
+    const transport = nodemailer.createTransport({ host: config.host, port: config.port, secure: config.secure, auth: config.auth, requireTLS: !config.secure });
+    await transport.verify();
+    transport.close();
+    return { configured: true, verified: true, secure: config.secure };
+  } catch {
+    return { configured: true, verified: false, secure: config.secure };
+  }
+}
+
+export async function sendAccountEmail({ to, subject, text, messageId }, environment = process.env) {
   const config = mailConfiguration(environment);
   if (!config) return { delivered: false, reason: "disabled" };
   try {
     const { default: nodemailer } = await import("nodemailer");
-    const transport = nodemailer.createTransport({ host: config.host, port: config.port, secure: config.secure, auth: config.auth });
-    await transport.sendMail({ from: config.from, to, subject, text });
+    const transport = nodemailer.createTransport({ host: config.host, port: config.port, secure: config.secure, auth: config.auth, requireTLS: !config.secure });
+    await transport.sendMail({ from: config.from, to, subject, text, messageId: safeMessageId(messageId) });
     return { delivered: true };
   } catch {
     try {
-      await sendWithSocketSmtp({ to, subject, text }, config);
+      await sendWithSocketSmtp({ to, subject, text, messageId }, config);
       return { delivered: true, transport: "smtp_socket" };
     } catch {
       try {
-        await sendWithLocalMta({ to, subject, text }, config, environment);
+        await sendWithLocalMta({ to, subject, text, messageId }, config, environment);
         return { delivered: true, transport: "local_mta" };
       } catch {
         // Never log recipients, action links, SMTP credentials or transport errors.

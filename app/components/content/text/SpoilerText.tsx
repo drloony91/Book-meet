@@ -1,7 +1,7 @@
-import { Fragment, useRef, useState } from "react";
+import { Fragment, useRef, useState, type ReactNode } from "react";
 import { useI18n } from "../../../i18n";
 
-function SpoilerChunk({ children }: { children: string }) {
+function SpoilerChunk({ children }: { children: ReactNode }) {
   const { t } = useI18n();
   const [revealed, setRevealed] = useState(false);
   const reveal = () => setRevealed(true);
@@ -23,14 +23,14 @@ function SpoilerChunk({ children }: { children: string }) {
   );
 }
 
-export function SpoilerText({ text }: { text: string }) {
+export function SpoilerText({ text, renderText }: { text: string; renderText?: (value: string) => ReactNode }) {
   return (
     <>
       {text.split(/(\|\|[\s\S]*?\|\|)/g).map((part, index) =>
         part.startsWith("||") && part.endsWith("||") ? (
-          <SpoilerChunk key={index}>{part.slice(2, -2)}</SpoilerChunk>
+          <SpoilerChunk key={index}>{renderText ? renderText(part.slice(2, -2)) : part.slice(2, -2)}</SpoilerChunk>
         ) : (
-          <Fragment key={index}>{part}</Fragment>
+          <Fragment key={index}>{renderText ? renderText(part) : part}</Fragment>
         ),
       )}
     </>

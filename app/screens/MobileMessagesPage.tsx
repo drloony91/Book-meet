@@ -1,5 +1,5 @@
 import { useMemo, useState } from "react";
-import { Avatar } from "../components/chat/ChatComponents";
+import { Avatar, GeneralMessageSearch } from "../components/chat/ChatComponents";
 import type { Friend } from "../components/chat/types";
 import { useI18n } from "../i18n";
 
@@ -14,11 +14,13 @@ export function MobileMessagesPage({
   requests,
   onSelectFriend,
   onOpenRequest,
+  onSelectMessageSearchResult,
 }: {
   friends: Friend[];
   requests: MobileMessageRequest[];
   onSelectFriend: (friend: Friend) => void;
   onOpenRequest: (userId: number) => void;
+  onSelectMessageSearchResult: (peerId: number, messageId: number) => void;
 }) {
   const { t } = useI18n();
   const [query, setQuery] = useState("");
@@ -38,6 +40,7 @@ export function MobileMessagesPage({
       <header className="mobile-messages-header">
         <h1 id="mobile-messages-title">{t("header.chats")}</h1>
       </header>
+      <GeneralMessageSearch onSelectResult={onSelectMessageSearchResult} />
       <div className="mobile-messages-controls">
         <label className="mobile-messages-search">
           <span aria-hidden="true">⌕</span>

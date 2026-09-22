@@ -35,6 +35,8 @@ export default defineConfig({
       DEMO_MODE: "1",
       PORT: String(port),
       APP_ORIGIN: baseURL,
+      USER_TELEGRAM_NOTIFICATIONS_READY: "1",
+      TELEGRAM_WEBHOOK_SECRET: "playwright-only-webhook-secret",
     },
   },
   projects: [

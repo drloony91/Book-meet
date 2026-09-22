@@ -88,12 +88,35 @@ test("delivery diagnostics expose structural status only", () => {
   assert.doesNotMatch(JSON.stringify(configured), /secret-token|42/);
 });
 
-test("notification category mapping is exhaustive and unknown types stay in All", () => {
-  assert.equal(notificationCategoryFor("like"), "reactions");
-  assert.equal(notificationCategoryFor("comment"), "comments");
-  for (const type of ["event_submitted", "event_moderation", "event_reminder"]) assert.equal(notificationCategoryFor(type), "events");
-  for (const type of ["friend_request", "friendship_started", "friend_rejected", "new_follower", "friendship_ended", "publication", "author_book_activity", "gift_reserved"]) assert.equal(notificationCategoryFor(type), "friends");
-  assert.equal(notificationCategoryFor("system_future"), null);
+test("notification category mapping is exhaustive and unknown types fail safe", () => {
+  assert.equal(notificationCategoryFor("like"), "likes");
+  assert.equal(notificationCategoryFor("comment"), "comments_replies");
+  assert.equal(notificationCategoryFor("mention"), "mentions");
+  assert.equal(notificationCategoryFor("repost"), "reposts");
+  for (const type of ["event_submitted", "event_moderation", "event_reminder", "publication"]) assert.equal(notificationCategoryFor(type), "events_communities");
+  for (const type of ["friend_request", "friendship_started", "friend_rejected", "new_follower", "friendship_ended", "gift_reserved"]) assert.equal(notificationCategoryFor(type), "friendships_follows");
+  for (const type of ["author_book_activity", "postponed_book"]) assert.equal(notificationCategoryFor(type), "reading_reminders");
+  assert.equal(notificationCategoryFor("system_future"), "system_security");
+});
+
+test("external notification integrations keep secrets server-side and fail closed", async () => {
+  const api = await readFile(path.join(root, "server", "api.js"), "utf8");
+  const server = await readFile(path.join(root, "server", "index.js"), "utf8");
+  const channels = await readFile(path.join(root, "server", "modules", "notification-channels.js"), "utf8");
+  const client = await readFile(path.join(root, "app", "components", "notifications", "Notifications.tsx"), "utf8");
+  assert.ok(api.indexOf('router.post("/integrations/telegram/webhook"') < api.indexOf("router.use(asyncRoute(requireUser))"));
+  assert.match(api, /telegramWebhookAuthorized/);
+  assert.match(api, /consumeTelegramLinkToken/);
+  assert.match(api, /verifyEmailUnsubscribeToken/);
+  assert.match(api, /router\.get\("\/admin\/notification-deliveries\/statistics"/);
+  assert.match(api, /GROUP BY channel, status/);
+  assert.match(channels, /USER_TELEGRAM_NOTIFICATIONS_READY === "1"/);
+  assert.match(channels, /USER_EMAIL_NOTIFICATIONS_READY !== "1"/);
+  assert.match(channels, /hashTelegramLinkToken/);
+  assert.match(channels, /timingSafeEqual/);
+  assert.match(server, /createNotificationDeliveryDispatcher/);
+  assert.match(server, /notificationDispatcher\?\.start\(\)/);
+  assert.doesNotMatch(client, /TELEGRAM_BOT_TOKEN|TELEGRAM_WEBHOOK_SECRET|SMTP_PASS|NOTIFICATION_UNSUBSCRIBE_SECRET/);
 });
 
 test("Nodemailer dynamic import and createTransport API remain compatible without delivery", async () => {
@@ -295,7 +318,7 @@ test("material stats reuses a request-local readability cache across all materia
   assert.match(route, /const key = `\$\{kind\}-\$\{materialId\}`;/);
   assert.match(route, /readableMaterialCache\.set\(key, readableMaterialInfo\(pool, request\.bookMeetUser\.id, kind, materialId\)\.catch\(\(\) => null\)\)/);
   assert.equal((route.match(/readableMaterialInfo\(/g) ?? []).length, 1, "the route loop bodies must call the shared helper");
-  assert.equal((route.match(/await getReadableMaterial\(/g) ?? []).length, 3, "comment, viewer-save and global-save loops must share the helper");
+  assert.equal((route.match(/await getReadableMaterial\(/g) ?? []).length, 4, "comment, save and repost-count loops must share the helper");
 });
 
 test("тип загруженного изображения определяется по содержимому, а не по расширению", () => {

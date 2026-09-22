@@ -22,8 +22,8 @@ importers:
         specifier: ^3.11.3
         version: 3.23.0(@types/node@22.19.19)
       nodemailer:
-        specifier: 9.0.1
-        version: 9.0.1
+        specifier: 9.1.0
+        version: 9.1.0
       qrcode:
         specifier: 1.5.4
         version: 1.5.4
@@ -828,8 +828,8 @@ packages:
     resolution: {integrity: sha512-+EUsqGPLsM+j/zdChZjsnX51g4XrHFOIXwfnCVPGlQk/k5giakcKsuxCObBRu6DSm9opw/O6slWbJdghQM4bBg==}
     engines: {node: '>= 0.6'}
 
-  nodemailer@9.0.1:
-    resolution: {integrity: sha512-Gwv8SQewT616ZM/URn0H54b8PWo/Wum7md3EW2aWy1lO27+WZCX+Xyak3J+NlmHUjDh5ME+uesJUDRbR3Ye8Bw==}
+  nodemailer@9.1.0:
+    resolution: {integrity: sha512-xj1Ri5Sau3qpPffHJwi2bY0oWVVWYq62Ph17l+2v1xXpxjqTls3YPc3L8dub9mcJpxj+1ucNnuYVqLlgh4pmDA==}
     engines: {node: '>=6.0.0'}
 
   object-inspect@1.13.4:
@@ -1734,7 +1734,7 @@ snapshots:
 
   negotiator@0.6.3: {}
 
-  nodemailer@9.0.1: {}
+  nodemailer@9.1.0: {}
 
   object-inspect@1.13.4: {}
 

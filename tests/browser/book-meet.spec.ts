@@ -115,8 +115,8 @@ test("feed tabs, notification tabs and material share keep local viewer state", 
   await page.goto("/notifications");
   const notificationCategory = page.getByRole("combobox", { name: "Категория" });
   await notificationCategory.click();
-  await page.getByRole("option", { name: "Комментарии" }).click();
-  await expect(notificationCategory).toContainText("Комментарии");
+  await page.getByRole("option", { name: "Комментарии и ответы" }).click();
+  await expect(notificationCategory).toContainText("Комментарии и ответы");
   await page.goto("/");
   const share = page.getByRole("button", { name: "Отправить другу" }).first();
   await expect(share).toBeVisible();
@@ -129,6 +129,46 @@ test("feed tabs, notification tabs and material share keep local viewer state", 
   await expect(page.getByText("Отправлено", { exact: true })).toBeVisible();
   const social = await (await page.context().request.get("/api/bootstrap/social")).json();
   expect(social.notifications.some((item: { type: string }) => item.type === "new_message")).toBeFalsy();
+});
+
+test("notification filters, settings and confirmed range read-all persist", async ({ page, allowExpectedHttpError }) => {
+  const seeded = await page.context().request.post("/api/__test__/notifications-scenario");
+  expect(seeded.status()).toBe(201);
+  await loginAs(page, 3, "/notifications");
+
+  const category = page.getByRole("combobox", { name: "Категория" });
+  await category.click();
+  await page.getByRole("option", { name: "Отметки «Нравится»" }).click();
+  await expect(page.locator(".notifications-page .notification-item")).toHaveCount(22);
+
+  await page.getByRole("button", { name: "Настройки", exact: true }).click();
+  await expect(page.getByRole("button", { name: "Подключить Telegram", exact: true })).toBeVisible();
+  const systemRow = page.locator(".notification-settings-row", { hasText: "Система и безопасность" });
+  await expect(systemRow.locator('input[type="checkbox"]').first()).toBeDisabled();
+  const likesRow = page.locator(".notification-settings-row", { hasText: "Отметки «Нравится»" });
+  await expect(likesRow.locator('input[type="checkbox"]').nth(1)).toBeDisabled();
+  await expect(likesRow.locator("select")).toBeDisabled();
+  await likesRow.locator('input[type="checkbox"]').first().uncheck();
+  await page.getByLabel("Часовой пояс").fill("UTC");
+  await page.getByRole("button", { name: "Сохранить настройки" }).click();
+  await expect(page.getByText("Настройки сохранены", { exact: true })).toBeVisible();
+
+  await page.reload();
+  await page.getByRole("button", { name: "Настройки", exact: true }).click();
+  await expect(page.locator(".notification-settings-row", { hasText: "Отметки «Нравится»" }).locator('input[type="checkbox"]').first()).not.toBeChecked();
+  await page.getByRole("button", { name: "Настройки", exact: true }).click();
+  await category.click();
+  await page.getByRole("option", { name: "Отметки «Нравится»" }).click();
+
+  allowExpectedHttpError({ path: "/api/notifications/read-all", status: 409 });
+  page.once("dialog", (dialog) => dialog.dismiss());
+  await page.getByRole("button", { name: "Всё прочитано" }).click();
+  await expect(page.locator(".notifications-page .notification-item.unread")).toHaveCount(22);
+  page.once("dialog", (dialog) => dialog.accept());
+  await page.getByRole("button", { name: "Всё прочитано" }).click();
+  await expect(page.locator(".notifications-page .notification-item.unread")).toHaveCount(0);
+  const social = await (await page.context().request.get("/api/bootstrap/social")).json();
+  expect(social.notifications.filter((item: { type: string; unread: boolean }) => item.type === "like" && item.unread)).toHaveLength(0);
 });
 
 test("feed material opens and supports like, save and comment state", async ({ page }) => {
@@ -199,6 +239,56 @@ test("chat opens, sends text and shares a supported book attachment", async ({ p
   await message.fill("Shared book");
   await message.press("Enter");
   await expect(page.locator(".message-area:visible").getByText("Город между строк", { exact: true }).last()).toBeVisible();
+});
+
+test("chat emoji and Book Meet stickers remain accessible on desktop and mobile", async ({ page }, testInfo) => {
+  await loginAs(page, 3, "/chat");
+  await chatRows(page, testInfo.project.name === "mobile").filter({ hasText: "Издательство «Тест»" }).click();
+  const chat = page.locator(".chat-view:visible");
+  const composer = chat.getByRole("textbox", { name: "Сообщение" });
+  await chat.getByRole("button", { name: "Выбрать emoji" }).click();
+  await chat.getByRole("button", { name: "Книги", exact: true }).click();
+  await expect(composer).toHaveValue("📚");
+  await composer.press("Enter");
+  await expect(chat.getByText("📚", { exact: true })).toBeVisible();
+  await chat.getByRole("button", { name: "Книжные стикеры" }).click();
+  const sticker = chat.locator(".chat-sticker-picker button").first();
+  await expect(sticker).toHaveAccessibleName(/Открытая книга|Книга и чай|Книга со звездой|Любимая книга/);
+  await sticker.click();
+  await expect(chat.locator(".message-area:visible img.chat-book-sticker").last()).toHaveAttribute("alt", /.+/);
+  await expect(composer).toBeVisible();
+});
+
+test("conversation and persistent global message search reach and highlight an exact result", async ({ page }, testInfo) => {
+  await loginAs(page, 3, "/chat");
+  await chatRows(page, testInfo.project.name === "mobile").filter({ hasText: "Издательство «Тест»" }).click();
+  const chat = page.locator(".chat-view:visible");
+  const marker = "Навигационный поисковый маяк";
+  const composer = chat.getByRole("textbox", { name: "Сообщение" });
+  await composer.fill(marker);
+  await composer.press("Enter");
+  await expect(chat.getByText(marker, { exact: true }).last()).toBeVisible();
+
+  await chat.getByRole("button", { name: "Поиск в диалоге" }).click();
+  const dialogSearch = chat.getByRole("searchbox", { name: "Поиск в диалоге" });
+  await dialogSearch.fill("навигационный");
+  const dialogResult = page.locator(".conversation-message-search:visible .message-search-result").filter({ hasText: marker });
+  await expect(dialogResult).toBeVisible();
+  await dialogResult.click();
+  await expect(chat.locator(".message-wrap.is-search-highlighted").filter({ hasText: marker })).toBeVisible();
+
+  // The global entry is deliberately available while the dialog stays open;
+  // mobile users do not have to back out to the conversation list.
+  await chat.getByRole("button", { name: "Поиск по всем сообщениям" }).click();
+  const globalSearch = page.locator(".global-message-search:visible");
+  await globalSearch.getByRole("searchbox", { name: "Поиск по всем сообщениям" }).fill("навигационный");
+  const group = globalSearch.locator(".message-search-group-toggle", { hasText: "Издательство «Тест»" });
+  await expect(group).toBeVisible();
+  await group.click();
+  const globalResult = globalSearch.locator(".message-search-result", { hasText: marker });
+  await expect(globalResult).toBeVisible();
+  await globalResult.click();
+  await expect(chat.locator(".message-wrap.is-search-highlighted").filter({ hasText: marker })).toBeVisible();
 });
 
 test("friend acceptance keeps one persistent system timestamp and rolls the open date label at local midnight", async ({ page }, testInfo) => {
@@ -283,6 +373,29 @@ test("chat read, sorting, notification and per-viewer clear behavior stays isola
     await unreadRow.click();
     await expect(receiverPage.locator(".message-area:visible").getByText("Новое входящее сообщение", { exact: true })).toBeVisible();
 
+    const receivedMessage = receiverPage.locator(".message-area:visible .message-wrap.theirs").filter({ hasText: "Новое входящее сообщение" });
+    const receiverLike = receivedMessage.getByRole("button", { name: "Поставить «Нравится»" });
+    await expect(receiverLike).toBeVisible();
+    await receiverLike.click();
+    await expect(receivedMessage.locator(".message-like-button")).toHaveAttribute("aria-pressed", "true");
+    await expect(receivedMessage.locator(".message-like-button")).toContainText("1");
+    await expect(unreadSentMessage.locator(".message-like-button")).toContainText("1");
+    await unreadSentMessage.getByRole("button", { name: "Поставить «Нравится»" }).click();
+    await expect(unreadSentMessage.locator(".message-like-button")).toContainText("2");
+    await expect(receivedMessage.locator(".message-like-button")).toContainText("2");
+
+    await expect(receivedMessage.locator(".message-edit-button")).toHaveCount(0);
+    await unreadSentMessage.getByRole("button", { name: "Редактировать сообщение" }).click();
+    const editInput = unreadSentMessage.getByRole("textbox", { name: "Редактировать сообщение" });
+    await editInput.fill("Новое входящее сообщение — изменено");
+    await unreadSentMessage.getByRole("button", { name: "Сохранить" }).click();
+    await expect(unreadSentMessage.getByText("Новое входящее сообщение — изменено", { exact: true })).toBeVisible();
+    await expect(unreadSentMessage.locator(".message-edited-label")).toHaveText("изменено ·");
+    await expect(receivedMessage.getByText("Новое входящее сообщение — изменено", { exact: true })).toBeVisible();
+    await expect(receivedMessage.locator(".message-edited-label")).toHaveText("изменено ·");
+    await page.reload();
+    await expect(page.locator(".message-area:visible").getByText("Новое входящее сообщение — изменено", { exact: true })).toBeVisible();
+
     // The original sender page remains open throughout. The receiver's read
     // mutation broadcasts SSE, and that same page must transition without a
     // reload, relogin or second send.
@@ -302,7 +415,7 @@ test("chat read, sorting, notification and per-viewer clear behavior stays isola
 
     const peerSocialBeforeNewMessage = await (await page.context().request.get("/api/bootstrap/social")).json();
     expect(peerSocialBeforeNewMessage.messages[`3-${peerId}`].some((message: { text: string }) => message.text === "Старое сообщение собеседнику")).toBeTruthy();
-    expect(peerSocialBeforeNewMessage.messages[`3-${peerId}`].some((message: { text: string }) => message.text === "Новое входящее сообщение")).toBeTruthy();
+    expect(peerSocialBeforeNewMessage.messages[`3-${peerId}`].some((message: { text: string; editedAt?: string }) => message.text === "Новое входящее сообщение — изменено" && Boolean(message.editedAt))).toBeTruthy();
 
     const senderComposer = page.getByRole("textbox", { name: "Сообщение" });
     await senderComposer.fill("Сообщение после очистки");
@@ -316,6 +429,67 @@ test("chat read, sorting, notification and per-viewer clear behavior stays isola
     expect(peerSocialAfterNewMessage.messages[`3-${peerId}`].some((message: { text: string }) => message.text === "Сообщение после очистки")).toBeTruthy();
   } finally {
     await receiverContext.close();
+  }
+});
+
+test("message deletion hides unread content and keeps a neutral read tombstone", async ({ page, browser, browserDiagnostics }, testInfo) => {
+  const mobile = testInfo.project.name === "mobile";
+  const { peerId } = await seedChatScenario(page);
+  await loginAs(page, 3, "/chat");
+  expect((await page.context().request.post(`/api/social/friends/${peerId}/accept`)).ok()).toBeTruthy();
+  await page.reload();
+  await chatRows(page, mobile).filter({ hasText: "Собеседник проверки" }).click();
+
+  const composer = page.getByRole("textbox", { name: "Сообщение" });
+  const unreadText = "Непрочитанное сообщение для удаления";
+  await composer.fill(unreadText);
+  await composer.press("Enter");
+  const unreadMessage = page.locator(".message-area:visible .message-wrap.mine").filter({ hasText: unreadText });
+  await expect(unreadMessage).toBeVisible();
+  page.once("dialog", async (dialog) => {
+    expect(dialog.message()).toContain("Непрочитанное сообщение исчезнет");
+    await dialog.accept();
+  });
+  await unreadMessage.getByRole("button", { name: "Удалить сообщение" }).click();
+  await expect(page.locator(".message-area:visible").getByText(unreadText, { exact: true })).toHaveCount(0);
+
+  const recipientContext = await browser.newContext({
+    baseURL: "http://127.0.0.1:4173",
+    viewport: mobile ? { width: 390, height: 844 } : { width: 1440, height: 900 },
+    isMobile: mobile,
+    hasTouch: mobile,
+  });
+  const recipientPage = await recipientContext.newPage();
+  browserDiagnostics.trackPage(recipientPage);
+  try {
+    await loginAs(recipientPage, peerId, "/chat/3");
+    await expect(recipientPage.locator(".message-area:visible").getByText(unreadText, { exact: true })).toHaveCount(0);
+    const recipientSocial = await (await recipientPage.context().request.get("/api/bootstrap/social")).json();
+    expect(JSON.stringify(recipientSocial)).not.toContain(unreadText);
+
+    const readText = "Прочитанное сообщение для удаления";
+    await composer.fill(readText);
+    await composer.press("Enter");
+    const senderReadMessage = page.locator(".message-area:visible .message-wrap.mine").filter({ hasText: readText });
+    await expect(senderReadMessage).toBeVisible();
+    await recipientPage.reload();
+    const recipientReadMessage = recipientPage.locator(".message-area:visible .message-wrap.theirs").filter({ hasText: readText });
+    await expect(recipientReadMessage).toBeVisible();
+    await expect(senderReadMessage.locator(".message-checks")).toHaveText("✓✓");
+
+    page.once("dialog", async (dialog) => dialog.accept());
+    await senderReadMessage.getByRole("button", { name: "Удалить сообщение" }).click();
+    await recipientPage.reload();
+    const senderTombstone = page.locator(".message-area:visible .message-wrap.mine").filter({ hasText: "Пользователь удалил это сообщение" });
+    const recipientTombstone = recipientPage.locator(".message-area:visible .message-wrap.theirs").filter({ hasText: "Пользователь удалил это сообщение" });
+    await expect(senderTombstone.locator(".message-bubble")).toHaveClass(/is-deleted/);
+    await expect(recipientTombstone.locator(".message-bubble")).toHaveClass(/is-deleted/);
+    await expect(senderTombstone.locator(".message-inline-actions")).toHaveCount(0);
+    await expect(recipientTombstone.locator(".message-inline-actions")).toHaveCount(0);
+    await expect(page.locator(".message-area:visible").getByText(readText, { exact: true })).toHaveCount(0);
+    await expect(recipientPage.locator(".message-area:visible").getByText(readText, { exact: true })).toHaveCount(0);
+  } finally {
+    await recipientContext.close();
   }
 });
 

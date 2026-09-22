@@ -47,3 +47,12 @@ This is a deterministic file-level inventory of migration names and `CREATE TABL
 | `040_reading_goals.sql` | `CREATE TABLE reading_goals` |
 | `041_book_progress_notes.sql` | `CREATE TABLE user_hides`, `CREATE TABLE book_progress_notes` |
 | `042_book_shelves.sql` | `CREATE TABLE book_shelves`, `ALTER TABLE material_saves`, `CREATE TABLE book_shelf_items` |
+| `043_social_content.sql` | `ALTER TABLE material_comments`, `CREATE TABLE material_comment_likes`, `CREATE TABLE content_mentions`, `CREATE TABLE reposts`, `ALTER TABLE excerpts` |
+| `044_message_reactions.sql` | `CREATE TABLE message_reactions` |
+| `045_message_edits.sql` | `ALTER TABLE messages`, `CREATE TABLE message_edit_history` |
+| `046_notification_preferences.sql` | `ALTER TABLE users`, `CREATE TABLE notification_preferences` |
+| `047_notification_delivery_outbox.sql` | `CREATE TABLE notification_events`, `ALTER TABLE notifications`, `CREATE TABLE notification_deliveries` |
+| `048_message_deletion_evidence.sql` | `ALTER TABLE messages`, `CREATE TABLE message_deletion_evidence` |
+| `049_message_search.sql` | `ALTER TABLE messages` |
+| `050_message_stickers.sql` | `ALTER TABLE messages`, `ALTER TABLE message_deletion_evidence` |
+| `051_notification_channel_integrations.sql` | `ALTER TABLE users`, `CREATE TABLE telegram_link_tokens` |

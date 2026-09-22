@@ -9,6 +9,8 @@ import { getPool, withTransaction } from "./db.js";
 import { ageFromBirthDate, loadBootstrap, loadUsers, resolveBook } from "./data.js";
 import { createBootstrapRouter } from "./modules/bootstrap-router.js";
 import { searchBootstrapMaterials } from "./modules/material-search.js";
+import { decodeMessageSearchCursor, encodeMessageSearchCursor, messageSearchLimit, messageSearchSnippet, normalizeMessageSearchQuery, MESSAGE_SEARCH_GROUP_LIMIT, MESSAGE_SEARCH_GROUP_MATCH_LIMIT } from "./modules/message-search.js";
+import { activeBookSticker, archivedBookSticker, bookStickerCatalog, stickerDto } from "./modules/book-stickers.js";
 import { plainTextFromHtml, validateRichHtml } from "./modules/content-security.js";
 import { previewRemoteCover, saveAvatar, saveCover, saveRemoteCover } from "./modules/image-storage.js";
 import { cleanUrl, eventPayload, knownCities, knownCity, occasionPayload } from "./modules/material-input.js";
@@ -26,6 +28,9 @@ import { normalizeReadingState, postponedOverdue, readingStateStorage, validTime
 import { annualPlan, eligibleGoalPeriods, monthPace, validateGoalPayload } from "./modules/reading-goals.js";
 import { expectedProgress, noteBody, noteCursor, noteDto, progressSnapshot, sameProgress } from "./modules/book-progress-notes.js";
 import { assertShelfReadable, shelfCursor, shelfDto, shelfPayload, shelvesForUser } from "./modules/book-shelves.js";
+import { LEGACY_TELEGRAM_NOTIFICATION_CATEGORIES, NOTIFICATION_CATEGORIES, NOTIFICATION_READ_CONFIRMATION_THRESHOLD, canonicalCategoriesForLegacyTelegram, legacyTelegramCategoriesForPreferences, notificationCategoryFor, notificationPreferencesState, validateNotificationPreferencesPayload } from "./modules/notification-preferences.js";
+import { cancelNotificationDeliveries, createNotificationEvent } from "./modules/notification-events.js";
+import { consumeTelegramLinkToken, createTelegramNotificationAdapter, markTelegramChannelError, replaceTelegramLinkToken, safeTelegramDisplayName, telegramDeepLink, telegramLinkConfiguration, telegramWebhookAuthorized, verifyEmailUnsubscribeToken } from "./modules/notification-channels.js";
 import { deliverDuePostponedBookReminders as deliverDuePostponedBooks } from "./modules/postponed-reminders.js";
 import { LEGAL_DOCUMENT_TYPES, REQUIRED_LEGAL_DOCUMENT_TYPES, REPORT_STATUSES, REPORT_TARGET_KINDS, activeLegalDocuments, assertAgeCompatible, assertLegalDocumentDeletable, legalAccessState, legalConsentRequired, legalDocumentWriteMode, logModerationAction, logSecurityEvent, profileAccessState, recordLegalAcceptances, removeCrossAgeRelationships, requestAuditMetadata, validateLegalAcceptance } from "./modules/compliance.js";
 import { clearSessionCookie, clearTransientCookie, createSessionToken, generateRecoveryCodes, generateTotpSecret, hashPassword, hashRecoveryCode, hashSessionToken, isValidEmail, normalizeEmail, normalizeIdentity, readCookie, recoveryCodeIndex, sessionCookie, transientCookie, verifyPassword, verifyTotp } from "./security.js";
@@ -35,6 +40,12 @@ const projectRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "
 const LOGIN_WINDOW_MS = 15 * 60 * 1000;
 const LOGIN_ATTEMPT_LIMIT = 10;
 const loginAttempts = new LoginAttemptTracker({ limit: LOGIN_ATTEMPT_LIMIT, windowMs: LOGIN_WINDOW_MS });
+const MESSAGE_REACTION_WINDOW_MS = 60 * 1000;
+const messageReactionAttempts = new LoginAttemptTracker({ limit: 120, windowMs: MESSAGE_REACTION_WINDOW_MS });
+const messageEditAttempts = new LoginAttemptTracker({ limit: 30, windowMs: 60 * 1000 });
+const messageSearchAttempts = new LoginAttemptTracker({ limit: 60, windowMs: 60 * 1000 });
+const notificationPreferenceAttempts = new LoginAttemptTracker({ limit: 20, windowMs: 60 * 1000 });
+const notificationReadAttempts = new LoginAttemptTracker({ limit: 60, windowMs: 60 * 1000 });
 const passwordRecoveryAttempts = new Map();
 const PASSWORD_RECOVERY_WINDOW_MS = 15 * 60 * 1000;
 const PASSWORD_RECOVERY_LIMIT = 5;
@@ -46,6 +57,9 @@ const GOOGLE_JWKS_STALE_MS = 14 * 24 * 60 * 60 * 1000;
 const GOOGLE_JWKS_SEED_FILE = path.join(projectRoot, "server", "google-jwks.json");
 let googleJwksCache = { expiresAt: 0, savedAt: 0, keys: [] };
 let googleJwksRefreshPromise;
+// Keep the authenticated owner next to each SSE response.  A bare response
+// cannot be used for chat notifications: it would reveal a direct-message
+// mutation to every connected account.
 const realtimeClients = new Set();
 const presenceTouches = new Map();
 const PROFILE_TABS = new Set(["main", "author-books", "excerpts", "publisher-news", "library", "wishlist", "reviews", "events", "occasions", "friends", "communities"]);
@@ -139,26 +153,58 @@ async function assertAdultMaterialReadable(connection, userId, kind, materialId)
 function broadcastRealtime() {
   const payload = `event: update\ndata: ${Date.now()}\n\n`;
   for (const client of realtimeClients) {
-    try { client.write(payload); } catch { realtimeClients.delete(client); }
+    try { client.response.write(payload); } catch { realtimeClients.delete(client); }
+  }
+}
+
+function queueChatRealtime(response, userIds, payload) {
+  response.locals.chatRealtime = {
+    userIds: [...new Set(userIds.map(Number).filter((userId) => Number.isSafeInteger(userId) && userId > 0))],
+    // Do not put text, attachments, stickers, mentions, reaction owners or
+    // any authorization facts on the wire.  The client reloads its own social
+    // projection and treats this only as an invalidation signal.
+    payload,
+  };
+}
+
+function broadcastChatRealtime({ userIds, payload }) {
+  if (!userIds.length) return;
+  const recipients = new Set(userIds);
+  const event = `event: chat\ndata: ${JSON.stringify(payload)}\n\n`;
+  for (const client of realtimeClients) {
+    if (!recipients.has(client.userId)) continue;
+    try { client.response.write(event); } catch { realtimeClients.delete(client); }
   }
 }
 
 async function deliverDueEventReminders() {
   try {
     const delivered = await withTransaction(async (connection) => {
-      const [created] = await connection.query(
-        `INSERT IGNORE INTO notifications
-           (user_id, actor_user_id, notification_type, title, body, material_kind, material_id, group_key)
-         SELECT er.user_id, e.creator_user_id, 'event_reminder', 'Событие уже завтра',
-                CONCAT('Через 24 часа начнётся событие «', e.title, '».'),
-                'event', e.id, CONCAT('event-reminder:', er.user_id, ':', e.id)
+      const [candidates] = await connection.query(
+        `SELECT er.user_id, e.id AS event_id, e.creator_user_id, e.title
            FROM event_reminders er
            JOIN events e ON e.id = er.event_id
           WHERE er.reminded_at IS NULL
             AND e.status = 'published'
             AND TIMESTAMP(e.event_date, e.event_time) > DATE_ADD(UTC_TIMESTAMP(), INTERVAL 5 HOUR)
-            AND TIMESTAMP(e.event_date, e.event_time) <= DATE_ADD(UTC_TIMESTAMP(), INTERVAL 29 HOUR)`,
+            AND TIMESTAMP(e.event_date, e.event_time) <= DATE_ADD(UTC_TIMESTAMP(), INTERVAL 29 HOUR)
+          FOR UPDATE`,
       );
+      let created = 0;
+      for (const candidate of candidates) {
+        const result = await createNotificationEvent(connection, {
+          recipientUserId: candidate.user_id,
+          actorUserId: candidate.creator_user_id,
+          eventType: "event_reminder",
+          title: "Событие уже завтра",
+          body: `Через 24 часа начнётся событие «${candidate.title}».`,
+          materialKind: "event",
+          materialId: candidate.event_id,
+          dedupeKey: `event-reminder:${candidate.user_id}:${candidate.event_id}`,
+          groupKey: `event-reminder:${candidate.user_id}:${candidate.event_id}`,
+        });
+        if (result.created) created += 1;
+      }
       await connection.query(
         `UPDATE event_reminders er
            JOIN events e ON e.id = er.event_id
@@ -168,7 +214,7 @@ async function deliverDueEventReminders() {
             AND TIMESTAMP(e.event_date, e.event_time) > DATE_ADD(UTC_TIMESTAMP(), INTERVAL 5 HOUR)
             AND TIMESTAMP(e.event_date, e.event_time) <= DATE_ADD(UTC_TIMESTAMP(), INTERVAL 29 HOUR)`,
       );
-      return Number(created.affectedRows || 0);
+      return created;
     });
     if (delivered) broadcastRealtime();
   } catch (error) {
@@ -220,6 +266,59 @@ setTimeout(enforceAgeBoundaries, 45_000).unref?.();
 function asyncRoute(handler) {
   return (request, response, next) => Promise.resolve(handler(request, response, next)).catch(next);
 }
+
+function messageReactionRateLimit(request, response, next) {
+  const client = request.ip || request.socket.remoteAddress || "unknown";
+  const userId = Number(request.bookMeetUser?.id);
+  const attempt = messageReactionAttempts.state([`message-reaction:ip:${client}`, `message-reaction:user:${userId}`]);
+  if (attempt.blocked) {
+    response.setHeader("Retry-After", String(attempt.retryAfterSeconds));
+    return response.status(429).json({ code: "MESSAGE_REACTION_RATE_LIMITED", error: "Слишком много реакций. Попробуйте позже" });
+  }
+  attempt.fail();
+  next();
+}
+
+function messageEditRateLimit(request, response, next) {
+  const client = request.ip || request.socket.remoteAddress || "unknown";
+  const userId = Number(request.bookMeetUser?.id);
+  const attempt = messageEditAttempts.state([`message-edit:ip:${client}`, `message-edit:user:${userId}`]);
+  if (attempt.blocked) {
+    response.setHeader("Retry-After", String(attempt.retryAfterSeconds));
+    return response.status(429).json({ code: "MESSAGE_EDIT_RATE_LIMITED", error: "Слишком много изменений. Попробуйте позже" });
+  }
+  attempt.fail();
+  next();
+}
+
+function messageSearchRateLimit(request, response, next) {
+  const client = request.ip || request.socket.remoteAddress || "unknown";
+  const userId = Number(request.bookMeetUser?.id);
+  const attempt = messageSearchAttempts.state([`message-search:ip:${client}`, `message-search:user:${userId}`]);
+  if (attempt.blocked) {
+    response.setHeader("Retry-After", String(attempt.retryAfterSeconds));
+    return response.status(429).json({ code: "MESSAGE_SEARCH_RATE_LIMITED", error: "Слишком много поисковых запросов. Попробуйте позже" });
+  }
+  attempt.fail();
+  next();
+}
+
+function notificationRateLimit(tracker, code, message) {
+  return (request, response, next) => {
+    const client = request.ip || request.socket.remoteAddress || "unknown";
+    const userId = Number(request.bookMeetUser?.id);
+    const attempt = tracker.state([`${code}:ip:${client}`, `${code}:user:${userId}`]);
+    if (attempt.blocked) {
+      response.setHeader("Retry-After", String(attempt.retryAfterSeconds));
+      return response.status(429).json({ code, error: message });
+    }
+    attempt.fail();
+    next();
+  };
+}
+
+const notificationPreferenceRateLimit = notificationRateLimit(notificationPreferenceAttempts, "NOTIFICATION_PREFERENCES_RATE_LIMITED", "Слишком много изменений настроек. Попробуйте позже");
+const notificationReadRateLimit = notificationRateLimit(notificationReadAttempts, "NOTIFICATION_READ_RATE_LIMITED", "Слишком много операций с уведомлениями. Попробуйте позже");
 
 function loginAttemptState(request, email) {
   const client = request.ip || request.socket.remoteAddress || "unknown";
@@ -776,18 +875,42 @@ function validatedBookLinks(value, restricted) {
   });
 }
 
-async function notifyWriterAboutBook(connection, bookId, actorId, action) {
+async function nextNotificationOccurrence(connection, { recipientUserId, actorUserId = null, eventType, materialKind = null, materialId = null }) {
+  const [[row]] = await connection.query(
+    `SELECT COUNT(*) AS total FROM notification_events
+      WHERE recipient_user_id = ? AND actor_user_id <=> ? AND event_type = ?
+        AND material_kind <=> ? AND material_id <=> ?`,
+    [recipientUserId, actorUserId, eventType, materialKind, materialId],
+  );
+  return Number(row.total) + 1;
+}
+
+async function notifyWriterAboutBook(connection, bookId, actorId, action, occurrenceId = null) {
   const [[book]] = await connection.query("SELECT creator_user_id, title FROM books WHERE id = ?", [bookId]);
   if (!book?.creator_user_id || Number(book.creator_user_id) === Number(actorId)) return;
   const [[actor]] = await connection.query("SELECT display_name FROM profiles WHERE user_id = ?", [actorId]);
   const titles = { library: "Книгу добавили в библиотеку", wishlist: "Книгу хотят прочитать", review: "На книгу написали рецензию" };
   const verbs = { library: "добавил(а) вашу книгу в библиотеку", wishlist: "добавил(а) вашу книгу в список «Хочу почитать!»", review: "написал(а) рецензию на вашу книгу" };
-  await connection.query(
-    `INSERT INTO notifications (user_id, actor_user_id, notification_type, title, body, material_kind, material_id, group_key)
-     VALUES (?, ?, 'author_book_activity', ?, ?, 'book', ?, ?)
-     ON DUPLICATE KEY UPDATE body = VALUES(body), is_unread = 1, created_at = CURRENT_TIMESTAMP`,
-    [book.creator_user_id, actorId, titles[action], `${actor?.display_name ?? "Пользователь"} ${verbs[action]} «${book.title}».`, bookId, `author-book:${action}:${bookId}:${actorId}`],
-  );
+  const baseKey = `author-book:${action}:${bookId}:${actorId}`;
+  const occurrence = occurrenceId ?? `g${await nextNotificationOccurrence(connection, {
+    recipientUserId: book.creator_user_id,
+    actorUserId: actorId,
+    eventType: "author_book_activity",
+    materialKind: "book",
+    materialId: bookId,
+  })}`;
+  const key = `${baseKey}:${occurrence}`;
+  await createNotificationEvent(connection, {
+    recipientUserId: book.creator_user_id,
+    actorUserId: actorId,
+    eventType: "author_book_activity",
+    title: titles[action],
+    body: `${actor?.display_name ?? "Пользователь"} ${verbs[action]} «${book.title}».`,
+    materialKind: "book",
+    materialId: bookId,
+    dedupeKey: key,
+    groupKey: baseKey,
+  });
 }
 
 async function isAdmin(connection, userId) {
@@ -828,8 +951,147 @@ async function blockExists(connection, firstUserId, secondUserId) {
   return row ?? null;
 }
 
-async function assertUsersCanInteract(connection, firstUserId, secondUserId) {
-  await lockInteractionPair(connection, firstUserId, secondUserId);
+async function hideExists(connection, hiderUserId, hiddenUserId) {
+  const [[row]] = await connection.query(
+    "SELECT 1 FROM user_hides WHERE hider_user_id = ? AND hidden_user_id = ? LIMIT 1",
+    [hiderUserId, hiddenUserId],
+  );
+  return Boolean(row);
+}
+
+async function assertCommentTargetAvailable(connection, viewerId, commentUserId) {
+  const targetId = Number(commentUserId);
+  const [[target]] = await connection.query(
+    "SELECT id, deleted_at, purged_at FROM users WHERE id = ? LIMIT 1",
+    [targetId],
+  );
+  if (!target || target.deleted_at || target.purged_at) {
+    throw Object.assign(new Error("Комментарий не найден"), { statusCode: 404 });
+  }
+  if (targetId !== Number(viewerId) && (await blockExists(connection, viewerId, targetId) || await hideExists(connection, viewerId, targetId))) {
+    throw Object.assign(new Error("Комментарий не найден"), { statusCode: 404 });
+  }
+}
+
+function codePointText(value, maximum, label) {
+  const text = String(value ?? "").replace(/[\u200B-\u200D\u2060\uFEFF]/g, "").trim();
+  const length = Array.from(text).length;
+  if (!text || length > maximum) throw Object.assign(new Error(`${label} должен содержать от 1 до ${maximum} символов`), { statusCode: 400 });
+  return text;
+}
+
+function escapedParagraph(value) {
+  const text = String(value).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/\"/g, "&quot;");
+  return validateRichHtml(`<p>${text.replace(/\n/g, "<br>")}</p>`);
+}
+
+function mentionIds(value) {
+  const raw = Array.isArray(value) ? value : Array.isArray(value?.userIds) ? value.userIds : [];
+  return [...new Set(raw.map((entry) => Number(typeof entry === "object" ? entry.userId ?? entry.id : entry)).filter((id) => Number.isInteger(id) && id > 0))].slice(0, 30);
+}
+
+function mentionRefs(value) {
+  const raw = Array.isArray(value) ? value : Array.isArray(value?.userIds) ? value.userIds : [];
+  const seen = new Set();
+  return raw.map((entry) => typeof entry === "object" ? entry : { userId: entry }).map((entry) => ({ userId: Number(entry.userId ?? entry.id), token: typeof entry.token === "string" ? entry.token.trim() : "" })).filter((entry) => Number.isInteger(entry.userId) && entry.userId > 0 && !seen.has(entry.userId) && (seen.add(entry.userId), true)).slice(0, 30);
+}
+
+const NEUTRAL_MENTION_TOKEN = "@пользователь";
+
+function neutralizeMentionedText(value, mentions = []) {
+  let result = String(value ?? "");
+  let cursor = 0;
+  const replacements = mentions.map((mention) => {
+    const sourceToken = String(mention.sourceToken ?? "");
+    const replacementToken = String(mention.token ?? NEUTRAL_MENTION_TOKEN);
+    return { sourceToken, replacementToken, index: sourceToken ? result.indexOf(sourceToken) : -1 };
+  }).filter((entry) => entry.index >= 0 && entry.sourceToken && entry.replacementToken && entry.sourceToken !== entry.replacementToken)
+    .sort((left, right) => left.index - right.index);
+  for (const { sourceToken, replacementToken } of replacements) {
+    const index = result.indexOf(sourceToken, cursor);
+    if (index < 0) continue;
+    result = `${result.slice(0, index)}${replacementToken}${result.slice(index + sourceToken.length)}`;
+    cursor = index + replacementToken.length;
+  }
+  return result;
+}
+
+function normalizeMessageBody(value) {
+  const normalized = String(value ?? "").replace(/[\u200B-\u200D\u2060\uFEFF]/gu, "").trim();
+  return Array.from(normalized).slice(0, 5000).join("");
+}
+
+const DELETED_MESSAGE_TOMBSTONE = "Пользователь удалил это сообщение";
+
+async function syncMentions(connection, { entityType, entityId, authorUserId, mentionUserIds, text = "", publicMaterial = false, materialKind, materialId }) {
+  // Structured refs are authoritative, but a stale ref must not create a
+  // relation or notification after its token was removed from the content.
+  // We only check already-selected tokens; arbitrary @words are never parsed.
+  // Callers provide the exact plain fields plus plainTextFromHtml(bodyHtml)
+  // for rich materials. Do not parse a composite string here: a literal `<`
+  // in a title/preview would otherwise be treated as markup and disappear.
+  const mentionableText = String(text ?? "");
+  const refs = mentionRefs(mentionUserIds).filter((entry) => entry.userId !== Number(authorUserId) && /^@[\w.-]{1,30}$/u.test(entry.token) && mentionableText.includes(entry.token));
+  await connection.query("DELETE FROM content_mentions WHERE entity_type = ? AND entity_id = ?", [entityType, entityId]);
+  for (const ref of refs) {
+    const targetId = ref.userId;
+    const [[target]] = await connection.query("SELECT u.id, u.username, p.profile_type, p.birth_date FROM users u JOIN profiles p ON p.user_id = u.id WHERE u.id = ? AND u.deleted_at IS NULL AND u.purged_at IS NULL", [targetId]);
+    if (!target || await blockExists(connection, authorUserId, targetId) || await hideExists(connection, authorUserId, targetId)) {
+      throw Object.assign(new Error("Упомянутый пользователь недоступен"), { statusCode: 400 });
+    }
+    const [[author]] = await connection.query("SELECT p.profile_type, p.birth_date FROM profiles p WHERE p.user_id = ?", [authorUserId]);
+    if (["Читатель", "Писатель", "Блогер"].includes(author?.profile_type) && ["Читатель", "Писатель", "Блогер"].includes(target.profile_type)) await assertAgeCompatible(connection, authorUserId, targetId);
+    const token = /^@[\w.-]{1,30}$/u.test(ref.token) ? ref.token : `@${target.username}`;
+    await connection.query("INSERT INTO content_mentions (entity_type, entity_id, author_user_id, mentioned_user_id, mention_token) VALUES (?, ?, ?, ?, ?)", [entityType, entityId, authorUserId, targetId, token]);
+    if (publicMaterial) {
+      const groupKey = `mention:${entityType}:${entityId}:${targetId}`;
+      await createNotificationEvent(connection, {
+        recipientUserId: targetId,
+        actorUserId: authorUserId,
+        eventType: "mention",
+        title: "Упоминание",
+        body: "Вас упомянули в материале.",
+        materialKind,
+        materialId,
+        dedupeKey: groupKey,
+        groupKey,
+      });
+    }
+  }
+}
+
+async function mentionDtos(connection, entityType, entityIds, viewerId) {
+  const ids = [...new Set((Array.isArray(entityIds) ? entityIds : [entityIds]).map(Number).filter(Number.isInteger))];
+  if (!ids.length) return new Map();
+  const [[viewer]] = await connection.query(
+    "SELECT u.role, p.profile_type, p.birth_date FROM users u JOIN profiles p ON p.user_id = u.id WHERE u.id = ? LIMIT 1",
+    [viewerId],
+  );
+  const personalTypes = new Set(["Читатель", "Писатель", "Блогер"]);
+  const viewerPersonal = personalTypes.has(viewer?.profile_type);
+  const viewerAge = ageFromBirthDate(viewer?.birth_date);
+  const [rows] = await connection.query(
+    `SELECT m.entity_id, m.mentioned_user_id, m.mention_token, u.username, u.role, p.display_name, p.profile_type, p.birth_date, u.deleted_at, u.purged_at,
+            EXISTS(SELECT 1 FROM user_blocks b WHERE (b.blocker_user_id = ? AND b.blocked_user_id = m.mentioned_user_id) OR (b.blocker_user_id = m.mentioned_user_id AND b.blocked_user_id = ?)) AS blocked,
+            EXISTS(SELECT 1 FROM user_hides h WHERE h.hider_user_id = ? AND h.hidden_user_id = m.mentioned_user_id) AS hidden
+       FROM content_mentions m JOIN users u ON u.id = m.mentioned_user_id JOIN profiles p ON p.user_id = u.id
+      WHERE m.entity_type = ? AND m.entity_id IN (${ids.map(() => "?").join(",")})`, [viewerId, viewerId, viewerId, entityType, ...ids],
+  );
+  const result = new Map();
+  for (const row of rows) {
+    const targetPersonal = personalTypes.has(row.profile_type);
+    const ageCompatible = viewer?.role === "admin" || !viewerPersonal || !targetPersonal
+      || viewerAge !== null && ageFromBirthDate(row.birth_date) !== null && (viewerAge < 18) === (ageFromBirthDate(row.birth_date) < 18);
+    const visible = !row.deleted_at && !row.purged_at && !row.blocked && !row.hidden && ageCompatible;
+    const entry = { userId: Number(row.mentioned_user_id), token: visible ? row.mention_token : NEUTRAL_MENTION_TOKEN, ...(visible ? { username: row.username, displayName: row.display_name } : {}) };
+    Object.defineProperty(entry, "sourceToken", { value: String(row.mention_token ?? ""), enumerable: false });
+    const list = result.get(Number(row.entity_id)) ?? []; list.push(entry); result.set(Number(row.entity_id), list);
+  }
+  return result;
+}
+
+async function assertUsersCanInteract(connection, firstUserId, secondUserId, { lock = true } = {}) {
+  if (lock) await lockInteractionPair(connection, firstUserId, secondUserId);
   const [[inactive]] = await connection.query(
     "SELECT id FROM users WHERE id IN (?, ?) AND (deleted_at IS NOT NULL OR purged_at IS NOT NULL) LIMIT 1",
     [firstUserId, secondUserId],
@@ -842,11 +1104,11 @@ async function assertUsersCanInteract(connection, firstUserId, secondUserId) {
   }
 }
 
-async function assertMessagePairAccess(connection, userId, targetId) {
+async function assertMessagePairAccess(connection, userId, targetId, { lock = true } = {}) {
   if (!Number.isInteger(targetId) || targetId <= 0 || targetId === Number(userId)) {
     throw Object.assign(new Error("Некорректный пользователь"), { statusCode: 400 });
   }
-  await assertUsersCanInteract(connection, userId, targetId);
+  await assertUsersCanInteract(connection, userId, targetId, { lock });
   const low = Math.min(userId, targetId); const high = Math.max(userId, targetId);
   const [[friendship]] = await connection.query("SELECT 1 FROM friendships WHERE user_low_id = ? AND user_high_id = ?", [low, high]);
   const [[membership]] = await connection.query("SELECT 1 FROM community_memberships WHERE (community_user_id = ? AND member_user_id = ?) OR (community_user_id = ? AND member_user_id = ?)", [userId, targetId, targetId, userId]);
@@ -854,11 +1116,217 @@ async function assertMessagePairAccess(connection, userId, targetId) {
   if (participants.length !== 2) throw Object.assign(new Error("Пользователь не найден"), { statusCode: 404 });
   const hasAdmin = participants.some((participant) => participant.role === "admin");
   const [firstParticipant, secondParticipant] = participants;
-  if (!membership && !hasAdmin) await assertAgeCompatible(connection, userId, targetId);
+  if (!membership && !hasAdmin) await assertAgeCompatible(connection, userId, targetId, { lock });
   if (!canMessagePair({ friends: Boolean(friendship), communityMembers: Boolean(membership), hasAdmin, firstProfileType: firstParticipant?.profile_type, secondProfileType: secondParticipant?.profile_type })) {
     throw Object.assign(new Error("Переписка доступна только друзьям, участникам сообщества, издательствам и службе поддержки"), { statusCode: 403 });
   }
   return { participants };
+}
+
+async function assertMessageReactionAccess(connection, userId, messageId) {
+  if (!Number.isInteger(messageId) || messageId <= 0) {
+    throw Object.assign(new Error("Сообщение не найдено"), { statusCode: 404, code: "MESSAGE_NOT_FOUND" });
+  }
+  const [[candidate]] = await connection.query(
+    `SELECT id, sender_user_id, recipient_user_id, is_system
+      FROM messages
+      WHERE id = ? AND deleted_at IS NULL AND (sender_user_id = ? OR recipient_user_id = ?)
+      LIMIT 1`,
+    [messageId, userId, userId],
+  );
+  if (!candidate) throw Object.assign(new Error("Сообщение не найдено"), { statusCode: 404, code: "MESSAGE_NOT_FOUND" });
+  const peerId = Number(candidate.sender_user_id) === Number(userId) ? Number(candidate.recipient_user_id) : Number(candidate.sender_user_id);
+  if (!Number.isInteger(peerId) || peerId <= 0 || peerId === Number(userId)) {
+    throw Object.assign(new Error("Сообщение не найдено"), { statusCode: 404, code: "MESSAGE_NOT_FOUND" });
+  }
+  await assertMessagePairAccess(connection, userId, peerId);
+  const [[message]] = await connection.query(
+    `SELECT id, sender_user_id, recipient_user_id, is_system
+      FROM messages FORCE INDEX (PRIMARY)
+      WHERE id = ? AND deleted_at IS NULL AND (sender_user_id = ? OR recipient_user_id = ?)
+      LIMIT 1 FOR UPDATE`,
+    [messageId, userId, userId],
+  );
+  if (!message) throw Object.assign(new Error("Сообщение не найдено"), { statusCode: 404, code: "MESSAGE_NOT_FOUND" });
+  const [[historyClear]] = await connection.query(
+    "SELECT cleared_through_message_id FROM chat_history_clears WHERE user_id = ? AND peer_user_id = ? LIMIT 1",
+    [userId, peerId],
+  );
+  if (Number(message.id) <= Number(historyClear?.cleared_through_message_id ?? 0)) {
+    throw Object.assign(new Error("Сообщение не найдено"), { statusCode: 404, code: "MESSAGE_NOT_FOUND" });
+  }
+  if (message.is_system) {
+    throw Object.assign(new Error("Системные сообщения не поддерживают реакции"), { statusCode: 409, code: "MESSAGE_REACTION_NOT_ALLOWED" });
+  }
+  return { message, peerId };
+}
+
+async function messageReactionDto(connection, messageId, viewerId) {
+  const [rows] = await connection.query(
+    "SELECT user_id FROM message_reactions WHERE message_id = ? AND reaction_type = 'like' ORDER BY created_at, user_id",
+    [messageId],
+  );
+  const likedByUserIds = rows.map((row) => Number(row.user_id));
+  return {
+    messageId: Number(messageId),
+    likeCount: likedByUserIds.length,
+    likedByViewer: likedByUserIds.includes(Number(viewerId)),
+    likedByUserIds,
+  };
+}
+
+async function assertMessageEditAccess(connection, userId, messageId) {
+  if (!Number.isInteger(messageId) || messageId <= 0) {
+    throw Object.assign(new Error("Сообщение не найдено"), { statusCode: 404, code: "MESSAGE_NOT_FOUND" });
+  }
+  const [[candidate]] = await connection.query(
+    `SELECT id, sender_user_id, recipient_user_id, body, attachment_kind, attachment_id, message_kind, sticker_id, is_system, read_at, edited_at, created_at
+       FROM messages
+      WHERE id = ? AND sender_user_id = ? AND deleted_at IS NULL
+      LIMIT 1`,
+    [messageId, userId],
+  );
+  if (!candidate) throw Object.assign(new Error("Сообщение не найдено"), { statusCode: 404, code: "MESSAGE_NOT_FOUND" });
+  const peerId = Number(candidate.recipient_user_id);
+  await assertMessagePairAccess(connection, userId, peerId);
+  const [[message]] = await connection.query(
+    `SELECT id, sender_user_id, recipient_user_id, body, attachment_kind, attachment_id, message_kind, sticker_id, is_system, read_at, edited_at, created_at
+       FROM messages FORCE INDEX (PRIMARY)
+      WHERE id = ? AND sender_user_id = ? AND deleted_at IS NULL
+      LIMIT 1 FOR UPDATE`,
+    [messageId, userId],
+  );
+  if (!message) throw Object.assign(new Error("Сообщение не найдено"), { statusCode: 404, code: "MESSAGE_NOT_FOUND" });
+  const [[historyClear]] = await connection.query(
+    "SELECT cleared_through_message_id FROM chat_history_clears WHERE user_id = ? AND peer_user_id = ? LIMIT 1",
+    [userId, peerId],
+  );
+  if (Number(message.id) <= Number(historyClear?.cleared_through_message_id ?? 0)) {
+    throw Object.assign(new Error("Сообщение не найдено"), { statusCode: 404, code: "MESSAGE_NOT_FOUND" });
+  }
+  if (message.is_system) {
+    throw Object.assign(new Error("Системные сообщения нельзя редактировать"), { statusCode: 409, code: "MESSAGE_SYSTEM_NOT_EDITABLE" });
+  }
+  if (message.message_kind === "sticker") {
+    throw Object.assign(new Error("Стикеры нельзя редактировать"), { statusCode: 409, code: "MESSAGE_STICKER_NOT_EDITABLE" });
+  }
+  if (message.attachment_kind || message.attachment_id) {
+    throw Object.assign(new Error("Сообщения с вложениями нельзя редактировать"), { statusCode: 409, code: "MESSAGE_ATTACHMENT_NOT_EDITABLE" });
+  }
+  return { message, peerId };
+}
+
+async function assertMessageDeleteAccess(connection, userId, messageId) {
+  if (!Number.isInteger(messageId) || messageId <= 0) {
+    throw Object.assign(new Error("Сообщение не найдено"), { statusCode: 404, code: "MESSAGE_NOT_FOUND" });
+  }
+  const [[candidate]] = await connection.query(
+    `SELECT id, sender_user_id, recipient_user_id, body, attachment_kind, attachment_id, message_kind, sticker_id, is_system, read_at, edited_at, created_at
+       FROM messages
+      WHERE id = ? AND sender_user_id = ? AND deleted_at IS NULL
+      LIMIT 1`,
+    [messageId, userId],
+  );
+  if (!candidate) throw Object.assign(new Error("Сообщение не найдено"), { statusCode: 404, code: "MESSAGE_NOT_FOUND" });
+  const peerId = Number(candidate.recipient_user_id);
+  await assertMessagePairAccess(connection, userId, peerId);
+  const [[message]] = await connection.query(
+    `SELECT id, sender_user_id, recipient_user_id, body, attachment_kind, attachment_id, message_kind, sticker_id, is_system, read_at, edited_at, created_at
+       FROM messages FORCE INDEX (PRIMARY)
+      WHERE id = ? AND sender_user_id = ? AND deleted_at IS NULL
+      LIMIT 1 FOR UPDATE`,
+    [messageId, userId],
+  );
+  if (!message) throw Object.assign(new Error("Сообщение не найдено"), { statusCode: 404, code: "MESSAGE_NOT_FOUND" });
+  const [[historyClear]] = await connection.query(
+    "SELECT cleared_through_message_id FROM chat_history_clears WHERE user_id = ? AND peer_user_id = ? LIMIT 1",
+    [userId, peerId],
+  );
+  if (Number(message.id) <= Number(historyClear?.cleared_through_message_id ?? 0)) {
+    throw Object.assign(new Error("Сообщение не найдено"), { statusCode: 404, code: "MESSAGE_NOT_FOUND" });
+  }
+  if (message.is_system) {
+    throw Object.assign(new Error("Системные сообщения нельзя удалять"), { statusCode: 409, code: "MESSAGE_SYSTEM_NOT_DELETABLE" });
+  }
+  return { message, peerId };
+}
+
+async function editableMessageDto(connection, message, viewerId) {
+  const messageId = Number(message.id);
+  const mentions = (await mentionDtos(connection, "message", messageId, viewerId)).get(messageId) ?? [];
+  const { messageId: _messageId, ...reaction } = await messageReactionDto(connection, messageId, viewerId);
+  return {
+    id: messageId,
+    senderId: Number(message.sender_user_id),
+    mine: Number(message.sender_user_id) === Number(viewerId),
+    text: neutralizeMentionedText(message.body, mentions),
+    ...(message.message_kind === "sticker" ? { kind: "sticker", sticker: stickerDto(archivedBookSticker(message.sticker_id)) } : {}),
+    mentions,
+    read: Boolean(message.read_at),
+    editedAt: message.edited_at ? new Date(message.edited_at).toISOString() : undefined,
+    createdAt: new Date(message.created_at).toISOString(),
+    ...reaction,
+  };
+}
+
+async function assertMessageSearchPairAccess(connection, userId, peerId) {
+  try {
+    await assertMessagePairAccess(connection, userId, peerId, { lock: false });
+  } catch (error) {
+    if ([400, 403, 404, 410].includes(Number(error?.statusCode))) {
+      throw Object.assign(new Error("Диалог не найден"), { statusCode: 404, code: "MESSAGE_SEARCH_DIALOG_NOT_FOUND" });
+    }
+    throw error;
+  }
+}
+
+function messageSearchResult(row, tokens) {
+  return {
+    messageId: Number(row.id),
+    snippet: messageSearchSnippet(row.body, tokens),
+    createdAt: new Date(row.created_at).toISOString(),
+    author: {
+      id: Number(row.sender_user_id),
+      name: row.author_name,
+      username: row.author_username,
+    },
+  };
+}
+
+async function conversationMessageSearch(connection, { userId, peerId, search, cursor = null, limit = 20, includeTotal = true }) {
+  const cursorSql = cursor ? " AND (m.created_at < ? OR (m.created_at = ? AND m.id < ?))" : "";
+  const cursorValues = cursor ? [cursor.createdAt, cursor.createdAt, cursor.id] : [];
+  const commonSql = `
+      FROM messages m FORCE INDEX (messages_body_fulltext)
+      JOIN users author ON author.id = m.sender_user_id
+      JOIN profiles author_profile ON author_profile.user_id = author.id
+      LEFT JOIN chat_history_clears history_clear
+        ON history_clear.user_id = ? AND history_clear.peer_user_id = ?
+     WHERE ((m.sender_user_id = ? AND m.recipient_user_id = ?) OR (m.sender_user_id = ? AND m.recipient_user_id = ?))
+       AND m.id > COALESCE(history_clear.cleared_through_message_id, 0)
+       AND m.deleted_at IS NULL
+       AND m.deleted_before_read = 0
+       AND MATCH(m.body) AGAINST (? IN BOOLEAN MODE)`;
+  const values = [userId, peerId, userId, peerId, peerId, userId, search.booleanQuery];
+  const [rows] = await connection.query(
+    `SELECT m.id, m.sender_user_id, m.body, m.created_at, author.username AS author_username, author_profile.display_name AS author_name
+       ${commonSql}${cursorSql}
+      ORDER BY m.created_at DESC, m.id DESC
+      LIMIT ?`,
+    [...values, ...cursorValues, limit + 1],
+  );
+  let total;
+  if (includeTotal) {
+    const [[count]] = await connection.query(`SELECT COUNT(*) AS total ${commonSql}`, values);
+    total = Number(count.total);
+  }
+  const page = rows.slice(0, limit);
+  const last = page[page.length - 1];
+  return {
+    matches: page.map((row) => messageSearchResult(row, search.tokens)),
+    ...(includeTotal ? { total } : {}),
+    nextCursor: rows.length > limit && last ? encodeMessageSearchCursor({ id: Number(last.id), createdAt: new Date(last.created_at).toISOString() }) : null,
+  };
 }
 
 async function lockInteractionPair(connection, firstUserId, secondUserId) {
@@ -884,6 +1352,8 @@ async function applyPersonalBlock(connection, blockerId, blockedId) {
   await connection.query("DELETE FROM friend_requests WHERE (from_user_id = ? AND to_user_id = ?) OR (from_user_id = ? AND to_user_id = ?)", [blockerId, blockedId, blockedId, blockerId]);
   await connection.query("DELETE FROM messages WHERE (sender_user_id = ? AND recipient_user_id = ?) OR (sender_user_id = ? AND recipient_user_id = ?)", [blockerId, blockedId, blockedId, blockerId]);
   await connection.query("DELETE FROM notifications WHERE (user_id = ? AND actor_user_id = ?) OR (user_id = ? AND actor_user_id = ?)", [blockerId, blockedId, blockedId, blockerId]);
+  await cancelNotificationDeliveries(connection, { userId: blockerId, actorUserId: blockedId });
+  await cancelNotificationDeliveries(connection, { userId: blockedId, actorUserId: blockerId });
 }
 
 async function reportTarget(connection, kind, id) {
@@ -1039,6 +1509,11 @@ async function readableMaterialInfo(connection, userId, kind, id) {
   if (!gate.complete) throw Object.assign(new Error("Для открытия материала заполните обязательные поля профиля"), { statusCode: 428, code: "PROFILE_COMPLETION_REQUIRED", missing: gate.missing });
   const material = await materialInfo(connection, kind, id);
   if (!material) throw Object.assign(new Error("Материал не найден"), { statusCode: 404 });
+  if (Number(material.owner_id) !== Number(userId) && await hideExists(connection, userId, Number(material.owner_id))) {
+    // Deliberately indistinguishable from an unavailable material: callers must
+    // not learn whether this was hidden, moderated or removed.
+    throw Object.assign(new Error("Материал не найден"), { statusCode: 404 });
+  }
   if (kind === "shelf") await assertShelfReadable(connection, userId, id, { blockAsForbidden: true });
   await assertAdultMaterialReadable(connection, userId, kind, id);
   if (await blockExists(connection, userId, Number(material.owner_id))) {
@@ -1095,13 +1570,21 @@ async function notifyFollowersAboutPublication(connection, userId, kind, materia
   const [[actor]] = await connection.query("SELECT display_name FROM profiles WHERE user_id = ?", [userId]);
   const publicationName = kind === "review" ? "Новая рецензия" : "Новая публикация блога";
   const body = `${actor.display_name} опубликовал(а) материал «${materialTitle}».`;
-  await connection.query(
-    `INSERT INTO notifications (user_id, actor_user_id, notification_type, title, body, material_kind, material_id, group_key)
-     SELECT follower_user_id, ?, 'publication', ?, ?, ?, ?, ?
-       FROM follows
-      WHERE target_user_id = ? AND follower_user_id <> ?`,
-    [userId, publicationName, body, kind, materialId, `publication:${kind}:${materialId}`, userId, userId],
-  );
+  const [followers] = await connection.query("SELECT follower_user_id FROM follows WHERE target_user_id = ? AND follower_user_id <> ?", [userId, userId]);
+  for (const follower of followers) {
+    const key = `publication:${kind}:${materialId}`;
+    await createNotificationEvent(connection, {
+      recipientUserId: follower.follower_user_id,
+      actorUserId: userId,
+      eventType: "publication",
+      title: publicationName,
+      body,
+      materialKind: kind,
+      materialId,
+      dedupeKey: key,
+      groupKey: key,
+    });
+  }
 }
 
 router.get("/health", asyncRoute(async (_request, response) => {
@@ -1445,6 +1928,58 @@ router.get("/public/catalog", asyncRoute(async (_request, response) => {
   response.json(await loadPublicCatalog());
 }));
 
+router.post("/integrations/telegram/webhook", asyncRoute(async (request, response) => {
+  if (!telegramWebhookAuthorized(request.get("X-Telegram-Bot-Api-Secret-Token"))) return response.status(403).json({ ok: false });
+  const message = request.body?.message;
+  const match = String(message?.text ?? "").trim().match(/^\/start(?:@[A-Za-z0-9_]+)?\s+([A-Za-z0-9_-]{20,100})$/);
+  const telegramUserId = Number(message?.from?.id);
+  if (!match || !Number.isSafeInteger(telegramUserId) || telegramUserId < 1) return response.json({ ok: true, linked: false });
+  let linked = false;
+  try {
+    linked = Boolean(await withTransaction((connection) => consumeTelegramLinkToken(connection, {
+      token: match[1],
+      telegramUserId,
+      displayName: safeTelegramDisplayName(message.from),
+    })));
+  } catch (error) {
+    if (error?.code !== "ER_DUP_ENTRY") throw error;
+  }
+  response.json({ ok: true, linked });
+}));
+
+router.get("/notifications/email/unsubscribe", (request, response) => {
+  const token = String(request.query?.token ?? "");
+  if (!verifyEmailUnsubscribeToken(token)) return response.status(400).type("html").send("<!doctype html><meta charset=utf-8><title>Book Meet</title><p>Ссылка отписки недействительна или истекла.</p>");
+  const escaped = token.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/\"/g, "&quot;");
+  response.type("html").send(`<!doctype html><meta charset="utf-8"><title>Book Meet</title><main><h1>Отключить email-уведомления?</h1><p>Системные уведомления внутри Book Meet останутся включены.</p><form method="post" action="/api/notifications/email/unsubscribe"><input type="hidden" name="token" value="${escaped}"><button type="submit">Отключить необязательные письма</button></form></main>`);
+});
+
+router.post("/notifications/email/unsubscribe", asyncRoute(async (request, response) => {
+  const verified = verifyEmailUnsubscribeToken(request.body?.token);
+  if (!verified) return response.status(400).json({ code: "EMAIL_UNSUBSCRIBE_INVALID", error: "Ссылка отписки недействительна или истекла" });
+  await withTransaction(async (connection) => {
+    await connection.query("UPDATE notification_preferences SET email_mode = 'off', updated_at = CURRENT_TIMESTAMP WHERE user_id = ?", [verified.userId]);
+    await cancelNotificationDeliveries(connection, { userId: verified.userId, channel: "email" });
+  });
+  if (request.is("application/x-www-form-urlencoded")) return response.type("html").send("<!doctype html><meta charset=utf-8><title>Book Meet</title><p>Email-уведомления отключены.</p>");
+  response.json({ unsubscribed: true });
+}));
+
+router.get("/admin/notification-deliveries/statistics", asyncRoute(async (request, response) => {
+  const pool = getPool();
+  const user = await authenticatedUser(request);
+  if (!user) return response.status(401).json({ error: "Требуется вход" });
+  if (!(await isAdmin(pool, user.id))) return response.status(403).json({ error: "Доступно только администратору" });
+  const [rows] = await pool.query(
+    `SELECT channel, status, COUNT(*) AS total,
+            SUM(CASE WHEN status IN ('pending', 'failed') AND next_attempt_at <= UTC_TIMESTAMP() THEN 1 ELSE 0 END) AS due
+       FROM notification_deliveries
+      GROUP BY channel, status
+      ORDER BY channel, status`,
+  );
+  response.json({ deliveries: rows.map((row) => ({ channel: row.channel, status: row.status, total: Number(row.total), due: Number(row.due) })) });
+}));
+
 router.get("/admin/statistics", asyncRoute(async (request, response) => {
   const pool = getPool();
   const user = await authenticatedUser(request);
@@ -1647,24 +2182,97 @@ router.post("/admin/age-boundaries/audit", asyncRoute(async (request, response) 
   response.json({ removed });
 }));
 
+function legacyTelegramSettings(state) {
+  const enabledCanonical = NOTIFICATION_CATEGORIES.filter((category) => state.categories[category].telegramEnabled);
+  return {
+    connected: state.readiness.telegram.connected,
+    available: state.readiness.telegram.available,
+    enabled: state.readiness.telegram.available && enabledCanonical.length > 0,
+    categories: legacyTelegramCategoriesForPreferences(enabledCanonical),
+  };
+}
+
+router.post("/users/me/telegram-link", notificationPreferenceRateLimit, asyncRoute(async (request, response) => {
+  if (!telegramLinkConfiguration().ready) return response.status(503).json({ code: "TELEGRAM_NOTIFICATIONS_UNAVAILABLE", error: "Подключение Telegram временно недоступно" });
+  const link = await withTransaction(async (connection) => {
+    const [[account]] = await connection.query("SELECT id FROM users WHERE id = ? AND deleted_at IS NULL AND purged_at IS NULL FOR UPDATE", [request.bookMeetUser.id]);
+    if (!account) throw Object.assign(new Error("Пользователь не найден"), { statusCode: 404 });
+    return replaceTelegramLinkToken(connection, request.bookMeetUser.id);
+  });
+  response.status(201).json({ deepLink: telegramDeepLink(link.token), expiresAt: link.expiresAt.toISOString() });
+}));
+
+router.post("/users/me/telegram/test", notificationPreferenceRateLimit, asyncRoute(async (request, response) => {
+  const [[account]] = await getPool().query(
+    "SELECT telegram_user_id, telegram_connected_at FROM users WHERE id = ? AND deleted_at IS NULL AND purged_at IS NULL",
+    [request.bookMeetUser.id],
+  );
+  if (!telegramLinkConfiguration().ready || !account?.telegram_user_id || !account?.telegram_connected_at) return response.status(409).json({ code: "TELEGRAM_NOTIFICATIONS_UNAVAILABLE", error: "Telegram не подключён" });
+  try {
+    await createTelegramNotificationAdapter()({
+      idempotencyKey: `telegram-test:${request.bookMeetUser.id}:${Date.now()}`,
+      mode: "immediate",
+      recipient: { userId: request.bookMeetUser.id, telegramUserId: Number(account.telegram_user_id), telegramConnected: true },
+      payload: { title: "Book Meet", summary: "Тестовое уведомление доставлено.", link: null },
+    });
+  } catch (error) {
+    if (error?.code !== "TELEGRAM_CHANNEL_BLOCKED") throw error;
+    await withTransaction((connection) => markTelegramChannelError(connection, request.bookMeetUser.id));
+    return response.status(409).json({ code: "TELEGRAM_CHANNEL_BLOCKED", error: "Бот заблокирован. Подключите Telegram повторно после разблокировки" });
+  }
+  await getPool().query("UPDATE users SET telegram_delivery_error_at = NULL WHERE id = ?", [request.bookMeetUser.id]);
+  response.json({ delivered: true });
+}));
+
 router.get("/users/me/telegram-notifications", asyncRoute(async (request, response) => {
-  const [[account]] = await getPool().query("SELECT telegram_subject, telegram_notifications_enabled, telegram_notification_categories FROM users WHERE id = ?", [request.bookMeetUser.id]);
-  response.json({ connected: Boolean(account?.telegram_subject), enabled: Boolean(account?.telegram_notifications_enabled), categories: jsonArray(account?.telegram_notification_categories) });
+  const state = await loadNotificationPreferences(getPool(), request.bookMeetUser.id, request.get("X-BookMeet-Timezone"));
+  response.json(legacyTelegramSettings(state));
 }));
 
-router.patch("/users/me/telegram-notifications", asyncRoute(async (request, response) => {
-  const allowed = new Set(["messages", "moderation", "complaints", "events", "social"]);
-  const categories = (Array.isArray(request.body?.categories) ? request.body.categories : []).map(String).filter((item) => allowed.has(item));
-  const enabled = Boolean(request.body?.enabled);
-  const [[account]] = await getPool().query("SELECT telegram_subject FROM users WHERE id = ?", [request.bookMeetUser.id]);
-  if (enabled && !account?.telegram_subject) return response.status(409).json({ error: "Сначала подключите Telegram" });
-  await getPool().query("UPDATE users SET telegram_notifications_enabled = ?, telegram_notification_categories = ? WHERE id = ?", [enabled ? 1 : 0, JSON.stringify(categories), request.bookMeetUser.id]);
-  response.json({ enabled, categories });
+router.patch("/users/me/telegram-notifications", notificationPreferenceRateLimit, asyncRoute(async (request, response) => {
+  const requestedCategories = Array.isArray(request.body?.categories) ? request.body.categories.map(String) : [];
+  if (requestedCategories.some((category) => !LEGACY_TELEGRAM_NOTIFICATION_CATEGORIES.includes(category))) {
+    return response.status(400).json({ code: "INVALID_NOTIFICATION_PREFERENCES", error: "Некорректная категория Telegram-уведомлений" });
+  }
+  const enabled = request.body?.enabled === true;
+  const selectedCanonical = new Set(canonicalCategoriesForLegacyTelegram(requestedCategories));
+  if (enabled && selectedCanonical.size === 0) {
+    return response.status(400).json({ code: "INVALID_NOTIFICATION_PREFERENCES", error: "Выбранные категории не поддерживаются новым центром уведомлений" });
+  }
+  const state = await withTransaction(async (connection) => {
+    const current = await loadNotificationPreferences(connection, request.bookMeetUser.id, request.get("X-BookMeet-Timezone"));
+    if (enabled && !current.readiness.telegram.available) {
+      throw Object.assign(new Error("Telegram-уведомления недоступны: подключение аккаунта или доставка не подтверждены"), { statusCode: 409, code: "TELEGRAM_NOTIFICATIONS_UNAVAILABLE" });
+    }
+    for (const category of NOTIFICATION_CATEGORIES) {
+      const preference = current.categories[category];
+      await connection.query(
+        `INSERT INTO notification_preferences (user_id, category, in_app_enabled, telegram_enabled, email_mode)
+         VALUES (?, ?, ?, ?, ?)
+         ON DUPLICATE KEY UPDATE telegram_enabled = VALUES(telegram_enabled), updated_at = CURRENT_TIMESTAMP`,
+        [request.bookMeetUser.id, category, preference.inAppEnabled ? 1 : 0, enabled && selectedCanonical.has(category) ? 1 : 0, preference.emailMode],
+      );
+      if (!enabled || !selectedCanonical.has(category)) {
+        await cancelNotificationDeliveries(connection, { userId: request.bookMeetUser.id, channel: "telegram", category });
+      }
+    }
+    await connection.query(
+      "UPDATE users SET telegram_notifications_enabled = ?, telegram_notification_categories = ? WHERE id = ?",
+      [enabled ? 1 : 0, enabled ? JSON.stringify(requestedCategories) : null, request.bookMeetUser.id],
+    );
+    return loadNotificationPreferences(connection, request.bookMeetUser.id, request.get("X-BookMeet-Timezone"));
+  });
+  response.json(legacyTelegramSettings(state));
 }));
 
-router.delete("/users/me/telegram", asyncRoute(async (request, response) => {
+router.delete("/users/me/telegram", notificationPreferenceRateLimit, asyncRoute(async (request, response) => {
   await withTransaction(async (connection) => {
-    await connection.query("UPDATE users SET telegram_subject = NULL, telegram_notifications_enabled = 0, telegram_notification_categories = NULL WHERE id = ?", [request.bookMeetUser.id]);
+    // telegram_subject is a legacy social-auth identity and is deliberately
+    // retained. It is never proof that the user-notification channel is linked.
+    await connection.query("UPDATE users SET telegram_user_id = NULL, telegram_connected_at = NULL, telegram_display_name = NULL, telegram_delivery_error_at = NULL, telegram_notifications_enabled = 0, telegram_notification_categories = NULL WHERE id = ?", [request.bookMeetUser.id]);
+    await connection.query("DELETE FROM telegram_link_tokens WHERE user_id = ?", [request.bookMeetUser.id]);
+    await connection.query("UPDATE notification_preferences SET telegram_enabled = 0, updated_at = CURRENT_TIMESTAMP WHERE user_id = ?", [request.bookMeetUser.id]);
+    await cancelNotificationDeliveries(connection, { userId: request.bookMeetUser.id, channel: "telegram" });
     await logSecurityEvent(connection, request, { userId: request.bookMeetUser.id, eventType: "telegram_disconnect", result: "success" });
   });
   response.json({ disconnected: true });
@@ -1823,7 +2431,8 @@ router.get("/realtime", (request, response) => {
   response.setHeader("X-Accel-Buffering", "no");
   response.flushHeaders?.();
   response.write(`event: connected\ndata: ${Date.now()}\n\n`);
-  realtimeClients.add(response);
+  const client = { response, userId: Number(request.bookMeetUser.id) };
+  realtimeClients.add(client);
   const heartbeat = setInterval(async () => {
     response.write(": keep-alive\n\n");
     try {
@@ -1833,14 +2442,16 @@ router.get("/realtime", (request, response) => {
   }, 20_000);
   request.on("close", () => {
     clearInterval(heartbeat);
-    realtimeClients.delete(response);
+    realtimeClients.delete(client);
   });
 });
 
 router.use((request, response, next) => {
   if (!["GET", "HEAD", "OPTIONS"].includes(request.method)) {
     response.once("finish", () => {
-      if (response.statusCode < 400) broadcastRealtime();
+      if (response.statusCode >= 400) return;
+      if (response.locals.chatRealtime) broadcastChatRealtime(response.locals.chatRealtime);
+      else broadcastRealtime();
     });
   }
   next();
@@ -1892,6 +2503,66 @@ router.use(asyncRoute(async (request, response, next) => {
   if (!profileGate.complete) return response.status(428).json({ code: "PROFILE_COMPLETION_REQUIRED", error: "Заполните имя, город и дату рождения в профиле", missing: profileGate.missing });
   await withTransaction((connection) => requireApprovedPublisher(connection, request.bookMeetUser.id));
   next();
+}));
+
+router.post("/users/:userId/hide", asyncRoute(async (request, response) => {
+  const hiderId = request.bookMeetUser.id;
+  const hiddenId = Number(request.params.userId);
+  if (!Number.isInteger(hiddenId) || hiddenId <= 0 || hiddenId === Number(hiderId)) return response.status(400).json({ error: "Нельзя скрыть этого пользователя" });
+  await withTransaction(async (connection) => {
+    const [[target]] = await connection.query("SELECT id FROM users WHERE id = ? AND deleted_at IS NULL AND purged_at IS NULL FOR UPDATE", [hiddenId]);
+    if (!target) throw Object.assign(new Error("Пользователь не найден"), { statusCode: 404 });
+    await connection.query("INSERT IGNORE INTO user_hides (hider_user_id, hidden_user_id) VALUES (?, ?)", [hiderId, hiddenId]);
+  });
+  response.status(201).json({ ok: true, hiddenUserId: hiddenId });
+}));
+
+router.delete("/users/:userId/hide", asyncRoute(async (request, response) => {
+  const hiddenId = Number(request.params.userId);
+  if (!Number.isInteger(hiddenId) || hiddenId <= 0) return response.status(400).json({ error: "Некорректный пользователь" });
+  await getPool().query("DELETE FROM user_hides WHERE hider_user_id = ? AND hidden_user_id = ?", [request.bookMeetUser.id, hiddenId]);
+  response.json({ ok: true });
+}));
+
+router.get("/users/me/hidden-users", asyncRoute(async (request, response) => {
+  const cursor = Math.max(0, Number(request.query.cursor) || 0);
+  const limit = Math.min(50, Math.max(1, Number(request.query.limit) || 20));
+  const [rows] = await getPool().query(
+    `SELECT h.hidden_user_id, h.created_at, p.display_name, u.username, u.initials, u.color, u.avatar_path
+       FROM user_hides h JOIN users u ON u.id = h.hidden_user_id JOIN profiles p ON p.user_id = u.id
+      WHERE h.hider_user_id = ? AND h.hidden_user_id > ? ORDER BY h.hidden_user_id LIMIT ?`,
+    [request.bookMeetUser.id, cursor, limit + 1],
+  );
+  const page = rows.slice(0, limit);
+  response.json({ users: page.map((row) => ({ id: Number(row.hidden_user_id), displayName: row.display_name, username: row.username, initials: row.initials, color: row.color, avatarUrl: row.avatar_path ?? undefined, hiddenAt: new Date(row.created_at).toISOString() })), nextCursor: rows.length > limit ? Number(page.at(-1)?.hidden_user_id) : null });
+}));
+
+router.get("/users/mentions", asyncRoute(async (request, response) => {
+  const userId = request.bookMeetUser.id; const query = String(request.query.q ?? "").trim().slice(0, 40);
+  if (!query) return response.json({ users: [] });
+  const [[viewer]] = await getPool().query(
+    "SELECT u.role, p.profile_type, p.birth_date FROM users u JOIN profiles p ON p.user_id = u.id WHERE u.id = ? LIMIT 1",
+    [userId],
+  );
+  const personalTypes = new Set(["Читатель", "Писатель", "Блогер"]);
+  const viewerPersonal = personalTypes.has(viewer?.profile_type);
+  const viewerAge = ageFromBirthDate(viewer?.birth_date);
+  const [rows] = await getPool().query(
+    `SELECT u.id, u.username, u.initials, u.color, u.avatar_path, u.role, p.display_name, p.profile_type, p.birth_date
+       FROM users u JOIN profiles p ON p.user_id = u.id
+      WHERE u.id <> ? AND u.deleted_at IS NULL AND u.purged_at IS NULL
+        AND (u.username LIKE ? OR p.display_name LIKE ?)
+        AND NOT EXISTS (SELECT 1 FROM user_blocks b WHERE (b.blocker_user_id = ? AND b.blocked_user_id = u.id) OR (b.blocker_user_id = u.id AND b.blocked_user_id = ?))
+        AND NOT EXISTS (SELECT 1 FROM user_hides h WHERE h.hider_user_id = ? AND h.hidden_user_id = u.id)
+      ORDER BY p.display_name, u.id LIMIT 10`, [userId, `%${query}%`, `%${query}%`, userId, userId, userId],
+  );
+  response.json({ users: rows.filter((row) => {
+    if (viewer?.role === "admin") return true;
+    const targetPersonal = personalTypes.has(row.profile_type);
+    if (!viewerPersonal || !targetPersonal) return true;
+    const targetAge = ageFromBirthDate(row.birth_date);
+    return viewerAge !== null && targetAge !== null && (viewerAge < 18) === (targetAge < 18);
+  }).map((row) => ({ id: Number(row.id), username: row.username, displayName: row.display_name, initials: row.initials, color: row.color, avatarUrl: row.avatar_path ?? undefined })) });
 }));
 
 router.get("/auth/totp/status", asyncRoute(async (request, response) => {
@@ -2031,12 +2702,18 @@ router.post("/events", asyncRoute(async (request, response) => {
       [userId, payload.title, payload.summary, payload.description, payload.isAdult ? 1 : 0, payload.date, payload.time, city.name, city.id, payload.address, payload.mapUrl || null, payload.detailsUrl || null, linkedBook?.id ?? null],
     );
     await syncMaterialBooks(connection, "event", created.insertId, linkedBooks.map((book) => book.id));
+    await syncMentions(connection, { entityType: "event", entityId: Number(created.insertId), authorUserId: userId, mentionUserIds: request.body?.mentionUserIds ?? request.body?.mentions, text: `${payload.title}\n${payload.summary}\n${payload.description}`, publicMaterial: true, materialKind: "event", materialId: Number(created.insertId) });
     await enqueueTelegramAlert(connection, { eventType: "event_pending", entityId: created.insertId, actorUserId: userId, summary: payload.title });
-    await connection.query(
-      `INSERT INTO notifications (user_id, actor_user_id, notification_type, title, body, material_kind, material_id)
-       VALUES (?, ?, 'event_submitted', 'Событие на модерации', ?, 'event', ?)`,
-      [userId, userId, `Событие «${payload.title}» отправлено на модерацию. Вы уже видите его на главной странице.`, created.insertId],
-    );
+    await createNotificationEvent(connection, {
+      recipientUserId: userId,
+      actorUserId: userId,
+      eventType: "event_submitted",
+      title: "Событие на модерации",
+      body: `Событие «${payload.title}» отправлено на модерацию. Вы уже видите его на главной странице.`,
+      materialKind: "event",
+      materialId: created.insertId,
+      dedupeKey: `event-submitted:event:${created.insertId}`,
+    });
     return {
       id: Number(created.insertId), creatorId: userId, ...payload, city: city.name, cityId: city.id,
       linkedBookId: linkedBook ? Number(linkedBook.id) : undefined,
@@ -2104,15 +2781,14 @@ router.post("/events/:id/reminder", asyncRoute(async (request, response) => {
 router.delete("/events/:id/reminder", asyncRoute(async (request, response) => {
   const userId = request.bookMeetUser.id;
   const eventId = Number(request.params.id);
-  const [deleted] = await getPool().query(
-    "DELETE FROM event_reminders WHERE user_id = ? AND event_id = ?",
-    [userId, eventId],
-  );
-  if (!deleted.affectedRows) return response.status(404).json({ error: "Напоминание не найдено" });
-  await getPool().query(
-    "DELETE FROM notifications WHERE user_id = ? AND material_kind = 'event' AND material_id = ? AND notification_type = 'event_reminder'",
-    [userId, eventId],
-  );
+  const deleted = await withTransaction(async (connection) => {
+    const [result] = await connection.query("DELETE FROM event_reminders WHERE user_id = ? AND event_id = ?", [userId, eventId]);
+    if (!result.affectedRows) return false;
+    await cancelNotificationDeliveries(connection, { userId, materialKind: "event", materialId: eventId, eventType: "event_reminder" });
+    await connection.query("DELETE FROM notifications WHERE user_id = ? AND material_kind = 'event' AND material_id = ? AND notification_type = 'event_reminder'", [userId, eventId]);
+    return true;
+  });
+  if (!deleted) return response.status(404).json({ error: "Напоминание не найдено" });
   response.json({ ok: true });
 }));
 
@@ -2132,6 +2808,7 @@ router.patch("/events/:id", asyncRoute(async (request, response) => {
       [payload.title, payload.summary, payload.description, payload.isAdult ? 1 : 0, payload.date, payload.time, city.name, city.id, payload.address, payload.mapUrl || null, payload.detailsUrl || null, linkedBook?.id ?? null, eventId],
     );
     await syncMaterialBooks(connection, "event", eventId, linkedBooks.map((book) => book.id));
+    await syncMentions(connection, { entityType: "event", entityId: eventId, authorUserId: userId, mentionUserIds: request.body?.mentionUserIds ?? request.body?.mentions, text: `${payload.title}\n${payload.summary}\n${payload.description}`, publicMaterial: true, materialKind: "event", materialId: eventId });
     await enqueueTelegramAlert(connection, { eventType: "event_pending", entityId: eventId, actorUserId: userId, summary: payload.title, dedupeKey: `event_pending:${eventId}:${randomBytes(8).toString("hex")}` });
     return {
       id: eventId, creatorId: userId, ...payload, city: city.name, cityId: city.id,
@@ -2149,7 +2826,9 @@ router.delete("/events/:id", asyncRoute(async (request, response) => {
   const userId = request.bookMeetUser.id;
   const eventId = Number(request.params.id);
   await withTransaction(async (connection) => {
+    await cancelNotificationDeliveries(connection, { materialKind: "event", materialId: eventId });
     await connection.query("DELETE FROM notifications WHERE material_kind = 'event' AND material_id = ?", [eventId]);
+    await connection.query("DELETE FROM content_mentions WHERE entity_type = 'event' AND entity_id = ?", [eventId]);
     await connection.query("DELETE FROM material_books WHERE material_kind = 'event' AND material_id = ?", [eventId]);
     const [deleted] = await connection.query("DELETE FROM events WHERE id = ? AND creator_user_id = ?", [eventId, userId]);
     if (!deleted.affectedRows) throw Object.assign(new Error("Событие не найдено"), { statusCode: 404 });
@@ -2186,11 +2865,16 @@ router.patch("/admin/events/:id", asyncRoute(async (request, response) => {
       if (Number(current.creator_user_id) !== adminId) {
         const titles = { accept: "Событие опубликовано", revision: "Событие требует доработки", reject: "Событие отклонено" };
         const bodies = { accept: `Событие «${current.title}» прошло модерацию и опубликовано.`, revision: `Событие «${current.title}» отправлено на доработку.${note ? ` Комментарий: ${note}` : ""}`, reject: `Событие «${current.title}» отклонено.${note ? ` Причина: ${note}` : ""}` };
-        await connection.query(
-          `INSERT INTO notifications (user_id, actor_user_id, notification_type, title, body, material_kind, material_id)
-           VALUES (?, ?, 'event_moderation', ?, ?, 'event', ?)`,
-          [current.creator_user_id, adminId, titles[action], bodies[action], eventId],
-        );
+        await createNotificationEvent(connection, {
+          recipientUserId: current.creator_user_id,
+          actorUserId: adminId,
+          eventType: "event_moderation",
+          title: titles[action],
+          body: bodies[action],
+          materialKind: "event",
+          materialId: eventId,
+          dedupeKey: `event-moderation:event:${eventId}:${status}`,
+        });
       }
     }
     await logModerationAction(connection, { adminUserId: adminId, actionType: action === "edit" ? "event_edit" : "event_moderate", objectType: "event", objectId: eventId, oldStatus: current.status, newStatus: moderationStatus, reason: note || null });
@@ -2218,12 +2902,18 @@ router.post("/occasions", asyncRoute(async (request, response) => {
       [userId, payload.type, payload.primaryText, payload.audienceText, payload.isAdult ? 1 : 0, payload.targetGender, JSON.stringify(payload.targetCities), payload.targetProfileType, payload.meetingDate ?? null, payload.meetingStartTime ?? null, payload.meetingEndTime ?? null, payload.meetingCity ?? null, payload.meetingCityId ?? null, payload.meetingAddress ?? null, payload.meetingMapUrl || null, payload.linkedBookId ?? null],
     );
     await syncMaterialBooks(connection, "occasion", created.insertId, linkedBooks.map((book) => book.id));
+    await syncMentions(connection, { entityType: "occasion", entityId: Number(created.insertId), authorUserId: userId, mentionUserIds: request.body?.mentionUserIds ?? request.body?.mentions, text: `${payload.primaryText}\n${payload.audienceText}`, publicMaterial: true, materialKind: "occasion", materialId: Number(created.insertId) });
     await enqueueTelegramAlert(connection, { eventType: "occasion_pending", entityId: created.insertId, actorUserId: userId, summary: payload.primaryText });
-    await connection.query(
-      `INSERT INTO notifications (user_id, actor_user_id, notification_type, title, body, material_kind, material_id)
-       VALUES (?, ?, 'event_submitted', 'Повод на модерации', ?, 'occasion', ?)`,
-      [userId, userId, "Повод для знакомства отправлен на модерацию. Вы уже видите его на главной странице.", created.insertId],
-    );
+    await createNotificationEvent(connection, {
+      recipientUserId: userId,
+      actorUserId: userId,
+      eventType: "event_submitted",
+      title: "Повод на модерации",
+      body: "Повод для знакомства отправлен на модерацию. Вы уже видите его на главной странице.",
+      materialKind: "occasion",
+      materialId: created.insertId,
+      dedupeKey: `event-submitted:occasion:${created.insertId}`,
+    });
     return { id: Number(created.insertId), creatorId: userId, ...payload, linkedBooks, status: "pending", moderationNote: "", creatorName: creator?.display_name ?? "", createdAt: new Date().toISOString() };
   });
   response.status(201).json({ occasion });
@@ -2247,6 +2937,7 @@ router.patch("/occasions/:id", asyncRoute(async (request, response) => {
       [payload.type, payload.primaryText, payload.audienceText, payload.isAdult ? 1 : 0, payload.targetGender, JSON.stringify(payload.targetCities), payload.targetProfileType, payload.meetingDate ?? null, payload.meetingStartTime ?? null, payload.meetingEndTime ?? null, payload.meetingCity ?? null, payload.meetingCityId ?? null, payload.meetingAddress ?? null, payload.meetingMapUrl || null, payload.linkedBookId ?? null, occasionId],
     );
     await syncMaterialBooks(connection, "occasion", occasionId, linkedBooks.map((book) => book.id));
+    await syncMentions(connection, { entityType: "occasion", entityId: occasionId, authorUserId: userId, mentionUserIds: request.body?.mentionUserIds ?? request.body?.mentions, text: `${payload.primaryText}\n${payload.audienceText}`, publicMaterial: true, materialKind: "occasion", materialId: occasionId });
     await enqueueTelegramAlert(connection, { eventType: "occasion_pending", entityId: occasionId, actorUserId: userId, summary: payload.primaryText, dedupeKey: `occasion_pending:${occasionId}:${randomBytes(8).toString("hex")}` });
     const [[creator]] = await connection.query("SELECT display_name FROM profiles WHERE user_id = ?", [userId]);
     return { id: occasionId, creatorId: userId, ...payload, linkedBooks, status: "pending", moderationNote: "", creatorName: creator?.display_name ?? "", createdAt: new Date(current.created_at).toISOString() };
@@ -2258,7 +2949,9 @@ router.delete("/occasions/:id", asyncRoute(async (request, response) => {
   const userId = request.bookMeetUser.id;
   const occasionId = Number(request.params.id);
   await withTransaction(async (connection) => {
+    await cancelNotificationDeliveries(connection, { materialKind: "occasion", materialId: occasionId });
     await connection.query("DELETE FROM notifications WHERE material_kind = 'occasion' AND material_id = ?", [occasionId]);
+    await connection.query("DELETE FROM content_mentions WHERE entity_type = 'occasion' AND entity_id = ?", [occasionId]);
     await connection.query("DELETE FROM material_books WHERE material_kind = 'occasion' AND material_id = ?", [occasionId]);
     const [deleted] = await connection.query("DELETE FROM occasions WHERE id = ? AND creator_user_id = ?", [occasionId, userId]);
     if (!deleted.affectedRows) throw Object.assign(new Error("Повод не найден"), { statusCode: 404 });
@@ -2296,11 +2989,16 @@ router.patch("/admin/occasions/:id", asyncRoute(async (request, response) => {
       await connection.query("UPDATE occasions SET status = ?, moderation_note = ? WHERE id = ?", [status, note || null, occasionId]);
       if (Number(current.creator_user_id) !== adminId) {
         const titles = { accept: "Повод опубликован", revision: "Повод требует доработки", reject: "Повод отклонён" };
-        await connection.query(
-          `INSERT INTO notifications (user_id, actor_user_id, notification_type, title, body, material_kind, material_id)
-           VALUES (?, ?, 'event_moderation', ?, ?, 'occasion', ?)`,
-          [current.creator_user_id, adminId, titles[action], `${titles[action]}.${note ? ` Комментарий: ${note}` : ""}`, occasionId],
-        );
+        await createNotificationEvent(connection, {
+          recipientUserId: current.creator_user_id,
+          actorUserId: adminId,
+          eventType: "event_moderation",
+          title: titles[action],
+          body: `${titles[action]}.${note ? ` Комментарий: ${note}` : ""}`,
+          materialKind: "occasion",
+          materialId: occasionId,
+          dedupeKey: `event-moderation:occasion:${occasionId}:${status}`,
+        });
       }
     }
     await logModerationAction(connection, { adminUserId: adminId, actionType: action === "edit" ? "occasion_edit" : "occasion_moderate", objectType: "occasion", objectId: occasionId, oldStatus: current.status, newStatus: moderationStatus, reason: note || null });
@@ -2334,11 +3032,14 @@ router.patch("/admin/publishers/:id", asyncRoute(async (request, response) => {
       revision: `Профиль ${organizationName} требует доработки`,
       reject: `Профиль ${organizationName} отклонён`,
     };
-    await connection.query(
-      `INSERT INTO notifications (user_id, actor_user_id, notification_type, title, body)
-       VALUES (?, ?, 'event_moderation', ?, ?)`,
-      [publisherId, adminId, titles[action], `${titles[action]}.${note ? ` Комментарий: ${note}` : ""}`],
-    );
+    await createNotificationEvent(connection, {
+      recipientUserId: publisherId,
+      actorUserId: adminId,
+      eventType: "event_moderation",
+      title: titles[action],
+      body: `${titles[action]}.${note ? ` Комментарий: ${note}` : ""}`,
+      dedupeKey: `organization-moderation:${publisherId}:${action}`,
+    });
   });
   response.json({ ok: true });
 }));
@@ -2498,15 +3199,19 @@ router.put("/users/me/state", asyncRoute(async (request, response) => {
         if (existing) {
           await connection.query("UPDATE publisher_news SET title = ?, preview_text = ?, body_html = ?, body = ?, is_adult = ? WHERE id = ? AND user_id = ?", [title, previewText, bodyHtml, body, item.isAdult ? 1 : 0, desiredId, userId]);
           newsIds.push(desiredId);
+          await syncMentions(connection, { entityType: "publisher_news", entityId: desiredId, authorUserId: userId, mentionUserIds: item.mentionUserIds ?? item.mentions, text: `${title}\n${previewText}\n${plainTextFromHtml(bodyHtml)}`, publicMaterial: true, materialKind: "publisher_news", materialId: desiredId });
         } else if (publisherStatus === "approved") {
           const [created] = desiredId
             ? await connection.query("INSERT INTO publisher_news (id, user_id, title, preview_text, body_html, body, is_adult) VALUES (?, ?, ?, ?, ?, ?, ?)", [desiredId, userId, title, previewText, bodyHtml, body, item.isAdult ? 1 : 0])
             : await connection.query("INSERT INTO publisher_news (user_id, title, preview_text, body_html, body, is_adult) VALUES (?, ?, ?, ?, ?, ?)", [userId, title, previewText, bodyHtml, body, item.isAdult ? 1 : 0]);
-          newsIds.push(desiredId || Number(created.insertId));
+          const newsId = desiredId || Number(created.insertId);
+          newsIds.push(newsId);
+          await syncMentions(connection, { entityType: "publisher_news", entityId: newsId, authorUserId: userId, mentionUserIds: item.mentionUserIds ?? item.mentions, text: `${title}\n${previewText}\n${plainTextFromHtml(bodyHtml)}`, publicMaterial: true, materialKind: "publisher_news", materialId: newsId });
         }
       }
       if (newsIds.length) await connection.query(`DELETE FROM publisher_news WHERE user_id = ? AND id NOT IN (${newsIds.map(() => "?").join(",")})`, [userId, ...newsIds]);
       else if (publisherStatus === "approved") await connection.query("DELETE FROM publisher_news WHERE user_id = ?", [userId]);
+      await connection.query("DELETE mentions FROM content_mentions mentions LEFT JOIN publisher_news news ON news.id = mentions.entity_id WHERE mentions.entity_type = 'publisher_news' AND news.id IS NULL");
     }
     if (["Читатель", "Писатель", "Блогер"].includes(requestedType)) {
       const reviewIds = [];
@@ -2539,7 +3244,7 @@ router.put("/users/me/state", asyncRoute(async (request, response) => {
         reviewIds.push(savedReviewId);
         await syncMaterialBooks(connection, "review", savedReviewId, [book.id]);
         await notifyFollowersAboutPublication(connection, userId, "review", desiredId || Number(result.insertId), review.bookTitle.trim());
-        await notifyWriterAboutBook(connection, book.id, userId, "review");
+        await notifyWriterAboutBook(connection, book.id, userId, "review", `review-${savedReviewId}`);
       }
       }
       if (reviewIds.length) await connection.query(`DELETE FROM reviews WHERE user_id = ? AND id NOT IN (${reviewIds.map(() => "?").join(",")})`, [userId, ...reviewIds]);
@@ -3024,7 +3729,16 @@ async function syncPostponedReminder(connection, { userId, bookId, state, previo
   if (!due) return;
   const [[locked]] = await connection.query("SELECT postponed_notified_at FROM user_books WHERE user_id = ? AND book_id = ? FOR UPDATE", [userId, bookId]);
   if (locked?.postponed_notified_at) return;
-  await connection.query("INSERT INTO notifications (user_id, actor_user_id, notification_type, title, body, material_kind, material_id, group_key) VALUES (?, NULL, 'postponed_book', 'Пора вернуться к книге', 'Срок отложенной книги уже наступил.', 'book', ?, NULL)", [userId, bookId]);
+  const [[generation]] = await connection.query("SELECT COUNT(*) AS total FROM notification_events WHERE recipient_user_id = ? AND event_type = 'postponed_book' AND material_kind = 'book' AND material_id = ?", [userId, bookId]);
+  await createNotificationEvent(connection, {
+    recipientUserId: userId,
+    eventType: "postponed_book",
+    title: "Пора вернуться к книге",
+    body: "Срок отложенной книги уже наступил.",
+    materialKind: "book",
+    materialId: bookId,
+    dedupeKey: `postponed-book:${userId}:${bookId}:generation-${Number(generation.total) + 1}`,
+  });
   await connection.query("UPDATE user_books SET postponed_notified_at = UTC_TIMESTAMP() WHERE user_id = ? AND book_id = ? AND postponed_notified_at IS NULL", [userId, bookId]);
 }
 
@@ -3269,6 +3983,7 @@ async function deleteShelfMaterialRelations(connection, id) {
   await connection.query("DELETE FROM material_likes WHERE material_kind = 'shelf' AND material_id = ?", [id]);
   await connection.query("DELETE FROM material_saves WHERE material_kind = 'shelf' AND material_id = ?", [id]);
   await connection.query("DELETE FROM material_comments WHERE material_kind = 'shelf' AND material_id = ?", [id]);
+  await cancelNotificationDeliveries(connection, { materialKind: "shelf", materialId: id });
   await connection.query("DELETE FROM notifications WHERE material_kind = 'shelf' AND material_id = ?", [id]);
 }
 
@@ -3399,11 +4114,13 @@ async function saveOwnedReadingMaterial(request, response, kind, id = null) {
         const [updated] = await connection.query("UPDATE reviews SET book_id = ?, rating = ?, preview = ?, body = ?, is_adult = ? WHERE id = ? AND user_id = ?", [bookId, rating, String(payload.preview).trim(), bodyHtml, payload.isAdult ? 1 : 0, id, userId]);
         if (!updated.affectedRows) throw Object.assign(new Error("Материал не найден"), { statusCode: 404 });
         await syncMaterialBooks(connection, "review", id, [bookId]);
+        await syncMentions(connection, { entityType: "review", entityId: id, authorUserId: userId, mentionUserIds: payload.mentionUserIds ?? payload.mentions, text: `${String(payload.preview ?? "")}\n${plainTextFromHtml(bodyHtml)}`, publicMaterial: true, materialKind: "review", materialId: id });
         return { id, bookTitle: book.title, bookAuthor: book.author };
       }
       const [created] = await connection.query("INSERT INTO reviews (user_id, book_id, rating, preview, body, is_adult) VALUES (?, ?, ?, ?, ?, ?)", [userId, bookId, rating, String(payload.preview).trim(), bodyHtml, payload.isAdult ? 1 : 0]);
       const materialId = Number(created.insertId);
       await syncMaterialBooks(connection, "review", materialId, [bookId]);
+      await syncMentions(connection, { entityType: "review", entityId: materialId, authorUserId: userId, mentionUserIds: payload.mentionUserIds ?? payload.mentions, text: `${String(payload.preview ?? "")}\n${plainTextFromHtml(bodyHtml)}`, publicMaterial: true, materialKind: "review", materialId });
       return { id: materialId, bookTitle: book.title, bookAuthor: book.author };
     }
     const bookIds = [...new Set((Array.isArray(payload.bookIds) ? payload.bookIds : [payload.bookId]).map(Number).filter(Number.isInteger))].slice(0, 50);
@@ -3415,11 +4132,13 @@ async function saveOwnedReadingMaterial(request, response, kind, id = null) {
       const [updated] = await connection.query("UPDATE excerpts SET book_id = ?, book_title = ?, preview_text = ?, body_html = ?, body = ?, is_adult = ? WHERE id = ? AND user_id = ?", [books[0]?.id ?? null, books[0]?.title ?? "", preview, bodyHtml, plainTextFromHtml(bodyHtml), payload.isAdult ? 1 : 0, id, userId]);
       if (!updated.affectedRows) throw Object.assign(new Error("Материал не найден"), { statusCode: 404 });
       await syncMaterialBooks(connection, "excerpt", id, books.map((book) => book.id));
+      await syncMentions(connection, { entityType: "excerpt", entityId: id, authorUserId: userId, mentionUserIds: payload.mentionUserIds ?? payload.mentions, text: `${preview}\n${plainTextFromHtml(bodyHtml)}`, publicMaterial: true, materialKind: "excerpt", materialId: id });
       return { id, bookTitle: books[0]?.title ?? "", bookIds: books.map((book) => book.id) };
     }
     const [created] = await connection.query("INSERT INTO excerpts (user_id, book_id, book_title, preview_text, body_html, body, is_adult, read_url) VALUES (?, ?, ?, ?, ?, ?, ?, NULL)", [userId, books[0]?.id ?? null, books[0]?.title ?? "", preview, bodyHtml, plainTextFromHtml(bodyHtml), payload.isAdult ? 1 : 0]);
     const materialId = Number(created.insertId);
     await syncMaterialBooks(connection, "excerpt", materialId, books.map((book) => book.id));
+    await syncMentions(connection, { entityType: "excerpt", entityId: materialId, authorUserId: userId, mentionUserIds: payload.mentionUserIds ?? payload.mentions, text: `${preview}\n${plainTextFromHtml(bodyHtml)}`, publicMaterial: true, materialKind: "excerpt", materialId });
     return { id: materialId, bookTitle: books[0]?.title ?? "", bookIds: books.map((book) => book.id) };
   });
   response.status(id ? 200 : 201).json(result);
@@ -3428,6 +4147,53 @@ router.post("/reviews", asyncRoute((request, response) => saveOwnedReadingMateri
 router.patch("/reviews/:id", asyncRoute((request, response) => saveOwnedReadingMaterial(request, response, "review", Number(request.params.id))));
 router.post("/excerpts", asyncRoute((request, response) => saveOwnedReadingMaterial(request, response, "excerpt")));
 router.patch("/excerpts/:id", asyncRoute((request, response) => saveOwnedReadingMaterial(request, response, "excerpt", Number(request.params.id))));
+
+router.post("/materials/:type/:id/repost", asyncRoute(async (request, response) => {
+  const userId = request.bookMeetUser.id; const sourceType = String(request.params.type); const sourceId = Number(request.params.id);
+  if (!['review', 'excerpt', 'publication', 'publisher_news', 'event', 'occasion', 'shelf'].includes(sourceType) || !sourceId) return response.status(400).json({ error: "Этот материал нельзя репостнуть" });
+  const kind = sourceType === 'publication' ? 'excerpt' : sourceType;
+  const rawText = String(request.body?.text ?? '').replace(/[\u200B-\u200D\u2060\uFEFF]/g, '').trim();
+  if (rawText && Array.from(rawText).length > 3000) return response.status(400).json({ error: "Текст репоста слишком длинный" });
+  const repost = await withTransaction(async (connection) => {
+    const source = await readableMaterialInfo(connection, userId, kind, sourceId);
+    let rootType = kind; let rootId = sourceId;
+    let sourceExcerpt = null;
+    if (kind === 'excerpt') {
+      [[sourceExcerpt]] = await connection.query("SELECT provenance_repost_id FROM excerpts WHERE id = ?", [sourceId]);
+      if (sourceExcerpt?.provenance_repost_id) {
+        const [[origin]] = await connection.query("SELECT source_root_type, source_root_id FROM reposts WHERE id = ?", [sourceExcerpt.provenance_repost_id]);
+        if (origin) { rootType = origin.source_root_type; rootId = Number(origin.source_root_id); }
+      }
+    }
+    const isOwnTextRepost = kind === "excerpt" && Boolean(sourceExcerpt?.provenance_repost_id);
+    if (Number(source.owner_id) === userId && (isOwnTextRepost || rootType === kind && rootId === sourceId)) throw Object.assign(new Error("Нельзя репостнуть собственный материал"), { statusCode: 409 });
+    let created;
+    try {
+      [created] = await connection.query("INSERT INTO reposts (user_id, source_material_type, source_material_id, source_root_type, source_root_id, clean_source_root_id) VALUES (?, ?, ?, ?, ?, ?)", [userId, kind, sourceId, rootType, rootId, rawText ? null : rootId]);
+    } catch (error) {
+      if (error?.code === 'ER_DUP_ENTRY' && !rawText) throw Object.assign(new Error("Такой репост уже есть"), { statusCode: 409 });
+      throw error;
+    }
+    const repostId = Number(created.insertId);
+    if (!rawText) return { id: repostId, clean: true, source: { kind: rootType, id: rootId } };
+    const bodyHtml = escapedParagraph(rawText);
+    const [excerpt] = await connection.query("INSERT INTO excerpts (user_id, book_id, book_title, preview_text, body_html, body, is_adult, read_url, provenance_repost_id) VALUES (?, NULL, '', ?, ?, ?, 0, NULL, ?)", [userId, rawText.slice(0, 500), bodyHtml, plainTextFromHtml(bodyHtml), repostId]);
+    await syncMentions(connection, { entityType: 'excerpt', entityId: Number(excerpt.insertId), authorUserId: userId, mentionUserIds: request.body?.mentionUserIds ?? request.body?.mentions, text: rawText, publicMaterial: true, materialKind: 'excerpt', materialId: Number(excerpt.insertId) });
+    return { id: repostId, clean: false, material: { id: Number(excerpt.insertId), kind: 'excerpt', text: rawText } };
+  });
+  response.status(201).json({ repost });
+}));
+
+router.delete("/reposts/:id", asyncRoute(async (request, response) => {
+  const userId = request.bookMeetUser.id; const repostId = Number(request.params.id);
+  await withTransaction(async (connection) => {
+    const [[repost]] = await connection.query("SELECT id FROM reposts WHERE id = ? AND user_id = ? FOR UPDATE", [repostId, userId]);
+    if (!repost) throw Object.assign(new Error("Репост не найден"), { statusCode: 404 });
+    // Text repost stays a normal publication; only private provenance is removed.
+    await connection.query("UPDATE excerpts SET provenance_repost_id = NULL WHERE provenance_repost_id = ?", [repostId]);
+    await connection.query("DELETE FROM reposts WHERE id = ?", [repostId]);
+  }); response.json({ ok: true });
+}));
 
 router.delete("/materials/:kind/:id", asyncRoute(async (request, response) => {
   const userId = request.bookMeetUser.id;
@@ -3444,13 +4210,21 @@ router.delete("/materials/:kind/:id", asyncRoute(async (request, response) => {
       await connection.query("DELETE FROM book_shelves WHERE id = ?", [materialId]);
       return;
     }
+    let provenanceRepostId = null;
+    if (kind === "excerpt") {
+      const [[ownedExcerpt]] = await connection.query("SELECT provenance_repost_id FROM excerpts WHERE id = ? AND user_id = ? FOR UPDATE", [materialId, userId]);
+      provenanceRepostId = ownedExcerpt?.provenance_repost_id ? Number(ownedExcerpt.provenance_repost_id) : null;
+    }
     await connection.query("DELETE FROM material_books WHERE material_kind = ? AND material_id = ?", [kind, materialId]);
+    await connection.query("DELETE FROM content_mentions WHERE entity_type = ? AND entity_id = ?", [kind, materialId]);
     await connection.query("DELETE FROM material_likes WHERE material_kind = ? AND material_id = ?", [kind, materialId]);
     await connection.query("DELETE FROM material_saves WHERE material_kind = ? AND material_id = ?", [kind, materialId]);
     await connection.query("DELETE FROM material_comments WHERE material_kind = ? AND material_id = ?", [kind, materialId]);
+    await cancelNotificationDeliveries(connection, { materialKind: kind, materialId });
     await connection.query("DELETE FROM notifications WHERE material_kind = ? AND material_id = ?", [kind, materialId]);
     const [deleted] = await connection.query(`DELETE FROM ${table} WHERE id = ? AND user_id = ?`, [materialId, userId]);
     if (!deleted.affectedRows) throw Object.assign(new Error("Материал не найден"), { statusCode: 404 });
+    if (provenanceRepostId) await connection.query("DELETE FROM reposts WHERE id = ? AND user_id = ?", [provenanceRepostId, userId]);
   });
   response.json({ ok: true });
 }));
@@ -3528,9 +4302,15 @@ router.delete("/admin/materials/:kind/:id", asyncRoute(async (request, response)
         await connection.query(`DELETE FROM material_likes WHERE material_kind = 'review' AND material_id IN (${placeholders})`, reviewIds);
         await connection.query(`DELETE FROM material_saves WHERE material_kind = 'review' AND material_id IN (${placeholders})`, reviewIds);
         await connection.query(`DELETE FROM material_comments WHERE material_kind = 'review' AND material_id IN (${placeholders})`, reviewIds);
+        for (const reviewId of reviewIds) await cancelNotificationDeliveries(connection, { materialKind: "review", materialId: reviewId });
         await connection.query(`DELETE FROM notifications WHERE material_kind = 'review' AND material_id IN (${placeholders})`, reviewIds);
       }
       await connection.query("UPDATE wishlist_items SET catalog_book_id = NULL WHERE catalog_book_id = ?", [materialId]);
+    }
+    let provenanceRepostId = null;
+    if (kind === "excerpt") {
+      const [[sourceExcerpt]] = await connection.query("SELECT provenance_repost_id FROM excerpts WHERE id = ? FOR UPDATE", [materialId]);
+      provenanceRepostId = sourceExcerpt?.provenance_repost_id ? Number(sourceExcerpt.provenance_repost_id) : null;
     }
     if (kind !== "book") {
       await connection.query("DELETE FROM material_books WHERE material_kind = ? AND material_id = ?", [kind, materialId]);
@@ -3538,9 +4318,11 @@ router.delete("/admin/materials/:kind/:id", asyncRoute(async (request, response)
     await connection.query("DELETE FROM material_saves WHERE material_kind = ? AND material_id = ?", [kind, materialId]);
       await connection.query("DELETE FROM material_comments WHERE material_kind = ? AND material_id = ?", [kind, materialId]);
     }
+    await cancelNotificationDeliveries(connection, { materialKind: kind, materialId });
     await connection.query("DELETE FROM notifications WHERE material_kind = ? AND material_id = ?", [kind, materialId]);
     const [deleted] = await connection.query(`DELETE FROM ${table} WHERE id = ?`, [materialId]);
     if (!deleted.affectedRows) throw Object.assign(new Error("Материал не найден"), { statusCode: 404 });
+    if (provenanceRepostId) await connection.query("DELETE FROM reposts WHERE id = ?", [provenanceRepostId]);
   });
   response.json({ ok: true });
 }));
@@ -3620,7 +4402,7 @@ router.post("/wishlist", asyncRoute(async (request, response) => {
        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, UTC_TIMESTAMP())`,
       [userId, catalogBookId, author, title, book?.genres ?? "[]", annotation, coverPath, book?.cover_tone ?? "blue", marketplace.name, marketplace.url.toString(), pickupAddress, recipientName, phone, flipProduct.price, flipProduct.currency],
     );
-    if (catalogBookId) await notifyWriterAboutBook(connection, catalogBookId, userId, "wishlist");
+    if (catalogBookId) await notifyWriterAboutBook(connection, catalogBookId, userId, "wishlist", `wishlist-${created.insertId}`);
     return { id: Number(created.insertId), ownerId: userId, catalogBookId: catalogBookId ?? undefined, author, title, genres: book ? JSON.parse(book.genres || "[]") : [], annotation, coverUrl: coverPath ?? undefined, coverTone: book?.cover_tone ?? "blue", marketplace: marketplace.name, productUrl: marketplace.url.toString(), pickupAddress, recipientName, phone, price: flipProduct.price ?? undefined, priceCurrency: flipProduct.currency, priceCheckedAt: new Date().toISOString(), privateVisible: true };
   });
   response.status(201).json({ item });
@@ -3662,7 +4444,24 @@ router.post("/wishlist/:id/reserve", asyncRoute(async (request, response) => {
     if (!item.reserved_by_user_id) {
       await connection.query("UPDATE wishlist_items SET reserved_by_user_id = ?, reserved_at = UTC_TIMESTAMP() WHERE id = ?", [userId, itemId]);
       const [[actor]] = await connection.query("SELECT display_name FROM profiles WHERE user_id = ?", [userId]);
-      await connection.query("INSERT INTO notifications (user_id, actor_user_id, notification_type, title, body, material_kind, material_id, group_key) VALUES (?, ?, 'gift_reserved', 'Подарок забронирован', ?, 'wishlist', ?, ?) ON DUPLICATE KEY UPDATE actor_user_id = VALUES(actor_user_id), body = VALUES(body), is_unread = 1, created_at = CURRENT_TIMESTAMP", [item.user_id, userId, `${actor?.display_name ?? "Друг"} забронировал(а) подарок «${item.title}».`, itemId, `gift-reserved:${itemId}`]);
+      const occurrence = await nextNotificationOccurrence(connection, {
+        recipientUserId: item.user_id,
+        actorUserId: userId,
+        eventType: "gift_reserved",
+        materialKind: "wishlist",
+        materialId: itemId,
+      });
+      await createNotificationEvent(connection, {
+        recipientUserId: item.user_id,
+        actorUserId: userId,
+        eventType: "gift_reserved",
+        title: "Подарок забронирован",
+        body: `${actor?.display_name ?? "Друг"} забронировал(а) подарок «${item.title}».`,
+        materialKind: "wishlist",
+        materialId: itemId,
+        dedupeKey: `gift-reserved:${itemId}:${userId}:g${occurrence}`,
+        groupKey: `gift-reserved:${itemId}`,
+      });
     }
     return { checkoutUrl: item.product_url, reservedByUserId: userId };
   });
@@ -3670,8 +4469,17 @@ router.post("/wishlist/:id/reserve", asyncRoute(async (request, response) => {
 }));
 
 router.delete("/wishlist/:id/reservation", asyncRoute(async (request, response) => {
-  const [result] = await getPool().query("UPDATE wishlist_items SET reserved_by_user_id = NULL, reserved_at = NULL WHERE id = ? AND user_id = ?", [Number(request.params.id), request.bookMeetUser.id]);
-  if (!result.affectedRows) return response.status(404).json({ error: "Карточка не найдена" });
+  const itemId = Number(request.params.id);
+  const removed = await withTransaction(async (connection) => {
+    const [[item]] = await connection.query("SELECT reserved_by_user_id FROM wishlist_items WHERE id = ? AND user_id = ? FOR UPDATE", [itemId, request.bookMeetUser.id]);
+    if (!item) return false;
+    await connection.query("UPDATE wishlist_items SET reserved_by_user_id = NULL, reserved_at = NULL WHERE id = ?", [itemId]);
+    if (item.reserved_by_user_id) {
+      await cancelNotificationDeliveries(connection, { actorUserId: item.reserved_by_user_id, eventType: "gift_reserved", materialKind: "wishlist", materialId: itemId });
+    }
+    return true;
+  });
+  if (!removed) return response.status(404).json({ error: "Карточка не найдена" });
   response.json({ ok: true });
 }));
 
@@ -3807,6 +4615,7 @@ router.post("/admin/reports/:id/delete-material", asyncRoute(async (request, res
     await connection.query("DELETE FROM material_likes WHERE material_kind = ? AND material_id = ?", [report.target_kind, report.target_id]);
     await connection.query("DELETE FROM material_saves WHERE material_kind = ? AND material_id = ?", [report.target_kind, report.target_id]);
     await connection.query("DELETE FROM material_comments WHERE material_kind = ? AND material_id = ?", [report.target_kind, report.target_id]);
+    await cancelNotificationDeliveries(connection, { materialKind: report.target_kind, materialId: report.target_id });
     await connection.query("DELETE FROM notifications WHERE material_kind = ? AND material_id = ?", [report.target_kind, report.target_id]);
     await connection.query(`DELETE FROM ${table} WHERE id = ?`, [report.target_id]);
     if (report.target_user_id) {
@@ -3898,8 +4707,8 @@ router.get("/reactions", asyncRoute(async (request, response) => {
           SELECT 1 FROM user_blocks ub
            WHERE (ub.blocker_user_id = ? AND ub.blocked_user_id = ml.user_id)
               OR (ub.blocker_user_id = ml.user_id AND ub.blocked_user_id = ?)
-        )`,
-    [kind, id, request.bookMeetUser.id, request.bookMeetUser.id],
+        ) AND NOT EXISTS (SELECT 1 FROM user_hides h WHERE h.hider_user_id = ? AND h.hidden_user_id = ml.user_id)`,
+    [kind, id, request.bookMeetUser.id, request.bookMeetUser.id, request.bookMeetUser.id],
   );
   response.json({ userIds: rows.map((row) => Number(row.user_id)) });
 }));
@@ -3911,26 +4720,44 @@ router.post("/reactions", asyncRoute(async (request, response) => {
   await withTransaction(async (connection) => {
     const material = await interactableMaterialInfo(connection, userId, kind, materialId);
     if (Number(material.owner_id) === userId) return;
-    await connection.query("INSERT IGNORE INTO material_likes (user_id, material_kind, material_id) VALUES (?, ?, ?)", [userId, kind, materialId]);
+    const [created] = await connection.query("INSERT IGNORE INTO material_likes (user_id, material_kind, material_id) VALUES (?, ?, ?)", [userId, kind, materialId]);
+    if (!created.affectedRows) return;
     const [[actor]] = await connection.query("SELECT display_name FROM profiles WHERE user_id = ?", [userId]);
     const [[countRow]] = await connection.query("SELECT COUNT(*) AS total FROM material_likes WHERE material_kind = ? AND material_id = ?", [kind, materialId]);
     const total = Number(countRow.total);
     const text = total > 1 ? `${actor.display_name} и ещё ${total - 1} поставили «Нравится»: ${material.title}.` : `${actor.display_name} поставил(а) «Нравится»: ${material.title}.`;
     const groupKey = `like:${kind}:${materialId}`;
-    await connection.query(
-      `INSERT INTO notifications (user_id, actor_user_id, notification_type, title, body, material_kind, material_id, group_key)
-       VALUES (?, ?, 'like', 'Нравится', ?, ?, ?, ?)
-       ON DUPLICATE KEY UPDATE actor_user_id = VALUES(actor_user_id), body = VALUES(body), is_unread = 1, created_at = CURRENT_TIMESTAMP`,
-      [material.owner_id, userId, text, kind, materialId, groupKey],
-    );
+    const occurrence = await nextNotificationOccurrence(connection, {
+      recipientUserId: material.owner_id,
+      actorUserId: userId,
+      eventType: "like",
+      materialKind: kind,
+      materialId,
+    });
+    await createNotificationEvent(connection, {
+      recipientUserId: material.owner_id,
+      actorUserId: userId,
+      eventType: "like",
+      title: "Нравится",
+      body: text,
+      materialKind: kind,
+      materialId,
+      dedupeKey: `like:${kind}:${materialId}:${userId}:g${occurrence}`,
+      groupKey,
+    });
   });
   response.status(201).json({ ok: true });
 }));
 
 router.delete("/reactions", asyncRoute(async (request, response) => {
-  const pool = getPool();
-  await readableMaterialInfo(pool, request.bookMeetUser.id, String(request.body?.materialKind ?? ""), Number(request.body?.materialId));
-  await pool.query("DELETE FROM material_likes WHERE user_id = ? AND material_kind = ? AND material_id = ?", [request.bookMeetUser.id, request.body?.materialKind, Number(request.body?.materialId)]);
+  const userId = request.bookMeetUser.id;
+  const kind = String(request.body?.materialKind ?? "");
+  const materialId = Number(request.body?.materialId);
+  await withTransaction(async (connection) => {
+    await readableMaterialInfo(connection, userId, kind, materialId);
+    const [deleted] = await connection.query("DELETE FROM material_likes WHERE user_id = ? AND material_kind = ? AND material_id = ?", [userId, kind, materialId]);
+    if (deleted.affectedRows) await cancelNotificationDeliveries(connection, { actorUserId: userId, eventType: "like", materialKind: kind, materialId });
+  });
   response.json({ ok: true });
 }));
 
@@ -3969,18 +4796,57 @@ router.get("/comments", asyncRoute(async (request, response) => {
   const materialId = Number(request.query.id);
   const pool = getPool();
   await readableMaterialInfo(pool, request.bookMeetUser.id, kind, materialId);
+  const rootId = Number(request.query.rootId);
+  const cursor = Math.max(0, Number(request.query.cursor) || 0);
+  const limit = 3;
   const [rows] = await pool.query(
-    `SELECT mc.id, mc.user_id, mc.body, mc.created_at FROM material_comments mc
+    `SELECT mc.id, mc.user_id, mc.body, mc.created_at, mc.updated_at, mc.deleted_at, mc.parent_comment_id, mc.reply_to_comment_id,
+            p.display_name, u.username, u.initials, u.color, u.avatar_path,
+            (SELECT COUNT(*) FROM material_comment_likes mcl WHERE mcl.comment_id = mc.id
+              AND NOT EXISTS (SELECT 1 FROM user_blocks b WHERE (b.blocker_user_id = ? AND b.blocked_user_id = mcl.user_id) OR (b.blocker_user_id = mcl.user_id AND b.blocked_user_id = ?))
+              AND NOT EXISTS (SELECT 1 FROM user_hides h WHERE h.hider_user_id = ? AND h.hidden_user_id = mcl.user_id)) AS like_count,
+            EXISTS(SELECT 1 FROM material_comment_likes mine WHERE mine.comment_id = mc.id AND mine.user_id = ?) AS liked_by_viewer,
+            (SELECT COUNT(*) FROM material_comments reply WHERE reply.parent_comment_id = mc.id AND reply.deleted_at IS NULL
+              AND NOT EXISTS (SELECT 1 FROM user_blocks b WHERE (b.blocker_user_id = ? AND b.blocked_user_id = reply.user_id) OR (b.blocker_user_id = reply.user_id AND b.blocked_user_id = ?))
+              AND NOT EXISTS (SELECT 1 FROM user_hides h WHERE h.hider_user_id = ? AND h.hidden_user_id = reply.user_id)) AS reply_count,
+            (EXISTS(SELECT 1 FROM user_blocks b WHERE (b.blocker_user_id = ? AND b.blocked_user_id = mc.user_id) OR (b.blocker_user_id = mc.user_id AND b.blocked_user_id = ?))
+              OR EXISTS(SELECT 1 FROM user_hides h WHERE h.hider_user_id = ? AND h.hidden_user_id = mc.user_id)) AS redacted
+       FROM material_comments mc JOIN users u ON u.id = mc.user_id JOIN profiles p ON p.user_id = mc.user_id
       WHERE mc.material_kind = ? AND mc.material_id = ?
-        AND NOT EXISTS (
-          SELECT 1 FROM user_blocks ub
-           WHERE (ub.blocker_user_id = ? AND ub.blocked_user_id = mc.user_id)
-              OR (ub.blocker_user_id = mc.user_id AND ub.blocked_user_id = ?)
-        )
-      ORDER BY mc.created_at`,
-    [kind, materialId, request.bookMeetUser.id, request.bookMeetUser.id],
+        AND ${rootId ? "mc.parent_comment_id = ?" : "mc.parent_comment_id IS NULL"}
+        AND mc.id > ?
+        AND ((NOT EXISTS (SELECT 1 FROM user_blocks ub WHERE (ub.blocker_user_id = ? AND ub.blocked_user_id = mc.user_id) OR (ub.blocker_user_id = mc.user_id AND ub.blocked_user_id = ?))
+          AND NOT EXISTS (SELECT 1 FROM user_hides h WHERE h.hider_user_id = ? AND h.hidden_user_id = mc.user_id))
+          OR (mc.parent_comment_id IS NULL AND EXISTS (SELECT 1 FROM material_comments reply WHERE reply.parent_comment_id = mc.id AND reply.deleted_at IS NULL
+            AND NOT EXISTS (SELECT 1 FROM user_blocks b WHERE (b.blocker_user_id = ? AND b.blocked_user_id = reply.user_id) OR (b.blocker_user_id = reply.user_id AND b.blocked_user_id = ?))
+            AND NOT EXISTS (SELECT 1 FROM user_hides h WHERE h.hider_user_id = ? AND h.hidden_user_id = reply.user_id))))
+      ORDER BY mc.id LIMIT ?`,
+    [request.bookMeetUser.id, request.bookMeetUser.id, request.bookMeetUser.id, request.bookMeetUser.id, request.bookMeetUser.id, request.bookMeetUser.id, request.bookMeetUser.id, request.bookMeetUser.id, request.bookMeetUser.id, request.bookMeetUser.id, kind, materialId, ...(rootId ? [rootId] : []), cursor, request.bookMeetUser.id, request.bookMeetUser.id, request.bookMeetUser.id, request.bookMeetUser.id, request.bookMeetUser.id, request.bookMeetUser.id, limit + 1],
   );
-  response.json({ comments: rows.map((row) => ({ id: Number(row.id), userId: Number(row.user_id), text: row.body, createdAt: new Date(row.created_at).toISOString() })) });
+  const page = rows.slice(0, limit);
+  const rootIds = !rootId ? page.map((row) => Number(row.id)) : [];
+  const [replyRows] = rootIds.length ? await pool.query(
+    `SELECT mc.id, mc.user_id, mc.body, mc.created_at, mc.updated_at, mc.deleted_at, mc.parent_comment_id, mc.reply_to_comment_id,
+            p.display_name, u.username, u.initials, u.color, u.avatar_path,
+            (SELECT COUNT(*) FROM material_comment_likes likes WHERE likes.comment_id = mc.id) AS like_count,
+            EXISTS(SELECT 1 FROM material_comment_likes likes WHERE likes.comment_id = mc.id AND likes.user_id = ?) AS liked_by_viewer
+       FROM material_comments mc JOIN users u ON u.id = mc.user_id JOIN profiles p ON p.user_id = mc.user_id
+      WHERE mc.parent_comment_id IN (${rootIds.map(() => "?").join(",")})
+        AND NOT EXISTS (SELECT 1 FROM user_blocks b WHERE (b.blocker_user_id = ? AND b.blocked_user_id = mc.user_id) OR (b.blocker_user_id = mc.user_id AND b.blocked_user_id = ?))
+        AND NOT EXISTS (SELECT 1 FROM user_hides h WHERE h.hider_user_id = ? AND h.hidden_user_id = mc.user_id)
+        AND (SELECT COUNT(*) FROM material_comments earlier WHERE earlier.parent_comment_id = mc.parent_comment_id AND earlier.id < mc.id
+          AND NOT EXISTS (SELECT 1 FROM user_blocks b WHERE (b.blocker_user_id = ? AND b.blocked_user_id = earlier.user_id) OR (b.blocker_user_id = earlier.user_id AND b.blocked_user_id = ?))
+          AND NOT EXISTS (SELECT 1 FROM user_hides h WHERE h.hider_user_id = ? AND h.hidden_user_id = earlier.user_id)) < 3
+      ORDER BY mc.parent_comment_id, mc.id`,
+    [request.bookMeetUser.id, ...rootIds, request.bookMeetUser.id, request.bookMeetUser.id, request.bookMeetUser.id, request.bookMeetUser.id, request.bookMeetUser.id, request.bookMeetUser.id],
+  ) : [[]];
+  const mentionsByComment = await mentionDtos(pool, "comment", [...page, ...replyRows].map((row) => Number(row.id)), request.bookMeetUser.id);
+  const dto = (row) => {
+    const mentions = row.deleted_at || row.redacted ? [] : mentionsByComment.get(Number(row.id)) ?? [];
+    return { id: Number(row.id), userId: Number(row.user_id), text: row.deleted_at || row.redacted ? "Комментарий скрыт" : neutralizeMentionedText(row.body, mentions), createdAt: new Date(row.created_at).toISOString(), updatedAt: new Date(row.updated_at).toISOString(), deleted: Boolean(row.deleted_at || row.redacted), parentCommentId: row.parent_comment_id ? Number(row.parent_comment_id) : undefined, replyToCommentId: row.reply_to_comment_id ? Number(row.reply_to_comment_id) : undefined, author: row.deleted_at || row.redacted ? undefined : row.display_name ? { displayName: row.display_name, username: row.username, initials: row.initials, color: row.color, avatarUrl: row.avatar_path ?? undefined } : undefined, mentions, likeCount: Number(row.like_count ?? 0), likedByViewer: Boolean(row.liked_by_viewer), replyCount: Number(row.reply_count ?? 0), nextRepliesCursor: Number(row.reply_count ?? 0) > 3 ? 3 : null };
+  };
+  const comments = [...page.map(dto), ...replyRows.map(dto)];
+  response.json({ comments, nextCursor: rows.length > limit ? Number(page.at(-1)?.id) : null });
 }));
 
 router.get("/material-stats", asyncRoute(async (request, response) => {
@@ -3992,9 +4858,9 @@ router.get("/material-stats", asyncRoute(async (request, response) => {
         SELECT 1 FROM user_blocks ub
          WHERE (ub.blocker_user_id = ? AND ub.blocked_user_id = mc.user_id)
             OR (ub.blocker_user_id = mc.user_id AND ub.blocked_user_id = ?)
-      )
+      ) AND NOT EXISTS (SELECT 1 FROM user_hides h WHERE h.hider_user_id = ? AND h.hidden_user_id = mc.user_id)
       GROUP BY material_kind, material_id, user_id`,
-    [request.bookMeetUser.id, request.bookMeetUser.id],
+    [request.bookMeetUser.id, request.bookMeetUser.id, request.bookMeetUser.id],
   );
   const readableMaterialCache = new Map();
   const getReadableMaterial = async (kind, id) => {
@@ -4025,8 +4891,10 @@ router.get("/material-stats", asyncRoute(async (request, response) => {
     [request.bookMeetUser.id],
   );
   const [saveCountRows] = await pool.query("SELECT material_kind, material_id, COUNT(*) AS total FROM material_saves GROUP BY material_kind, material_id");
+  const [repostRows] = await pool.query("SELECT source_root_type, source_root_id, COUNT(*) AS total FROM reposts GROUP BY source_root_type, source_root_id");
   const savedMaterialRefs = [];
   const saveCounts = {};
+  const repostCounts = {};
   for (const row of saveRows) {
     const material = await getReadableMaterial(row.material_kind, row.material_id);
     if (material) savedMaterialRefs.push({ kind: row.material_kind, id: Number(row.material_id), createdAt: new Date(row.created_at).toISOString() });
@@ -4036,38 +4904,117 @@ router.get("/material-stats", asyncRoute(async (request, response) => {
     const material = await getReadableMaterial(row.material_kind, row.material_id);
     if (material) saveCounts[key] = Number(row.total);
   }
-  response.json({ commenters, commentCounts, savedMaterialRefs, saveCounts });
+  for (const row of repostRows) {
+    const material = await getReadableMaterial(row.source_root_type, row.source_root_id);
+    if (material) repostCounts[`${row.source_root_type}-${row.source_root_id}`] = Number(row.total);
+  }
+  response.json({ commenters, commentCounts, savedMaterialRefs, saveCounts, repostCounts });
 }));
 
 router.post("/comments", asyncRoute(async (request, response) => {
   const userId = request.bookMeetUser.id;
-  const body = String(request.body?.body ?? "").trim();
+  let body = codePointText(request.body?.body, 3000, "Комментарий");
   const kind = String(request.body?.materialKind ?? "");
   const materialId = Number(request.body?.materialId);
-  if (!body) return response.status(400).json({ error: "Комментарий пуст" });
   const comment = await withTransaction(async (connection) => {
     const material = await interactableMaterialInfo(connection, userId, kind, materialId);
-    const [created] = await connection.query("INSERT INTO material_comments (user_id, material_kind, material_id, body) VALUES (?, ?, ?, ?)", [userId, kind, materialId, body]);
+    let parentCommentId = Number(request.body?.parentCommentId) || null;
+    let replyToCommentId = Number(request.body?.replyToCommentId) || null;
+    let addressedUserId = null;
+    if (parentCommentId || replyToCommentId) {
+      const targetId = replyToCommentId || parentCommentId;
+      const [[target]] = await connection.query("SELECT id, user_id, material_kind, material_id, parent_comment_id, deleted_at FROM material_comments WHERE id = ? FOR UPDATE", [targetId]);
+      if (!target || target.deleted_at || target.material_kind !== kind || Number(target.material_id) !== materialId) throw Object.assign(new Error("Комментарий не найден"), { statusCode: 404 });
+      await assertCommentTargetAvailable(connection, userId, target.user_id);
+      parentCommentId = target.parent_comment_id ? Number(target.parent_comment_id) : Number(target.id);
+      replyToCommentId = Number(target.id);
+      addressedUserId = Number(target.user_id);
+      let addressedToken = "";
+      if (target.parent_comment_id) {
+        const [[profile]] = await connection.query("SELECT username FROM users WHERE id = ?", [target.user_id]);
+        addressedToken = `@${profile?.username ?? "user"}`;
+        const hasAddressedToken = body === addressedToken || body.startsWith(`${addressedToken} `) || body.startsWith(`${addressedToken}\n`);
+        if (!hasAddressedToken) body = `${addressedToken} ${body}`;
+      }
+    }
+    const [created] = await connection.query("INSERT INTO material_comments (user_id, material_kind, material_id, parent_comment_id, reply_to_comment_id, body) VALUES (?, ?, ?, ?, ?, ?)", [userId, kind, materialId, parentCommentId, replyToCommentId, body]);
+    const requestedMentions = mentionRefs(request.body?.mentionUserIds ?? request.body?.mentions);
+    if (addressedUserId && addressedUserId !== userId) {
+      const [[addressed]] = await connection.query("SELECT username FROM users WHERE id = ?", [addressedUserId]);
+      requestedMentions.push({ userId: addressedUserId, token: `@${addressed?.username ?? "user"}` });
+    }
+    await syncMentions(connection, { entityType: "comment", entityId: Number(created.insertId), authorUserId: userId, mentionUserIds: requestedMentions, text: body, publicMaterial: true, materialKind: kind, materialId });
     if (Number(material.owner_id) !== userId) {
       const [[actor]] = await connection.query("SELECT display_name FROM profiles WHERE user_id = ?", [userId]);
-      await connection.query("INSERT INTO notifications (user_id, actor_user_id, notification_type, title, body, material_kind, material_id) VALUES (?, ?, 'comment', 'Новый комментарий', ?, ?, ?)", [material.owner_id, userId, `${actor.display_name} прокомментировал(а) материал «${material.title}»: ${body}`, kind, materialId]);
+      await createNotificationEvent(connection, {
+        recipientUserId: material.owner_id,
+        actorUserId: userId,
+        eventType: "comment",
+        title: "Новый комментарий",
+        body: `${actor.display_name} прокомментировал(а) материал «${material.title}»: ${body}`,
+        materialKind: kind,
+        materialId,
+        dedupeKey: `comment:${created.insertId}:${material.owner_id}`,
+      });
     }
-    return { id: Number(created.insertId), userId, text: body, createdAt: new Date().toISOString() };
+    return { id: Number(created.insertId), userId, text: body, createdAt: new Date().toISOString(), parentCommentId: parentCommentId ?? undefined, replyToCommentId: replyToCommentId ?? undefined, likeCount: 0, likedByViewer: false, replyCount: 0 };
   });
   response.status(201).json({ comment });
+}));
+
+router.patch("/comments/:id", asyncRoute(async (request, response) => {
+  const userId = request.bookMeetUser.id; const commentId = Number(request.params.id); const body = codePointText(request.body?.body, 3000, "Комментарий");
+  const comment = await withTransaction(async (connection) => {
+    const [[existing]] = await connection.query("SELECT user_id, material_kind, material_id, deleted_at FROM material_comments WHERE id = ? FOR UPDATE", [commentId]);
+    if (!existing || existing.deleted_at) throw Object.assign(new Error("Комментарий не найден"), { statusCode: 404 });
+    if (Number(existing.user_id) !== userId && !(await isAdmin(connection, userId))) throw Object.assign(new Error("Недостаточно прав"), { statusCode: 403 });
+    await interactableMaterialInfo(connection, userId, existing.material_kind, Number(existing.material_id));
+    await connection.query("UPDATE material_comments SET body = ? WHERE id = ?", [body, commentId]);
+    await syncMentions(connection, { entityType: "comment", entityId: commentId, authorUserId: Number(existing.user_id), mentionUserIds: request.body?.mentionUserIds ?? request.body?.mentions, text: body, publicMaterial: true, materialKind: existing.material_kind, materialId: Number(existing.material_id) });
+    return { id: commentId, text: body, updatedAt: new Date().toISOString() };
+  }); response.json({ comment });
 }));
 
 router.delete("/comments/:id", asyncRoute(async (request, response) => {
   const userId = request.bookMeetUser.id;
   const commentId = Number(request.params.id);
   if (!commentId) return response.status(400).json({ error: "Некорректный комментарий" });
-  await withTransaction(async (connection) => {
-    const [[comment]] = await connection.query("SELECT user_id FROM material_comments WHERE id = ? FOR UPDATE", [commentId]);
+  const result = await withTransaction(async (connection) => {
+    const [[comment]] = await connection.query("SELECT user_id, parent_comment_id FROM material_comments WHERE id = ? FOR UPDATE", [commentId]);
     if (!comment) throw Object.assign(new Error("Комментарий не найден"), { statusCode: 404 });
     if (Number(comment.user_id) !== userId && !(await isAdmin(connection, userId))) {
       throw Object.assign(new Error("Удалить комментарий может только его автор или администратор"), { statusCode: 403 });
     }
+    const [[reply]] = await connection.query("SELECT 1 FROM material_comments WHERE parent_comment_id = ? AND deleted_at IS NULL LIMIT 1", [commentId]);
+    await connection.query("DELETE FROM content_mentions WHERE entity_type = 'comment' AND entity_id = ?", [commentId]);
+    if (reply) {
+      await connection.query("UPDATE material_comments SET body = '', deleted_at = CURRENT_TIMESTAMP WHERE id = ?", [commentId]);
+      return { id: commentId, deleted: true, parentCommentId: comment.parent_comment_id ? Number(comment.parent_comment_id) : undefined, text: "Комментарий скрыт" };
+    }
     await connection.query("DELETE FROM material_comments WHERE id = ?", [commentId]);
+    return { id: commentId, deleted: false, removed: true };
+  });
+  response.json({ ok: true, comment: result });
+}));
+
+router.post("/comments/:id/like", asyncRoute(async (request, response) => {
+  const userId = request.bookMeetUser.id; const commentId = Number(request.params.id);
+  await withTransaction(async (connection) => {
+    const [[comment]] = await connection.query("SELECT user_id, material_kind, material_id, deleted_at FROM material_comments WHERE id = ?", [commentId]);
+    if (!comment || comment.deleted_at) throw Object.assign(new Error("Комментарий не найден"), { statusCode: 404 });
+    await assertCommentTargetAvailable(connection, userId, comment.user_id);
+    await interactableMaterialInfo(connection, userId, comment.material_kind, Number(comment.material_id));
+    await connection.query("INSERT IGNORE INTO material_comment_likes (comment_id, user_id) VALUES (?, ?)", [commentId, userId]);
+  }); response.status(201).json({ ok: true });
+}));
+
+router.delete("/comments/:id/like", asyncRoute(async (request, response) => {
+  const userId = request.bookMeetUser.id; const commentId = Number(request.params.id);
+  await withTransaction(async (connection) => {
+    const [[comment]] = await connection.query("SELECT material_kind, material_id, deleted_at FROM material_comments WHERE id = ?", [commentId]);
+    if (!comment || comment.deleted_at) throw Object.assign(new Error("Комментарий не найден"), { statusCode: 404 });
+    await readableMaterialInfo(connection, userId, comment.material_kind, Number(comment.material_id));
+    await connection.query("DELETE FROM material_comment_likes WHERE comment_id = ? AND user_id = ?", [commentId, userId]);
   });
   response.json({ ok: true });
 }));
@@ -4098,19 +5045,30 @@ router.post("/social/friend-requests", asyncRoute(async (request, response) => {
     if (relationship) throw Object.assign(new Error(membership ? "Вы уже состоите в сообществе" : "Вы уже друзья"), { statusCode: 409 });
     if (membership && !target.community_is_closed) {
       await connection.query("DELETE FROM friend_requests WHERE status = 'pending' AND from_user_id = ? AND to_user_id = ?", [userId, targetId]);
+      await cancelNotificationDeliveries(connection, { userId: targetId, actorUserId: userId, eventType: "friend_request" });
       await connection.query("DELETE FROM notifications WHERE user_id = ? AND actor_user_id = ? AND notification_type = 'friend_request'", [targetId, userId]);
       const [created] = await connection.query("INSERT IGNORE INTO community_memberships (community_user_id, member_user_id) VALUES (?, ?)", [targetId, userId]);
       if (created.affectedRows) {
         const systemText = "Вы стали участником открытого сообщества и можете начать переписку";
         await connection.query("INSERT INTO messages (sender_user_id, recipient_user_id, body, is_system) VALUES (?, ?, ?, 1)", [userId, targetId, systemText]);
-        await connection.query("INSERT INTO notifications (user_id, actor_user_id, notification_type, title, body) VALUES (?, ?, 'friendship_started', ?, ?), (?, ?, 'friendship_started', ?, ?)", [targetId, userId, "Новый участник", `${source.display_name} присоединился(ась) к открытому сообществу.`, userId, targetId, "Вы вступили в сообщество", `Вы вступили в сообщество ${target.display_name}`]);
+        const communityOccurrence = await nextNotificationOccurrence(connection, { recipientUserId: targetId, actorUserId: userId, eventType: "friendship_started" });
+        const memberOccurrence = await nextNotificationOccurrence(connection, { recipientUserId: userId, actorUserId: targetId, eventType: "friendship_started" });
+        await createNotificationEvent(connection, { recipientUserId: targetId, actorUserId: userId, eventType: "friendship_started", title: "Новый участник", body: `${source.display_name} присоединился(ась) к открытому сообществу.`, dedupeKey: `community-joined:${targetId}:${userId}:community:g${communityOccurrence}` });
+        await createNotificationEvent(connection, { recipientUserId: userId, actorUserId: targetId, eventType: "friendship_started", title: "Вы вступили в сообщество", body: `Вы вступили в сообщество ${target.display_name}`, dedupeKey: `community-joined:${targetId}:${userId}:member:g${memberOccurrence}` });
       }
       return;
     }
     const [[pending]] = await connection.query("SELECT id FROM friend_requests WHERE status = 'pending' AND ((from_user_id = ? AND to_user_id = ?) OR (from_user_id = ? AND to_user_id = ?)) LIMIT 1", [userId, targetId, targetId, userId]);
     if (pending) throw Object.assign(new Error(membership ? "Заявка на вступление уже отправлена" : "Предложение уже отправлено"), { statusCode: 409 });
-    await connection.query("INSERT INTO friend_requests (from_user_id, to_user_id, message) VALUES (?, ?, ?)", [userId, targetId, message || null]);
-    await connection.query("INSERT INTO notifications (user_id, actor_user_id, notification_type, title, body) VALUES (?, ?, 'friend_request', ?, ?)", [targetId, userId, membership ? "Новая заявка" : "Новый друг", membership ? `${source.display_name} хочет присоединиться к сообществу.` : `${source.display_name} хочет добавить вас в друзья.`]);
+    const [createdRequest] = await connection.query("INSERT INTO friend_requests (from_user_id, to_user_id, message) VALUES (?, ?, ?)", [userId, targetId, message || null]);
+    await createNotificationEvent(connection, {
+      recipientUserId: targetId,
+      actorUserId: userId,
+      eventType: "friend_request",
+      title: membership ? "Новая заявка" : "Новый друг",
+      body: membership ? `${source.display_name} хочет присоединиться к сообществу.` : `${source.display_name} хочет добавить вас в друзья.`,
+      dedupeKey: `friend-request:${createdRequest.insertId}:${targetId}`,
+    });
   });
   response.status(201).json({ ok: true });
 }));
@@ -4128,6 +5086,7 @@ router.delete("/social/friend-requests/:targetId", asyncRoute(async (request, re
       "DELETE FROM notifications WHERE user_id = ? AND actor_user_id = ? AND notification_type = 'friend_request'",
       [targetId, userId],
     );
+    await cancelNotificationDeliveries(connection, { userId: targetId, actorUserId: userId, eventType: "friend_request" });
   });
   response.json({ ok: true });
 }));
@@ -4144,8 +5103,9 @@ router.post("/social/friends/:targetId/accept", asyncRoute(async (request, respo
     if (!membership) await assertAgeCompatible(connection, userId, targetId);
     if (!canCreateFriendRequest(currentProfile?.profile_type, sourceProfile?.profile_type, { communityMembership: membership })) throw Object.assign(new Error("Издательствам недоступны запросы дружбы"), { statusCode: 403 });
     if (sourceProfile?.profile_type === "Сообщество") throw Object.assign(new Error("Сообщество не может отправлять запросы дружбы"), { statusCode: 403 });
-    const [updated] = await connection.query("UPDATE friend_requests SET status = 'accepted' WHERE status = 'pending' AND from_user_id = ? AND to_user_id = ?", [targetId, userId]);
-    if (!updated.affectedRows) throw Object.assign(new Error("Предложение дружбы не найдено"), { statusCode: 404 });
+    const [[friendRequest]] = await connection.query("SELECT id FROM friend_requests WHERE status = 'pending' AND from_user_id = ? AND to_user_id = ? FOR UPDATE", [targetId, userId]);
+    if (!friendRequest) throw Object.assign(new Error("Предложение дружбы не найдено"), { statusCode: 404 });
+    await connection.query("UPDATE friend_requests SET status = 'accepted' WHERE id = ? AND status = 'pending'", [friendRequest.id]);
     const low = Math.min(userId, targetId); const high = Math.max(userId, targetId);
     if (membership) {
       await connection.query("INSERT IGNORE INTO community_memberships (community_user_id, member_user_id) VALUES (?, ?)", [userId, targetId]);
@@ -4158,7 +5118,8 @@ router.post("/social/friends/:targetId/accept", asyncRoute(async (request, respo
     const title = membership ? "Заявка принята" : "Теперь вы друзья";
     const currentText = membership ? `${sourceProfile.display_name} вступил(а) в сообщество.` : `Теперь вы друзья с ${sourceProfile.display_name}`;
     const sourceText = membership ? `Вы вступили в сообщество ${currentProfile.display_name}` : `Теперь вы друзья с ${currentProfile.display_name}`;
-    await connection.query("INSERT INTO notifications (user_id, actor_user_id, notification_type, title, body) VALUES (?, ?, 'friendship_started', ?, ?), (?, ?, 'friendship_started', ?, ?)", [userId, targetId, title, currentText, targetId, userId, title, sourceText]);
+    await createNotificationEvent(connection, { recipientUserId: userId, actorUserId: targetId, eventType: "friendship_started", title, body: currentText, dedupeKey: `friendship-started:request-${friendRequest.id}:${userId}` });
+    await createNotificationEvent(connection, { recipientUserId: targetId, actorUserId: userId, eventType: "friendship_started", title, body: sourceText, dedupeKey: `friendship-started:request-${friendRequest.id}:${targetId}` });
   });
   response.json({ ok: true });
 }));
@@ -4171,11 +5132,12 @@ router.post("/social/friends/:targetId/reject", asyncRoute(async (request, respo
     const [profiles] = await connection.query("SELECT user_id, profile_type FROM profiles WHERE user_id IN (?, ?) ORDER BY user_id FOR UPDATE", [userId, targetId]);
     const currentProfile = profiles.find((item) => Number(item.user_id) === userId);
     const membership = currentProfile?.profile_type === "Сообщество";
-    const [updated] = await connection.query("UPDATE friend_requests SET status = 'rejected', rejection_comment = ? WHERE status = 'pending' AND from_user_id = ? AND to_user_id = ?", [comment || null, targetId, userId]);
-    if (!updated.affectedRows) throw Object.assign(new Error("Предложение дружбы не найдено"), { statusCode: 404 });
+    const [[friendRequest]] = await connection.query("SELECT id FROM friend_requests WHERE status = 'pending' AND from_user_id = ? AND to_user_id = ? FOR UPDATE", [targetId, userId]);
+    if (!friendRequest) throw Object.assign(new Error("Предложение дружбы не найдено"), { statusCode: 404 });
+    await connection.query("UPDATE friend_requests SET status = 'rejected', rejection_comment = ? WHERE id = ? AND status = 'pending'", [comment || null, friendRequest.id]);
     const [[actor]] = await connection.query("SELECT display_name FROM profiles WHERE user_id = ?", [userId]);
     const text = membership ? `${actor.display_name} отклонило заявку на вступление.${comment ? ` Комментарий: ${comment}` : ""}` : `${actor.display_name} отклонил(а) предложение дружбы.${comment ? ` Комментарий: ${comment}` : ""} Вы можете подписаться на пользователя и следить за обновлениями.`;
-    await connection.query("INSERT INTO notifications (user_id, actor_user_id, notification_type, title, body) VALUES (?, ?, 'friend_rejected', ?, ?)", [targetId, userId, membership ? "Заявка отклонена" : "Предложение дружбы отклонено", text]);
+    await createNotificationEvent(connection, { recipientUserId: targetId, actorUserId: userId, eventType: "friend_rejected", title: membership ? "Заявка отклонена" : "Предложение дружбы отклонено", body: text, dedupeKey: `friend-rejected:request-${friendRequest.id}:${targetId}` });
   });
   response.json({ ok: true });
 }));
@@ -4187,15 +5149,18 @@ router.delete("/social/friends/:targetId", asyncRoute(async (request, response) 
     const [[actor]] = await connection.query("SELECT display_name, profile_type FROM profiles WHERE user_id = ?", [userId]);
     const [[target]] = await connection.query("SELECT profile_type FROM profiles WHERE user_id = ?", [targetId]);
     const membership = actor?.profile_type === "Сообщество" || target?.profile_type === "Сообщество";
+    let deleted;
     if (membership) {
       const communityId = actor?.profile_type === "Сообщество" ? userId : targetId;
       const memberId = communityId === userId ? targetId : userId;
-      await connection.query("DELETE FROM community_memberships WHERE community_user_id = ? AND member_user_id = ?", [communityId, memberId]);
+      [deleted] = await connection.query("DELETE FROM community_memberships WHERE community_user_id = ? AND member_user_id = ?", [communityId, memberId]);
     } else {
       const low = Math.min(userId, targetId); const high = Math.max(userId, targetId);
-      await connection.query("DELETE FROM friendships WHERE user_low_id = ? AND user_high_id = ?", [low, high]);
+      [deleted] = await connection.query("DELETE FROM friendships WHERE user_low_id = ? AND user_high_id = ?", [low, high]);
     }
-    await connection.query("INSERT INTO notifications (user_id, actor_user_id, notification_type, title, body) VALUES (?, ?, 'friendship_ended', ?, ?)", [targetId, userId, membership ? "Участие завершено" : "Дружба завершена", membership ? `${actor.display_name} завершило участие в сообществе.` : `${actor.display_name} перестал(а) дружить с вами.`]);
+    if (!deleted.affectedRows) return;
+    const occurrence = await nextNotificationOccurrence(connection, { recipientUserId: targetId, actorUserId: userId, eventType: "friendship_ended" });
+    await createNotificationEvent(connection, { recipientUserId: targetId, actorUserId: userId, eventType: "friendship_ended", title: membership ? "Участие завершено" : "Дружба завершена", body: membership ? `${actor.display_name} завершило участие в сообществе.` : `${actor.display_name} перестал(а) дружить с вами.`, dedupeKey: `friendship-ended:${Math.min(userId, targetId)}:${Math.max(userId, targetId)}:${targetId}:g${occurrence}` });
   });
   response.json({ ok: true });
 }));
@@ -4212,7 +5177,8 @@ router.post("/social/follows", asyncRoute(async (request, response) => {
     const [created] = await connection.query("INSERT IGNORE INTO follows (follower_user_id, target_user_id) VALUES (?, ?)", [userId, targetId]);
     if (created.affectedRows) {
       const [[actor]] = await connection.query("SELECT display_name FROM profiles WHERE user_id = ?", [userId]);
-      await connection.query("INSERT INTO notifications (user_id, actor_user_id, notification_type, title, body) VALUES (?, ?, 'new_follower', 'Новый подписчик', ?)", [targetId, userId, `${actor.display_name} подписался(ась) на ваши обновления.`]);
+      const occurrence = await nextNotificationOccurrence(connection, { recipientUserId: targetId, actorUserId: userId, eventType: "new_follower" });
+      await createNotificationEvent(connection, { recipientUserId: targetId, actorUserId: userId, eventType: "new_follower", title: "Новый подписчик", body: `${actor.display_name} подписался(ась) на ваши обновления.`, dedupeKey: `new-follower:${targetId}:${userId}:g${occurrence}` });
     }
   });
   response.status(201).json({ ok: true });
@@ -4231,26 +5197,227 @@ router.delete("/social/follows/:targetId", asyncRoute(async (request, response) 
       "DELETE FROM notifications WHERE user_id = ? AND actor_user_id = ? AND notification_type = 'new_follower'",
       [targetId, userId],
     );
+    await cancelNotificationDeliveries(connection, { userId: targetId, actorUserId: userId, eventType: "new_follower" });
   });
   response.json({ ok: true });
 }));
 
+router.get("/conversations/:id/messages/search", messageSearchRateLimit, asyncRoute(async (request, response) => {
+  const userId = Number(request.bookMeetUser.id);
+  const peerId = Number(request.params.id);
+  const search = normalizeMessageSearchQuery(request.query.q);
+  const cursor = decodeMessageSearchCursor(request.query.cursor);
+  const limit = messageSearchLimit(request.query.limit);
+  const result = await withTransaction(async (connection) => {
+    await assertMessageSearchPairAccess(connection, userId, peerId);
+    return conversationMessageSearch(connection, { userId, peerId, search, cursor, limit });
+  });
+  response.json({ query: search.text, peerId, ...result });
+}));
+
+router.get("/messages/search", messageSearchRateLimit, asyncRoute(async (request, response) => {
+  const userId = Number(request.bookMeetUser.id);
+  const search = normalizeMessageSearchQuery(request.query.q);
+  const cursor = decodeMessageSearchCursor(request.query.cursor);
+  const limit = messageSearchLimit(request.query.limit, MESSAGE_SEARCH_GROUP_LIMIT, 20);
+  const result = await withTransaction(async (connection) => {
+    const peerExpression = "CASE WHEN m.sender_user_id = ? THEN m.recipient_user_id ELSE m.sender_user_id END";
+    const cursorHaving = cursor ? " AND (MAX(m.created_at) < ? OR (MAX(m.created_at) = ? AND MAX(m.id) < ?))" : "";
+    const [candidateGroups] = await connection.query(
+      `SELECT grouped.peer_user_id, COUNT(*) AS match_count,
+              MAX(grouped.created_at) AS newest_at, MAX(grouped.id) AS newest_message_id
+         FROM (
+           SELECT m.id, m.created_at, ${peerExpression} AS peer_user_id
+             FROM messages m FORCE INDEX (messages_body_fulltext)
+             LEFT JOIN chat_history_clears history_clear
+               ON history_clear.user_id = ? AND history_clear.peer_user_id = ${peerExpression}
+            WHERE (m.sender_user_id = ? OR m.recipient_user_id = ?)
+              AND m.sender_user_id IS NOT NULL
+              AND m.id > COALESCE(history_clear.cleared_through_message_id, 0)
+              AND m.deleted_at IS NULL
+              AND m.deleted_before_read = 0
+              AND MATCH(m.body) AGAINST (? IN BOOLEAN MODE)
+         ) grouped
+        GROUP BY grouped.peer_user_id
+       HAVING grouped.peer_user_id IS NOT NULL${cursorHaving.replaceAll("m.", "grouped.")}
+        ORDER BY newest_at DESC, newest_message_id DESC
+        LIMIT 101`,
+      [userId, userId, userId, userId, userId, search.booleanQuery, ...(cursor ? [cursor.createdAt, cursor.createdAt, cursor.id] : [])],
+    );
+    const accessible = [];
+    for (const group of candidateGroups) {
+      const peerId = Number(group.peer_user_id);
+      try {
+        await assertMessageSearchPairAccess(connection, userId, peerId);
+      } catch (error) {
+        if (error?.code === "MESSAGE_SEARCH_DIALOG_NOT_FOUND") continue;
+        throw error;
+      }
+      const [[peer]] = await connection.query(
+        `SELECT u.id, u.username, u.initials, u.color, u.avatar_path, p.display_name, p.profile_type
+           FROM users u JOIN profiles p ON p.user_id = u.id
+          WHERE u.id = ? AND u.deleted_at IS NULL AND u.purged_at IS NULL LIMIT 1`,
+        [peerId],
+      );
+      if (!peer) continue;
+      const matches = await conversationMessageSearch(connection, { userId, peerId, search, limit: MESSAGE_SEARCH_GROUP_MATCH_LIMIT, includeTotal: false });
+      accessible.push({
+        peer: { id: peerId, name: peer.display_name, username: peer.username, type: peer.profile_type, initials: peer.initials, color: peer.color, avatarUrl: peer.avatar_path ?? undefined },
+        count: Number(group.match_count),
+        newestAt: new Date(group.newest_at).toISOString(),
+        matches: matches.matches,
+        matchesNextCursor: matches.nextCursor,
+        newestMessageId: Number(group.newest_message_id),
+      });
+      if (accessible.length > limit) break;
+    }
+    const page = accessible.slice(0, limit);
+    const last = page[page.length - 1];
+    const rawLast = candidateGroups[candidateGroups.length - 1];
+    return {
+      groups: page.map(({ newestMessageId: _newestMessageId, ...group }) => group),
+      // An inaccessible candidate must not make the remaining permitted
+      // dialogs unreachable.  When this bounded FULLTEXT batch contains no
+      // extra returned group, continue after its raw tail; the opaque cursor
+      // discloses neither the skipped peer nor its content.
+      nextCursor: accessible.length > limit && last
+        ? encodeMessageSearchCursor({ id: last.newestMessageId, createdAt: last.newestAt })
+        : candidateGroups.length > 100 && rawLast
+          ? encodeMessageSearchCursor({ id: Number(rawLast.newest_message_id), createdAt: new Date(rawLast.newest_at).toISOString() })
+          : null,
+    };
+  });
+  response.json({ query: search.text, ...result });
+}));
+
+router.get("/stickers", (request, response) => {
+  response.json(bookStickerCatalog(requestLocale(request), { pickerOnly: true }));
+});
+
 router.post("/social/messages", asyncRoute(async (request, response) => {
   const userId = request.bookMeetUser.id;
   const targetId = Number(request.body?.targetId);
-  const body = String(request.body?.body ?? "").trim().slice(0, 5000);
-  if (!targetId || (!body && !request.body?.attachment)) return response.status(400).json({ error: "Сообщение пусто" });
+  const body = normalizeMessageBody(request.body?.body);
+  const stickerId = typeof request.body?.stickerId === "string" ? request.body.stickerId.trim() : "";
+  const sticker = stickerId ? activeBookSticker(stickerId) : undefined;
+  if (stickerId && !sticker) return response.status(422).json({ code: "MESSAGE_STICKER_UNKNOWN", error: "Неизвестный или отключённый стикер" });
+  if (sticker && (body || request.body?.attachment || request.body?.mentions || request.body?.mentionUserIds)) return response.status(422).json({ code: "MESSAGE_STICKER_MUST_BE_STANDALONE", error: "Стикер отправляется отдельным сообщением" });
+  if (!targetId || (!body && !request.body?.attachment && !sticker)) return response.status(400).json({ error: "Сообщение пусто" });
   const createdMessage = await withTransaction(async (connection) => {
     const { participants } = await assertMessagePairAccess(connection, userId, targetId);
-    const attachment = await validatedChatAttachment(connection, request.body?.attachment, userId, targetId);
-    const [created] = await connection.query("INSERT INTO messages (sender_user_id, recipient_user_id, body, attachment_kind, attachment_id) VALUES (?, ?, ?, ?, ?)", [userId, targetId, body, attachment?.kind ?? null, attachment?.id ?? null]);
+    const attachment = sticker ? undefined : await validatedChatAttachment(connection, request.body?.attachment, userId, targetId);
+    const [created] = await connection.query("INSERT INTO messages (sender_user_id, recipient_user_id, body, attachment_kind, attachment_id, message_kind, sticker_id) VALUES (?, ?, ?, ?, ?, ?, ?)", [userId, targetId, sticker ? "" : body, attachment?.kind ?? null, attachment?.id ?? null, sticker ? "sticker" : "text", sticker?.id ?? null]);
+    // Messages retain stable mention links but deliberately do not create a
+    // second general notification: chat delivery already covers this event.
+    if (!sticker) await syncMentions(connection, { entityType: "message", entityId: Number(created.insertId), authorUserId: userId, mentionUserIds: request.body?.mentionUserIds ?? request.body?.mentions, text: body });
     if (shouldEnqueueSupportAlert(participants, userId, targetId)) {
       await enqueueTelegramAlert(connection, { eventType: "support_message", entityId: created.insertId, actorUserId: userId, summary: "Новое сообщение пользователя" });
     }
     const [[savedMessage]] = await connection.query("SELECT created_at FROM messages WHERE id = ?", [created.insertId]);
-    return { id: Number(created.insertId), createdAt: new Date(savedMessage.created_at).toISOString(), attachment };
+    const mentions = (await mentionDtos(connection, "message", Number(created.insertId), userId)).get(Number(created.insertId)) ?? [];
+    return { id: Number(created.insertId), createdAt: new Date(savedMessage.created_at).toISOString(), attachment, text: sticker ? "" : neutralizeMentionedText(body, mentions), mentions, ...(sticker ? { kind: "sticker", sticker: stickerDto(sticker, requestLocale(request)) } : {}) };
   });
-  response.status(201).json({ ok: true, message: { ...createdMessage, senderId: userId, mine: true, text: body, read: false } });
+  queueChatRealtime(response, [userId, targetId], { type: "message.created", messageId: createdMessage.id });
+  response.status(201).json({ ok: true, message: { ...createdMessage, senderId: userId, mine: true, read: false, likeCount: 0, likedByViewer: false, likedByUserIds: [] } });
+}));
+
+router.patch("/messages/:id", messageEditRateLimit, asyncRoute(async (request, response) => {
+  const userId = request.bookMeetUser.id;
+  const messageId = Number(request.params.id);
+  const body = normalizeMessageBody(request.body?.body);
+  const result = await withTransaction(async (connection) => {
+    const { message: current, peerId } = await assertMessageEditAccess(connection, userId, messageId);
+    if (!body) {
+      throw Object.assign(new Error("Сообщение не может быть пустым. Для удаления используйте отдельное действие"), { statusCode: 422, code: "MESSAGE_BODY_REQUIRED" });
+    }
+    await connection.query(
+      `INSERT INTO message_edit_history (message_id, message_reference_id, editor_user_id, previous_body)
+       VALUES (?, ?, ?, ?)`,
+      [messageId, messageId, userId, current.body],
+    );
+    await connection.query("UPDATE messages SET body = ?, edited_at = UTC_TIMESTAMP() WHERE id = ?", [body, messageId]);
+    await syncMentions(connection, { entityType: "message", entityId: messageId, authorUserId: userId, mentionUserIds: request.body?.mentionUserIds ?? request.body?.mentions, text: body });
+    const [[updated]] = await connection.query(
+      "SELECT id, sender_user_id, recipient_user_id, body, message_kind, sticker_id, read_at, edited_at, created_at FROM messages WHERE id = ?",
+      [messageId],
+    );
+    return { message: await editableMessageDto(connection, updated, userId), peerId };
+  });
+  queueChatRealtime(response, [userId, result.peerId], { type: "message.edited", messageId });
+  response.json({ ok: true, message: result.message });
+}));
+
+router.delete("/messages/:id", messageEditRateLimit, asyncRoute(async (request, response) => {
+  const userId = request.bookMeetUser.id;
+  const messageId = Number(request.params.id);
+  const result = await withTransaction(async (connection) => {
+    const { message, peerId } = await assertMessageDeleteAccess(connection, userId, messageId);
+    const deletedBeforeRead = !message.read_at;
+    const [[clock]] = await connection.query("SELECT UTC_TIMESTAMP() AS deleted_at");
+    await connection.query(
+      `INSERT INTO message_deletion_evidence
+         (message_id, message_reference_id, sender_user_id, sender_reference_id, recipient_user_id, recipient_reference_id,
+          original_body, message_kind, sticker_id, attachment_kind, attachment_id, was_read, original_read_at, deleted_before_read, deleted_at, moderation_retained_until)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL)`,
+      [messageId, messageId, userId, userId, peerId, peerId, message.body, message.message_kind, message.sticker_id, message.attachment_kind, message.attachment_id, deletedBeforeRead ? 0 : 1, message.read_at, deletedBeforeRead ? 1 : 0, clock.deleted_at],
+    );
+    await connection.query(
+      `UPDATE messages
+          SET body = '', attachment_kind = NULL, attachment_id = NULL, sticker_id = NULL, message_kind = 'text', deleted_at = ?, deleted_by_sender_at = ?,
+              deleted_before_read = ?, moderation_retained_until = NULL
+        WHERE id = ? AND sender_user_id = ? AND deleted_at IS NULL`,
+      [clock.deleted_at, clock.deleted_at, deletedBeforeRead ? 1 : 0, messageId, userId],
+    );
+    await connection.query("DELETE FROM message_reactions WHERE message_id = ?", [messageId]);
+    await connection.query("DELETE FROM content_mentions WHERE entity_type = 'message' AND entity_id = ?", [messageId]);
+    await connection.query(
+      `DELETE FROM notifications
+        WHERE notification_type = 'new_message' AND user_id = ? AND actor_user_id = ?
+          AND material_kind = 'message' AND material_id = ?`,
+      [peerId, userId, messageId],
+    );
+    await cancelNotificationDeliveries(connection, {
+      userId: peerId,
+      actorUserId: userId,
+      eventType: "new_message",
+      materialKind: "message",
+      materialId: messageId,
+    });
+    await connection.query("DELETE FROM telegram_alert_outbox WHERE event_type = 'support_message' AND entity_id = ? AND delivered_at IS NULL", [messageId]);
+    return { deletedBeforeRead, peerId };
+  });
+  queueChatRealtime(response, [userId, result.peerId], { type: "message.deleted", messageId });
+  response.json({ ok: true, messageId, deletedBeforeRead: result.deletedBeforeRead, ...(result.deletedBeforeRead ? {} : { tombstone: DELETED_MESSAGE_TOMBSTONE }) });
+}));
+
+router.post("/messages/:id/reactions/like", messageReactionRateLimit, asyncRoute(async (request, response) => {
+  const userId = request.bookMeetUser.id;
+  const messageId = Number(request.params.id);
+  const result = await withTransaction(async (connection) => {
+    const { peerId } = await assertMessageReactionAccess(connection, userId, messageId);
+    await connection.query(
+      "INSERT IGNORE INTO message_reactions (message_id, user_id, reaction_type) VALUES (?, ?, 'like')",
+      [messageId, userId],
+    );
+    return { reaction: await messageReactionDto(connection, messageId, userId), peerId };
+  });
+  queueChatRealtime(response, [userId, result.peerId], { type: "message.reaction.changed", messageId });
+  response.json(result.reaction);
+}));
+
+router.delete("/messages/:id/reactions/like", messageReactionRateLimit, asyncRoute(async (request, response) => {
+  const userId = request.bookMeetUser.id;
+  const messageId = Number(request.params.id);
+  const result = await withTransaction(async (connection) => {
+    const { peerId } = await assertMessageReactionAccess(connection, userId, messageId);
+    await connection.query(
+      "DELETE FROM message_reactions WHERE message_id = ? AND user_id = ? AND reaction_type = 'like'",
+      [messageId, userId],
+    );
+    return { reaction: await messageReactionDto(connection, messageId, userId), peerId };
+  });
+  queueChatRealtime(response, [userId, result.peerId], { type: "message.reaction.changed", messageId });
+  response.json(result.reaction);
 }));
 
 router.patch("/social/messages/:targetId/read", asyncRoute(async (request, response) => {
@@ -4258,8 +5425,30 @@ router.patch("/social/messages/:targetId/read", asyncRoute(async (request, respo
   const targetId = Number(request.params.targetId);
   await withTransaction(async (connection) => {
     await assertMessagePairAccess(connection, userId, targetId);
-    await connection.query("UPDATE messages SET read_at = UTC_TIMESTAMP() WHERE sender_user_id = ? AND recipient_user_id = ? AND read_at IS NULL", [targetId, userId]);
+    const [candidates] = await connection.query(
+      `SELECT id FROM messages
+        WHERE sender_user_id = ? AND recipient_user_id = ? AND read_at IS NULL
+          AND deleted_at IS NULL AND deleted_before_read = 0
+        ORDER BY id`,
+      [targetId, userId],
+    );
+    const [rows] = candidates.length ? await connection.query(
+      `SELECT id FROM messages FORCE INDEX (PRIMARY)
+        WHERE id IN (${candidates.map(() => "?").join(",")})
+          AND sender_user_id = ? AND recipient_user_id = ? AND read_at IS NULL
+          AND deleted_at IS NULL AND deleted_before_read = 0
+        ORDER BY id FOR UPDATE`,
+      [...candidates.map((row) => row.id), targetId, userId],
+    ) : [[]];
+    if (rows.length) {
+      await connection.query(
+        `UPDATE messages FORCE INDEX (PRIMARY) SET read_at = UTC_TIMESTAMP()
+          WHERE id IN (${rows.map(() => "?").join(",")}) AND read_at IS NULL AND deleted_at IS NULL AND deleted_before_read = 0`,
+        rows.map((row) => row.id),
+      );
+    }
   });
+  queueChatRealtime(response, [userId, targetId], { type: "messages.read" });
   response.json({ ok: true });
 }));
 
@@ -4284,12 +5473,109 @@ router.delete("/social/messages/:targetId/history", asyncRoute(async (request, r
     );
     return messageId;
   });
+  queueChatRealtime(response, [userId], { type: "history.cleared" });
   response.json({ ok: true, clearedThroughMessageId });
 }));
 
-router.patch("/notifications/read-all", asyncRoute(async (request, response) => {
-  await getPool().query("UPDATE notifications SET is_unread = 0 WHERE user_id = ?", [request.bookMeetUser.id]);
-  response.json({ ok: true });
+async function loadNotificationPreferences(connection, userId, requestTimezone) {
+  const [accountResult, preferenceResult] = await Promise.all([
+    connection.query(
+      `SELECT email, email_verified_at, notification_timezone, telegram_user_id, telegram_connected_at, telegram_display_name, telegram_delivery_error_at
+         FROM users
+        WHERE id = ?
+        LIMIT 1`,
+      [userId],
+    ),
+    connection.query(
+      `SELECT category, in_app_enabled, telegram_enabled, email_mode
+         FROM notification_preferences
+        WHERE user_id = ?`,
+      [userId],
+    ),
+  ]);
+  const [accountRows] = accountResult;
+  const [rows] = preferenceResult;
+  const account = accountRows[0];
+  if (!account) throw Object.assign(new Error("Пользователь не найден"), { statusCode: 404 });
+  return notificationPreferencesState({ rows, account, requestTimezone });
+}
+
+router.get("/users/me/notification-preferences", asyncRoute(async (request, response) => {
+  const state = await loadNotificationPreferences(getPool(), request.bookMeetUser.id, request.get("X-BookMeet-Timezone"));
+  response.json(state);
+}));
+
+router.put("/users/me/notification-preferences", notificationPreferenceRateLimit, asyncRoute(async (request, response) => {
+  const payload = validateNotificationPreferencesPayload(request.body);
+  const userId = request.bookMeetUser.id;
+  const state = await withTransaction(async (connection) => {
+    const current = await loadNotificationPreferences(connection, userId, request.get("X-BookMeet-Timezone"));
+    for (const [category, changes] of Object.entries(payload.categories ?? {})) {
+      if (changes.telegramEnabled === true && !current.readiness.telegram.available) {
+        throw Object.assign(new Error("Telegram-уведомления недоступны: подключение аккаунта или доставка не подтверждены"), { statusCode: 409, code: "TELEGRAM_NOTIFICATIONS_UNAVAILABLE" });
+      }
+      if (changes.emailMode && changes.emailMode !== "off" && !current.readiness.email.available) {
+        throw Object.assign(new Error("Email-уведомления недоступны: адрес или доставка не подтверждены"), { statusCode: 409, code: "EMAIL_NOTIFICATIONS_UNAVAILABLE" });
+      }
+      const merged = { ...current.categories[category], ...changes };
+      await connection.query(
+        `INSERT INTO notification_preferences (user_id, category, in_app_enabled, telegram_enabled, email_mode)
+         VALUES (?, ?, ?, ?, ?)
+         ON DUPLICATE KEY UPDATE
+           in_app_enabled = VALUES(in_app_enabled),
+           telegram_enabled = VALUES(telegram_enabled),
+           email_mode = VALUES(email_mode),
+           updated_at = CURRENT_TIMESTAMP`,
+        [userId, category, merged.inAppEnabled ? 1 : 0, merged.telegramEnabled ? 1 : 0, merged.emailMode],
+      );
+      if (changes.telegramEnabled === false) await cancelNotificationDeliveries(connection, { userId, channel: "telegram", category });
+      if (changes.emailMode === "off") await cancelNotificationDeliveries(connection, { userId, channel: "email", category });
+    }
+    if (Object.hasOwn(payload, "timezone")) {
+      await connection.query("UPDATE users SET notification_timezone = ? WHERE id = ?", [payload.timezone, userId]);
+    }
+    return loadNotificationPreferences(connection, userId, request.get("X-BookMeet-Timezone"));
+  });
+  response.json(state);
+}));
+
+router.patch("/notifications/read-all", notificationReadRateLimit, asyncRoute(async (request, response) => {
+  const category = String(request.body?.category ?? "");
+  if (category !== "all" && !NOTIFICATION_CATEGORIES.includes(category)) {
+    return response.status(400).json({ code: "INVALID_NOTIFICATION_CATEGORY", error: "Укажите диапазон уведомлений" });
+  }
+  if (request.body?.confirmed !== undefined && typeof request.body.confirmed !== "boolean") {
+    return response.status(400).json({ code: "INVALID_NOTIFICATION_CONFIRMATION", error: "Некорректное подтверждение" });
+  }
+  const result = await withTransaction(async (connection) => {
+    const [rows] = await connection.query(
+      `SELECT id, notification_type AS type
+         FROM notifications
+        WHERE user_id = ? AND is_unread = 1
+        ORDER BY id
+        FOR UPDATE`,
+      [request.bookMeetUser.id],
+    );
+    const selected = category === "all" ? rows : rows.filter((row) => notificationCategoryFor(row.type) === category);
+    if (selected.length > NOTIFICATION_READ_CONFIRMATION_THRESHOLD && request.body?.confirmed !== true) {
+      return { confirmationRequired: true, affectedCount: selected.length };
+    }
+    const changedIds = selected.map((row) => Number(row.id));
+    if (changedIds.length) {
+      await connection.query("UPDATE notifications SET is_unread = 0 WHERE user_id = ? AND id IN (?)", [request.bookMeetUser.id, changedIds]);
+    }
+    return { confirmationRequired: false, affectedCount: changedIds.length, changedIds };
+  });
+  if (result.confirmationRequired) {
+    return response.status(409).json({
+      code: "NOTIFICATION_READ_CONFIRMATION_REQUIRED",
+      error: "Требуется подтверждение массового прочтения",
+      category,
+      affectedCount: result.affectedCount,
+      threshold: NOTIFICATION_READ_CONFIRMATION_THRESHOLD,
+    });
+  }
+  response.json({ ok: true, category, affectedCount: result.affectedCount, changedIds: result.changedIds });
 }));
 
 router.patch("/notifications/:id/read", asyncRoute(async (request, response) => {

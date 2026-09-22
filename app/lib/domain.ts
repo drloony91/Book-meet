@@ -156,7 +156,7 @@ export function resolveViewerBook(source: LibraryBook | AuthorBook, catalog: Arr
 export function reviewReadingItemById(users: DemoUser[], id: number): ReadingItem | null {
   for (const user of users) {
     const review = user.reviews.find((item) => item.id === id);
-    if (review) return { id: review.id, kind: "review", title: review.bookTitle, author: user.profile.name, text: review.fullText, bodyHtml: review.bodyHtml, linkedBookId: review.bookId, ownerId: user.id, createdAt: review.createdAt, preview: review.preview, bookAuthor: review.bookAuthor, rating: review.rating, isAdult: review.isAdult };
+    if (review) return { id: review.id, kind: "review", title: review.bookTitle, author: user.profile.name, text: review.fullText, bodyHtml: review.bodyHtml, linkedBookId: review.bookId, ownerId: user.id, createdAt: review.createdAt, preview: review.preview, bookAuthor: review.bookAuthor, rating: review.rating, mentions: review.mentions, isAdult: review.isAdult };
   }
   return null;
 }
@@ -164,7 +164,7 @@ export function reviewReadingItemById(users: DemoUser[], id: number): ReadingIte
 export function excerptReadingItemById(users: DemoUser[], id: number, fallbackTitle: string): ReadingItem | null {
   for (const user of users) {
     const excerpt = (user.excerpts ?? []).find((item) => item.id === id);
-    if (excerpt) return { id: excerpt.id, kind: "excerpt", title: excerpt.bookTitle || fallbackTitle, author: user.profile.name, text: excerpt.text, preview: excerpt.previewText, bodyHtml: excerpt.bodyHtml, linkedBookId: excerpt.bookId, linkedBookIds: excerpt.bookIds, ownerId: user.id, createdAt: excerpt.createdAt, isAdult: excerpt.isAdult };
+    if (excerpt) return { id: excerpt.id, kind: "excerpt", title: excerpt.bookTitle || fallbackTitle, author: user.profile.name, text: excerpt.text, preview: excerpt.previewText, bodyHtml: excerpt.bodyHtml, linkedBookId: excerpt.bookId, linkedBookIds: excerpt.bookIds, ownerId: user.id, createdAt: excerpt.createdAt, mentions: excerpt.mentions, isAdult: excerpt.isAdult };
   }
   return null;
 }
