@@ -9,6 +9,7 @@ Active source of truth is limited to `app/`, `src/`, `server/`, `mysql/`, `scrip
 | `src/main.tsx` | browser bootstrap; imports `app/page.tsx` |
 | `app/page.tsx`, `app/BookMeetApp.tsx` | app composition; `BookMeetApp` mounts controller and adaptive indicators |
 | `app/hooks/useBookMeetController.tsx` | session/bootstrap/realtime state, actions, navigation and modal coordination; `useBookMeetController` is the current integration boundary |
+| `app/hooks/useGroupChats.ts`, `app/components/chat/GroupChatComponents.tsx` | closed-default group projection, abort/version guarded group API actions and basic desktop/mobile group screen; it does not alter legacy direct-chat DTOs/routes |
 | `app/navigation/routes.ts` | `MainView`, `mainViewPaths`, `profileTabPaths`, `appRouteFromPathname`, overlay/mobile history helpers |
 | `app/services/api.ts` | `apiFetch`: same-origin credentials plus locale headers |
 | `app/services/bootstrap.ts` | `BootstrapSection`, `loadApplicationData`, `loadPublicCatalog` |

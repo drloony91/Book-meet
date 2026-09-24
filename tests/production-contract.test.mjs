@@ -546,7 +546,9 @@ test("диалоги маршрутизируются, а чат открыва�
   assert.match(page, /closest\("\.chat-popup, \.friends-panel"\)/);
   assert.match(page, /window\.history\[isSwitchingChat \? "replaceState" : "pushState"\]/);
   assert.match(page, /chatMode: nextExpanded \? "expanded" : "compact"/);
-  assert.match(page, /const chatPage = selectedFriend \? <ChatView/);
+  assert.match(page, /const groupView = activeGroupConversationId \? <GroupChatView/);
+  assert.match(page, /const chatPage = groupView \?\? \(selectedFriend \? <ChatView/);
+  assert.match(routes, /kind: "group-chat"/);
   assert.match(page, /fullPage \/>/);
   assert.match(chat, /fullPage \? "chat-full-page" : ""/);
 });
@@ -705,7 +707,7 @@ test("профиль, фотографии и вложения сообщени�
   assert.match(migration, /attachment_kind VARCHAR\(20\)/);
   assert.match(migration, /attachment_id BIGINT UNSIGNED/);
   assert.match(api, /validatedChatAttachment/);
-  assert.match(api, /INSERT INTO messages \(sender_user_id, recipient_user_id, body, attachment_kind, attachment_id, message_kind, sticker_id\)/);
+  assert.match(api, /INSERT INTO messages \(conversation_id, sender_user_id, recipient_user_id, body, attachment_kind, attachment_id, message_kind, sticker_id\)/);
   assert.match(data, /attachment: !deleted && row\.attachment_kind/);
   assertLocalized(profile, "form.requiredFields");
   assert.match(profile, /!profile\.cityId/);

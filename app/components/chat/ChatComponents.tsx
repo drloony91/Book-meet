@@ -3,6 +3,8 @@ import type { BookSticker, ChatAttachment, ChatAttachmentKind, ChatShareItem, Fr
 import { useI18n } from "../../i18n";
 import { apiFetch } from "../../services/api";
 import type { MentionRef } from "../../types/domain";
+import type { GroupSummary } from "../../types/domain";
+import { GroupChatRows } from "./GroupChatComponents";
 import { MentionTextarea } from "../content/MentionTextarea";
 import { MentionText } from "../content/MentionText";
 import { chatDayLabel, localCalendarDayKey } from "./chat-utils.js";
@@ -38,6 +40,10 @@ export function FriendsPanel({
   adminMode = false,
   variant = "default",
   onSelectMessageSearchResult,
+  groups,
+  selectedGroupId,
+  onSelectGroup,
+  onCreateGroup,
 }: {
   friends: Friend[];
   selectedId: number | null;
@@ -50,6 +56,10 @@ export function FriendsPanel({
   adminMode?: boolean;
   variant?: "default" | "page";
   onSelectMessageSearchResult?: (peerId: number, messageId: number) => void;
+  groups?: GroupSummary[];
+  selectedGroupId?: number | null;
+  onSelectGroup?: (id: number) => void;
+  onCreateGroup?: () => void;
 }) {
   const { t } = useI18n();
   const [query, setQuery] = useState("");
@@ -80,6 +90,7 @@ export function FriendsPanel({
         </label>
       )}
       <div className="friend-list">
+        {!adminMode && groups && onSelectGroup && onCreateGroup && <GroupChatRows groups={groups} selectedId={selectedGroupId} onOpen={onSelectGroup} onCreate={onCreateGroup} />}
         {filtered.map((friend) => (
           <button type="button" className={`friend-row ${selectedId === friend.id ? "is-active" : ""}`} key={friend.id} onClick={() => onSelect(friend)}>
             <Avatar friend={friend} />

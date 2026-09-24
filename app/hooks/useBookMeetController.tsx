@@ -2,7 +2,10 @@
 
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { Avatar, ChatView } from "../components/chat/ChatComponents";
+import { GroupChatView, GroupCreateModal } from "../components/chat/GroupChatComponents";
 import { BookShelfDialog, BookShelfEditor, isBookShelf } from "../components/books/BookShelves";
+import { ReadingSessionsProvider } from "../components/books/ReadingSessionContext";
+import MarketplaceListings from "../components/marketplace/MarketplaceListings";
 import type { BookShelf } from "../types/shelves";
 import type { ChatAttachment, ChatShareItem, Friend, Message } from "../components/chat/types";
 import { sortChatFriends } from "../components/chat/chat-utils.js";
@@ -16,6 +19,7 @@ import {
   mainViewPaths,
   mobileWorkflowPath,
   notifyAppNavigation,
+  closeOverlayRoute,
   openOverlayRoute,
   normalizedPathname,
   useCurrentAppRoute,
@@ -76,6 +80,7 @@ import { apiFetch } from "../services/api";
 import { announceLibraryMutation, announceLibraryMutationStart, applyLibraryMutation, buildReadingPatch, isLibraryMutationResponse } from "../services/library-mutations";
 import { BootstrapRequestError, loadApplicationData } from "../services/bootstrap";
 import { conversationKey, finishMinimumLoading } from "./controller-utils";
+import { useGroupChats } from "./useGroupChats";
 import type {
   AdminCatalogItem,
   AdminCatalogKind,
@@ -135,6 +140,12 @@ export function useBookMeetController() {
   const [startupError, setStartupError] = useState("");
   const [view, setView] = useState<MainView>(initialMainView);
   const currentRoute = useCurrentAppRoute();
+  const [groupChatsEnabled, setGroupChatsEnabled] = useState(false);
+  const [readingSessionsEnabled, setReadingSessionsEnabled] = useState(false);
+  const [marketplaceEnabled, setMarketplaceEnabled] = useState(false);
+  const [groupCreateOpen, setGroupCreateOpen] = useState(false);
+  const activeGroupConversationId = groupChatsEnabled && currentRoute.overlay?.kind === "group-chat" ? currentRoute.overlay.id : null;
+  const groupChats = useGroupChats({ enabled: groupChatsEnabled, conversationId: activeGroupConversationId });
   const mobileSearchQueryRef = useRef(typeof window !== "undefined" && normalizedPathname(window.location.pathname) === "/search" ? new URLSearchParams(window.location.search).get("q") ?? "" : "");
   if (currentRoute.view === "search") mobileSearchQueryRef.current = new URLSearchParams(window.location.search).get("q") ?? "";
   const [selectedFriend, setSelectedFriend] = useState<Friend | null>(null);
@@ -404,7 +415,13 @@ export function useBookMeetController() {
     const eventsSource = new EventSource("/api/realtime", { withCredentials: true });
     eventsSource.addEventListener("update", refresh);
     eventsSource.addEventListener("update", () => window.dispatchEvent(new CustomEvent("bookmeet:materials-refreshed")));
+    eventsSource.addEventListener("update", () => window.dispatchEvent(new Event("bookmeet:reading-presence-refresh")));
+    eventsSource.addEventListener("reading-presence", () => window.dispatchEvent(new Event("bookmeet:reading-presence-refresh")));
     eventsSource.addEventListener("chat", () => { void refreshSocial(); });
+    // Event payload stays untrusted/content-free. The group hook owns its
+    // separate, feature-gated projection and reacts only to this local signal.
+    eventsSource.addEventListener("chat", () => window.dispatchEvent(new Event("bookmeet:group-chat-refresh")));
+    eventsSource.addEventListener("chat", () => window.dispatchEvent(new Event("bookmeet:marketplace-chat-refresh")));
     const timer = window.setInterval(refresh, 30_000);
     const onVisible = () => {
       if (document.hidden) return;
@@ -713,6 +730,9 @@ export function useBookMeetController() {
     setCatalogBooks(data.books ?? []);
     setActiveOrganizationIds(data.activeOrganizationIds ?? []);
     setActiveUserId(data.activeUserId);
+    setGroupChatsEnabled(data.features?.groupChats === true);
+    setReadingSessionsEnabled(data.features?.readingSessions === true);
+    setMarketplaceEnabled(data.features?.marketplace === true);
     setMessages(data.messages ?? {});
     setFriendRequests(data.friendRequests ?? []);
     setFriendships(data.friendships ?? []);
@@ -1095,6 +1115,19 @@ export function useBookMeetController() {
     setChatTargetMessageId(targetMessageId ?? null);
     if (!desktopChat) setView("chat");
     setProfileUserId(null); setNotificationsOpen(false);
+  }
+
+  function openGroupChat(conversationId: number) {
+    if (!groupChatsEnabled || !Number.isSafeInteger(conversationId) || conversationId <= 0) return;
+    setSelectedFriend(null); setChatExpanded(false); setChatTargetMessageId(null);
+    openOverlayRoute(`/chat/groups/${conversationId}`);
+    setView("chat"); setMobileFriendsOpen(false); setNotificationsOpen(false);
+  }
+
+  function closeGroupChat() {
+    if (!activeGroupConversationId) return;
+    closeOverlayRoute(`/chat/groups/${activeGroupConversationId}`, "/chat");
+    setView("chat");
   }
 
   async function sendMessage(text: string, attachment?: ChatAttachment, mentions?: import("../types/domain").MentionRef[], stickerId?: string) {
@@ -1605,8 +1638,9 @@ export function useBookMeetController() {
     setSelectedPublisherNews(source ?? null);
   };
   const chat = selectedFriend ? <ChatView friend={selectedFriend} messages={activeChatMessages} initialTargetMessageId={chatTargetMessageId} onSelectMessageSearchResult={openChat} profileEnabled={!selectedFriend.support} onOpenProfile={() => openUserProfile(selectedFriend.id)} onSend={sendMessage} onEditMessage={editMessage} onDeleteMessage={deleteMessage} onToggleLike={toggleMessageLike} onClearHistory={clearChatHistory} shareItems={shareItems} onOpenAttachment={openChatAttachment} onReport={!currentUser.isAdmin && !selectedFriend.support ? () => openReportDialog({ kind: "chat", id: selectedFriend.id }) : undefined} expanded={chatExpanded} onToggleExpanded={toggleChatExpanded} onClose={closeChat} /> : null;
-  const mobileChatPage = currentRoute.overlay?.kind === "chat" && selectedFriend ? <div className="mobile-chat-dialog"><ChatView friend={selectedFriend} messages={activeChatMessages} initialTargetMessageId={chatTargetMessageId} onSelectMessageSearchResult={openChat} profileEnabled={!selectedFriend.support} onOpenProfile={() => openUserProfile(selectedFriend.id)} onSend={sendMessage} onEditMessage={editMessage} onDeleteMessage={deleteMessage} onToggleLike={toggleMessageLike} onClearHistory={clearChatHistory} shareItems={shareItems} onOpenAttachment={openChatAttachment} onReport={!currentUser.isAdmin && !selectedFriend.support ? () => openReportDialog({ kind: "chat", id: selectedFriend.id }) : undefined} expanded={false} onToggleExpanded={() => undefined} onClose={closeChat} fullPage mobileDialog /> </div> : <MobileMessagesPage friends={currentFriends} requests={mobileMessageRequests} onSelectFriend={(friend) => openChat(friend.id)} onOpenRequest={openUserProfile} onSelectMessageSearchResult={openChat} />;
-  const chatPage = selectedFriend ? <ChatView friend={selectedFriend} messages={activeChatMessages} initialTargetMessageId={chatTargetMessageId} onSelectMessageSearchResult={openChat} profileEnabled={!selectedFriend.support} onOpenProfile={() => openUserProfile(selectedFriend.id)} onSend={sendMessage} onEditMessage={editMessage} onDeleteMessage={deleteMessage} onToggleLike={toggleMessageLike} onClearHistory={clearChatHistory} shareItems={shareItems} onOpenAttachment={openChatAttachment} onReport={!currentUser.isAdmin && !selectedFriend.support ? () => openReportDialog({ kind: "chat", id: selectedFriend.id }) : undefined} expanded={false} onToggleExpanded={() => undefined} onClose={() => undefined} fullPage /> : <ChatScreen hasFriends={currentFriends.length > 0} onSelectMessageSearchResult={openChat} />;
+  const groupView = activeGroupConversationId ? <GroupChatView detail={groupChats.detail} messages={groupChats.messages} searchResults={groupChats.searchResults} loading={groupChats.loading} loadingOlder={groupChats.loadingOlder} nextCursor={groupChats.nextCursor} onLoadOlder={groupChats.loadOlder} onLoadThrough={groupChats.loadThrough} searchCandidates={groupChats.candidates} friends={currentFriends} onClose={closeGroupChat} onSend={(body, stickerId) => groupChats.send(body, undefined, stickerId)} onRead={groupChats.read} onEdit={groupChats.edit} onDelete={groupChats.remove} onLike={groupChats.like} onSearch={groupChats.search} onOpenAttachment={openChatAttachment} onExit={closeGroupChat} actions={{ update: groupChats.update, addMember: groupChats.addMember, removeMember: groupChats.removeMember, changeRole: groupChats.changeRole, transferOwner: groupChats.transferOwner, leave: groupChats.leave, clearHistory: groupChats.clearHistory, deleteGroup: groupChats.deleteGroup, createPoll: groupChats.createPoll, vote: groupChats.vote }} /> : null;
+  const mobileChatPage = groupView ? <div className="mobile-chat-dialog">{groupView}</div> : currentRoute.overlay?.kind === "chat" && selectedFriend ? <div className="mobile-chat-dialog"><ChatView friend={selectedFriend} messages={activeChatMessages} initialTargetMessageId={chatTargetMessageId} onSelectMessageSearchResult={openChat} profileEnabled={!selectedFriend.support} onOpenProfile={() => openUserProfile(selectedFriend.id)} onSend={sendMessage} onEditMessage={editMessage} onDeleteMessage={deleteMessage} onToggleLike={toggleMessageLike} onClearHistory={clearChatHistory} shareItems={shareItems} onOpenAttachment={openChatAttachment} onReport={!currentUser.isAdmin && !selectedFriend.support ? () => openReportDialog({ kind: "chat", id: selectedFriend.id }) : undefined} expanded={false} onToggleExpanded={() => undefined} onClose={closeChat} fullPage mobileDialog /> </div> : <MobileMessagesPage friends={currentFriends} requests={mobileMessageRequests} onSelectFriend={(friend) => openChat(friend.id)} onOpenRequest={openUserProfile} onSelectMessageSearchResult={openChat} groups={groupChatsEnabled ? groupChats.groups : undefined} onSelectGroup={groupChatsEnabled ? openGroupChat : undefined} onCreateGroup={groupChatsEnabled ? () => setGroupCreateOpen(true) : undefined} />;
+  const chatPage = groupView ?? (selectedFriend ? <ChatView friend={selectedFriend} messages={activeChatMessages} initialTargetMessageId={chatTargetMessageId} onSelectMessageSearchResult={openChat} profileEnabled={!selectedFriend.support} onOpenProfile={() => openUserProfile(selectedFriend.id)} onSend={sendMessage} onEditMessage={editMessage} onDeleteMessage={deleteMessage} onToggleLike={toggleMessageLike} onClearHistory={clearChatHistory} shareItems={shareItems} onOpenAttachment={openChatAttachment} onReport={!currentUser.isAdmin && !selectedFriend.support ? () => openReportDialog({ kind: "chat", id: selectedFriend.id }) : undefined} expanded={false} onToggleExpanded={() => undefined} onClose={() => undefined} fullPage /> : <ChatScreen hasFriends={currentFriends.length > 0} onSelectMessageSearchResult={openChat} />);
   const routedChatPage = <><div className="desktop-chat-page">{chatPage}</div>{mobileChatPage}</>;
   const upcomingEvents = events.filter((item) => eventTimestamp(item) > eventClock);
   const visibleHomeEvents = upcomingEvents.filter((item) => item.creatorId === currentUser.id && item.status !== "rejected" || item.status === "published").sort((a, b) => eventTimestamp(a) - eventTimestamp(b));
@@ -1622,7 +1656,13 @@ export function useBookMeetController() {
   ];
   const mobileSearchQuery = mobileSearchQueryRef.current;
   const directoryShell = (content: ReactNode) => <div className="directory-page-shell"><button className="back-button directory-home-button" type="button" onClick={goHome}>← {t("common.home")}</button>{content}</div>;
-  const workspaceContent = view === "reviews"
+  const marketplaceAccessAllowed = adultAccess.status === "adult" && ["Читатель", "Писатель", "Блогер"].includes(currentUser.profile.type);
+  const marketplaceVisible = marketplaceEnabled && marketplaceAccessAllowed;
+  const workspaceContent = view === "marketplace"
+    ? marketplaceEnabled
+      ? <MarketplaceListings accessAllowed={marketplaceAccessAllowed} currentUserId={currentUser.id} catalogBooks={catalogBooks.map(({ id, title, author }) => ({ id, title, author }))} />
+      : <div className="directory-page-shell"><p role="status">{t("common.nothingFound")}</p></div>
+    : view === "reviews"
     ? directoryShell(<MaterialsDirectoryPage kind="review" onCreate={() => startCreating("review")} {...materialDirectoryProps} />)
     : view === "publications"
       ? directoryShell(<MaterialsDirectoryPage kind="excerpt" onCreate={() => startCreating("excerpt")} {...materialDirectoryProps} />)
@@ -1648,7 +1688,8 @@ export function useBookMeetController() {
               : <HomeContent reviews={homeReviews} excerpts={homeExcerpts} publisherNews={allPublisherNews} events={visibleHomeEvents} occasions={visibleHomeOccasions} catalog={catalog} currentUserType={currentUser.profile.type === "Писатель" ? "writer" : currentUser.profile.type === "Блогер" ? "blogger" : "reader"} onOpenUser={openUserProfile} onCreateEvent={startEventCreation} onEditEvent={startEventEditing} onCreateOccasion={startOccasionCreation} onEditOccasion={startOccasionEditing} onCreateReview={() => startCreating("review")} onCreateExcerpt={() => startCreating("excerpt")} onNavigate={navigateMainView} currentUserName={currentUser.profile.name} currentUser={currentUser} users={visibleUsers} likes={likes} saves={saves} commentCounts={commentCounts} saveCounts={saveCounts} onToggleLike={toggleLike} onToggleSave={toggleSave} onComment={addComment} relationshipFor={relationshipFor} isFollowing={followsUser} onAddFriend={sendFriendRequest} onFollow={followUser} />;
 
   return (
-    <div className={`app-shell ${mobileNavigationOpen ? "mobile-navigation-open" : ""} ${view === "chat" ? "mobile-chat-route" : ""} ${view === "search" || view === "chat" || view === "notifications" || view === "profile" ? "mobile-header-hidden" : ""} ${view === "chat" && currentRoute.overlay?.kind === "chat" && selectedFriend ? "mobile-chat-dialog-active" : ""}`}>
+    <ReadingSessionsProvider enabled={readingSessionsEnabled}>
+    <div className={`app-shell ${mobileNavigationOpen ? "mobile-navigation-open" : ""} ${view === "chat" ? "mobile-chat-route" : ""} ${view === "search" || view === "chat" || view === "notifications" || view === "profile" ? "mobile-header-hidden" : ""} ${view === "chat" && (currentRoute.overlay?.kind === "group-chat" || currentRoute.overlay?.kind === "chat" && selectedFriend) ? "mobile-chat-dialog-active" : ""}`}>
       <div className="mobile-shell-surface">
       {view !== "search" && <BookMeetHeader
         accountName={currentUser.isAdmin ? t("chat.support") : currentUser.profile.name}
@@ -1695,6 +1736,11 @@ export function useBookMeetController() {
           onCreateOccasion={startOccasionCreation}
           onCreatePublisherNews={startPublisherNewsCreation}
           onSelectFriend={(friend) => openChat(friend.id)}
+          groups={groupChatsEnabled ? groupChats.groups : undefined}
+          selectedGroupId={activeGroupConversationId}
+          onSelectGroup={groupChatsEnabled ? openGroupChat : undefined}
+          onCreateGroup={groupChatsEnabled ? () => setGroupCreateOpen(true) : undefined}
+          marketplaceVisible={marketplaceVisible}
           onSelectMessageSearchResult={openChat}
           onNavigate={navigateMainView}
           activeView={view}
@@ -1709,6 +1755,7 @@ export function useBookMeetController() {
       )}
 
       {selectedFriend && view !== "chat" && !chatExpanded && (!currentRoute.overlay || currentRoute.overlay.kind === "chat") && <div className={`chat-popup-layer ${mobileFriendsOpen ? "mobile-friends-visible" : ""}`}><div className="chat-popup">{chat}</div></div>}
+      {groupChatsEnabled && groupCreateOpen && <GroupCreateModal friends={currentFriends} searchCandidates={groupChats.candidates} onClose={() => setGroupCreateOpen(false)} onCreate={async (name, participantIds, avatarUrl) => { const created = await groupChats.create(name, participantIds, avatarUrl) as { id?: number } | null; const createdId = created?.id; if (typeof createdId === "number" && Number.isSafeInteger(createdId)) openGroupChat(createdId); }} />}
 
       {view !== "search" && <MobileBottomNavigation
         activeView={view}
@@ -1726,7 +1773,7 @@ export function useBookMeetController() {
       />}
       </div>
 
-      <MobileNavigationDrawer open={mobileNavigationOpen} activeView={view} onClose={() => setMobileNavigationOpen(false)} onNavigate={navigateMainView} createOptions={mobileCreateOptions} />
+      <MobileNavigationDrawer open={mobileNavigationOpen} activeView={view} onClose={() => setMobileNavigationOpen(false)} onNavigate={navigateMainView} createOptions={mobileCreateOptions} marketplaceVisible={marketplaceVisible} />
 
       {selectedShelfId && <BookShelfDialog id={selectedShelfId} viewer={currentUser} onClose={() => setSelectedShelfId(null)} onOpenBook={(id) => setSelectedBook(catalog.find((book) => book.id === id) ?? null)} renderActions={(shelf) => <>{currentUser.id !== shelf.ownerId && <HideUserAction userId={shelf.ownerId} onHidden={() => setSelectedShelfId(null)} />}<MaterialEngagement kind="shelf" materialId={shelf.id} ownerId={shelf.ownerId} currentUser={currentUser} users={visibleUsers} onOpenUser={openUserProfile} shareAttachment={{ kind: "shelf", id: shelf.id }} /></>} />}
       {shelfEditorId !== undefined && <BookShelfEditor key={`${currentUser.id}-${shelfEditorId ?? "new"}`} id={shelfEditorId} viewer={currentUser} onClose={() => setShelfEditorId(undefined)} />}
@@ -1754,5 +1801,6 @@ export function useBookMeetController() {
       {accessGate && (accessGate.pendingLegalDocuments.length > 0 || newlyRegistered && !accessGate.profileComplete || completionNotice && !accessGate.profileComplete) && <ComplianceAccessGate gate={accessGate} registrationFlow={newlyRegistered} onDismiss={() => setCompletionNotice(false)} onAccepted={async () => { await refreshBootstrap(); }} onOpenProfile={() => { setCompletionNotice(false); setCompletionProfileEditing(true); setProfileAction(null); setProfileEditId(null); setView("profile"); window.history.replaceState({}, "", "/profile"); }} />}
       <SafetyCenter onChanged={() => void refreshBootstrap()} />
     </div>
+    </ReadingSessionsProvider>
   );
 }

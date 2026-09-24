@@ -1,4 +1,4 @@
-import { mkdir, writeFile } from "node:fs/promises";
+import { mkdir, unlink, writeFile } from "node:fs/promises";
 import { randomBytes } from "node:crypto";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -81,6 +81,32 @@ export async function saveCover(dataUrl) {
   if (!String(dataUrl ?? "").startsWith("data:image/")) return dataUrl || null;
   const image = decodeDataImage(dataUrl, Number(process.env.MAX_COVER_BYTES || 5 * 1024 * 1024), "обложки");
   return persistImage(image.content, image.extension);
+}
+
+export async function saveMarketplaceImage(dataUrl) {
+  if (typeof dataUrl !== "string" || !/^data:image\/(png|jpeg|jpg|webp);base64,/i.test(dataUrl)) {
+    throw Object.assign(new Error("Изображение должно быть загружено как файл"), { statusCode: 400, code: "INVALID_LISTING_IMAGE" });
+  }
+  // Six base64 images must fit under the existing 8 MB JSON request boundary.
+  const image = decodeDataImage(dataUrl, 800 * 1024, "изображения объявления");
+  const root = path.resolve(projectRoot, process.env.MARKETPLACE_PRIVATE_UPLOAD_DIR || "marketplace-private-uploads");
+  await mkdir(root, { recursive: true });
+  const filename = `marketplace-${Date.now()}-${randomBytes(8).toString("hex")}.${image.extension}`;
+  await writeFile(path.join(root, filename), image.content, { flag: "wx" });
+  return `marketplace-private:${filename}`;
+}
+
+export function marketplaceImageFile(storageKey) {
+  if (typeof storageKey !== "string" || !/^marketplace-private:marketplace-[a-z0-9-]+\.(?:png|jpg|webp)$/.test(storageKey)) return null;
+  const root = path.resolve(projectRoot, process.env.MARKETPLACE_PRIVATE_UPLOAD_DIR || "marketplace-private-uploads");
+  const target = path.resolve(root, storageKey.slice("marketplace-private:".length));
+  return target.startsWith(`${root}${path.sep}`) ? target : null;
+}
+
+export async function removeMarketplaceImage(storageKey) {
+  const target = marketplaceImageFile(storageKey);
+  if (!target) return;
+  try { await unlink(target); } catch (error) { if (error?.code !== "ENOENT") throw error; }
 }
 
 export async function saveAvatar(dataUrl) {

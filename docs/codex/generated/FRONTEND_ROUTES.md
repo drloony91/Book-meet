@@ -9,6 +9,7 @@ Only exported route maps with statically extractable string values are listed. D
 | `mainViewPaths` | `users` | `/users` |
 | `mainViewPaths` | `publishing` | `/publishing` |
 | `mainViewPaths` | `books` | `/books` |
+| `mainViewPaths` | `marketplace` | `/marketplace` |
 | `mainViewPaths` | `communities` | `/communities` |
 | `mainViewPaths` | `partners` | `/partners` |
 | `mainViewPaths` | `events` | `/events` |

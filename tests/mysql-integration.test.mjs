@@ -97,7 +97,16 @@ test("MySQL production migrations, seed and critical relational behavior", async
   await resetDatabase();
   const expectedMigrations = await productionMigrationNames();
 
-  assertSucceeded(runNode("scripts/migrate.js"), "first production migration run");
+  for (const stopPoint of [
+    "052_unified_conversations_stop_point.sql",
+    "053_group_chat_server_foundations.sql",
+    "055_reading_presence_visibility.sql",
+    "057_marketplace_seller_restrictions.sql",
+  ]) {
+    assertSucceeded(runNode("scripts/migrate.js", {}, [`--through=${stopPoint}`]), `migration stop point ${stopPoint}`);
+    assert.deepEqual(await appliedMigrationNames(), expectedMigrations.filter((name) => name <= stopPoint), `ledger at ${stopPoint}`);
+  }
+  assertSucceeded(runNode("scripts/migrate.js"), "full migration run after staged stop points");
   assert.deepEqual(await appliedMigrationNames(), expectedMigrations, "schema_migrations must record every production migration exactly once");
 
   assertSucceeded(runNode("scripts/migrate.js"), "second no-op production migration run");
@@ -310,6 +319,13 @@ test("MySQL production migrations, seed and critical relational behavior", async
   assertSucceeded(runNode("tests/book-progress-notes-http-mysql.mjs"), "TZ3 notes authenticated HTTP, spoiler/privacy and moderation matrix");
   assertSucceeded(runNode("tests/book-shelves-http-mysql.mjs"), "TZ3 shelves authenticated HTTP, visibility, material actions and atomic batch matrix");
   assertSucceeded(runNode("tests/social-content-http-mysql.mjs"), "TZ4 social content authenticated HTTP, privacy, mention, comment and repost matrix");
+  assertSucceeded(runNode("tests/group-conversations-http-mysql.mjs", { BOOK_MEET_GROUP_CHATS_ENABLED: "1" }), "A2 group lifecycle, membership boundaries and audited operator matrix");
+  assertSucceeded(runNode("tests/reading-sessions-http-mysql.mjs", { BOOK_MEET_READING_SESSIONS_ENABLED: "1" }), "B owner reading sessions, lease, midnight and library unlink matrix");
+  assertSucceeded(runNode("tests/reading-presence-http-mysql.mjs", { BOOK_MEET_READING_SESSIONS_ENABLED: "1" }), "B reading presence audience, age, block, lease and subscriber matrix");
+  assertSucceeded(runNode("tests/marketplace-listings-http-mysql.mjs", { BOOK_MEET_MARKETPLACE_ENABLED: "1" }), "C marketplace listing adult, owner, block, filter and removal matrix");
+  assertSucceeded(runNode("tests/marketplace-images-http-mysql.mjs", { BOOK_MEET_MARKETPLACE_ENABLED: "1" }), "C marketplace image lifecycle, signature and transaction cleanup matrix");
+  assertSucceeded(runNode("tests/marketplace-conversations-http-mysql.mjs", { BOOK_MEET_MARKETPLACE_ENABLED: "1" }), "C marketplace unique conversation, concurrent first-message cap and per-viewer hide matrix");
+  assertSucceeded(runNode("tests/marketplace-moderation-http-mysql.mjs", { BOOK_MEET_MARKETPLACE_ENABLED: "1" }), "C marketplace reports, seller restriction and moderation audit matrix");
 });
 
 test("039 upgrades populated legacy libraries without losing unknown completion dates", async () => {
@@ -347,6 +363,113 @@ test("039 upgrades populated legacy libraries without losing unknown completion 
     const resolved = path.resolve(legacyDirectory);
     assert.equal(path.dirname(resolved), fixturesRoot);
     assert.ok(path.basename(resolved).startsWith("tz2-upgrade-"));
+    await rm(resolved, { recursive: true, force: true });
+  }
+});
+
+test("052 backfills one direct conversation per recoverable legacy pair without granting tombstone access", async () => {
+  await resetDatabase();
+  const fixturesRoot = path.resolve(root, "tests", "fixtures", "mysql-migrations");
+  const legacyDirectory = await mkdtemp(path.join(fixturesRoot, "a1-conversations-"));
+  try {
+    const migrations = await productionMigrationNames();
+    for (const name of migrations.filter((name) => Number.parseInt(name, 10) < 52)) await copyFile(path.join(migrationsDir, name), path.join(legacyDirectory, name));
+    assertSucceeded(runNode("scripts/migrate.js", { MYSQL_MIGRATIONS_DIR: legacyDirectory }), "legacy schema through 051");
+
+    const alice = await insertUser("a1-alice");
+    const bob = await insertUser("a1-bob");
+    const deletedSender = await insertUser("a1-deleted-sender");
+    const softDeletedSender = await insertUser("a1-soft-deleted-sender");
+    const purgedSender = await insertUser("a1-purged-sender");
+    const [first] = await rootPool.query(
+      "INSERT INTO messages (sender_user_id, recipient_user_id, body, attachment_kind, attachment_id, read_at) VALUES (?, ?, 'first legacy pair', 'book', 17, UTC_TIMESTAMP())",
+      [alice, bob],
+    );
+    const [second] = await rootPool.query("INSERT INTO messages (sender_user_id, recipient_user_id, body) VALUES (?, ?, 'second legacy pair')", [bob, alice]);
+    const [tombstone] = await rootPool.query("INSERT INTO messages (sender_user_id, recipient_user_id, body) VALUES (?, ?, 'sender later deleted')", [deletedSender, bob]);
+    await rootPool.query(
+      `INSERT INTO message_deletion_evidence
+         (message_id, message_reference_id, sender_user_id, sender_reference_id, recipient_user_id, recipient_reference_id, original_body, was_read, deleted_before_read, deleted_at)
+       VALUES (?, ?, ?, ?, ?, ?, 'sender later deleted', 0, 0, UTC_TIMESTAMP())`,
+      [tombstone.insertId, tombstone.insertId, deletedSender, deletedSender, bob, bob],
+    );
+    const [unrecoverable] = await rootPool.query("INSERT INTO messages (sender_user_id, recipient_user_id, body) VALUES (NULL, ?, 'no sender evidence')", [bob]);
+    const [selfPair] = await rootPool.query("INSERT INTO messages (sender_user_id, recipient_user_id, body) VALUES (?, ?, 'invalid self pair')", [alice, alice]);
+    const [softDeleted] = await rootPool.query("INSERT INTO messages (sender_user_id, recipient_user_id, body) VALUES (?, ?, 'soft-deleted sender')", [softDeletedSender, bob]);
+    const [purged] = await rootPool.query("INSERT INTO messages (sender_user_id, recipient_user_id, body) VALUES (?, ?, 'purged retained sender')", [purgedSender, bob]);
+    await rootPool.query("DELETE FROM users WHERE id = ?", [deletedSender]);
+    await rootPool.query("UPDATE users SET deleted_at = UTC_TIMESTAMP() WHERE id = ?", [softDeletedSender]);
+    await rootPool.query("UPDATE users SET purged_at = UTC_TIMESTAMP() WHERE id = ?", [purgedSender]);
+
+    assertSucceeded(runNode("scripts/migrate.js"), "populated legacy upgrade to 052");
+    const [mapped] = await rootPool.query(
+      "SELECT id, sender_user_id, recipient_user_id, conversation_id, body, attachment_kind, attachment_id, read_at FROM messages WHERE id IN (?, ?, ?, ?, ?, ?, ?) ORDER BY id",
+      [first.insertId, second.insertId, tombstone.insertId, unrecoverable.insertId, selfPair.insertId, softDeleted.insertId, purged.insertId],
+    );
+    const messageById = new Map(mapped.map((row) => [Number(row.id), row]));
+    for (const messageId of [first.insertId, second.insertId, tombstone.insertId, softDeleted.insertId, purged.insertId]) assert.ok(Number(messageById.get(Number(messageId)).conversation_id) > 0, "recoverable legacy pairs must be assigned");
+    assert.deepEqual([messageById.get(Number(unrecoverable.insertId)).conversation_id, messageById.get(Number(selfPair.insertId)).conversation_id], [null, null], "unrecoverable and self-pair rows must not invent a conversation");
+    assert.deepEqual([messageById.get(Number(first.insertId)).body, messageById.get(Number(first.insertId)).attachment_kind, Number(messageById.get(Number(first.insertId)).attachment_id), Boolean(messageById.get(Number(first.insertId)).read_at)], ["first legacy pair", "book", 17, true], "backfill must retain legacy message content, attachment and read state");
+    assert.equal(messageById.get(Number(tombstone.insertId)).sender_user_id, null, "account deletion must remain anonymized after backfill");
+    assert.equal(Number(messageById.get(Number(first.insertId)).conversation_id), Number(messageById.get(Number(second.insertId)).conversation_id), "both directions of one unordered pair share exactly one direct conversation");
+    assert.notEqual(Number(messageById.get(Number(first.insertId)).conversation_id), Number(messageById.get(Number(tombstone.insertId)).conversation_id), "a distinct evidence-backed pair must remain distinct");
+
+    const [directConversations] = await rootPool.query(
+      "SELECT id, direct_user_low_id, direct_user_high_id FROM conversations WHERE conversation_type = 'direct' ORDER BY id",
+    );
+    assert.equal(directConversations.length, 4, "every recoverable non-self pair, including inactive retained users, creates one direct conversation");
+    const [members] = await rootPool.query("SELECT conversation_id, user_id, role, left_at FROM conversation_members ORDER BY conversation_id, user_id");
+    assert.deepEqual(
+      members.map((row) => [Number(row.conversation_id), Number(row.user_id), row.role, row.left_at]),
+      [
+        [Number(messageById.get(Number(first.insertId)).conversation_id), Number(alice), "member", null],
+        [Number(messageById.get(Number(first.insertId)).conversation_id), Number(bob), "member", null],
+        [Number(messageById.get(Number(tombstone.insertId)).conversation_id), Number(bob), "member", null],
+        [Number(messageById.get(Number(softDeleted.insertId)).conversation_id), Number(bob), "member", null],
+        [Number(messageById.get(Number(purged.insertId)).conversation_id), Number(bob), "member", null],
+      ].sort((left, right) => left[0] - right[0] || left[1] - right[1]),
+      "only live, non-deleted and non-purged accounts receive active memberships",
+    );
+    assert.ok(!members.some((row) => Number(row.user_id) === Number(softDeletedSender) || Number(row.user_id) === Number(purgedSender)), "soft-deleted and purged retained users must not receive active membership");
+    const [orphans] = await rootPool.query("SELECT message_reference_id, recipient_reference_id, message_id, recipient_user_id, reason FROM conversation_backfill_orphans ORDER BY message_reference_id");
+    assert.deepEqual(
+      orphans.map((row) => [Number(row.message_reference_id), Number(row.recipient_reference_id), Number(row.message_id), Number(row.recipient_user_id), row.reason]),
+      [[Number(unrecoverable.insertId), Number(bob), Number(unrecoverable.insertId), Number(bob), "missing_sender_identity"], [Number(selfPair.insertId), Number(alice), Number(selfPair.insertId), Number(alice), "self_pair"]],
+      "unrecoverable rows must retain stable references without granting access",
+    );
+    const [[reconciliation]] = await rootPool.query(
+      "SELECT source_message_total, mapped_message_total, orphan_message_total, direct_conversation_total, active_membership_total FROM conversation_backfill_reconciliations WHERE migration_name = '052_unified_conversations_stop_point.sql'",
+    );
+    assert.deepEqual(
+      [Number(reconciliation.source_message_total), Number(reconciliation.mapped_message_total), Number(reconciliation.orphan_message_total), Number(reconciliation.direct_conversation_total), Number(reconciliation.active_membership_total)],
+      [7, 5, 2, 4, 5],
+      "closed reconciliation must snapshot the exact backfill counts",
+    );
+    assert.equal(Number(reconciliation.source_message_total), Number(reconciliation.mapped_message_total) + Number(reconciliation.orphan_message_total), "reconciliation invariant must account for every source message");
+    await assert.rejects(
+      rootPool.query("INSERT INTO conversations (conversation_type, direct_user_low_id, direct_user_high_id) VALUES ('direct', ?, ?)", [Math.min(Number(alice), Number(bob)), Math.max(Number(alice), Number(bob))]),
+      /duplicate/i,
+      "the canonical direct-pair key must prevent a second conversation for the same unordered pair",
+    );
+
+    const [[beforeNoOp]] = await rootPool.query("SELECT COUNT(*) AS count FROM conversations");
+    assertSucceeded(runNode("scripts/migrate.js"), "second 052 runner invocation is a no-op");
+    const [[afterNoOp]] = await rootPool.query("SELECT COUNT(*) AS count FROM conversations");
+    assert.equal(Number(afterNoOp.count), Number(beforeNoOp.count), "canonical ledger entry must prevent a second backfill");
+    assert.deepEqual(await appliedMigrationNames(), migrations);
+    await rootPool.query("DELETE FROM users WHERE id = ?", [bob]);
+    const [durableOrphans] = await rootPool.query("SELECT message_reference_id, recipient_reference_id, message_id, recipient_user_id FROM conversation_backfill_orphans ORDER BY message_reference_id");
+    assert.deepEqual(
+      durableOrphans.map((row) => [Number(row.message_reference_id), Number(row.recipient_reference_id), row.message_id, row.recipient_user_id]),
+      [[Number(unrecoverable.insertId), Number(bob), null, null], [Number(selfPair.insertId), Number(alice), Number(selfPair.insertId), Number(alice)]],
+      "later message/account deletion must null only live audit FKs, not the stable release-audit references",
+    );
+    const [[durableReconciliation]] = await rootPool.query("SELECT source_message_total, mapped_message_total, orphan_message_total FROM conversation_backfill_reconciliations WHERE migration_name = '052_unified_conversations_stop_point.sql'");
+    assert.deepEqual([Number(durableReconciliation.source_message_total), Number(durableReconciliation.mapped_message_total), Number(durableReconciliation.orphan_message_total)], [7, 5, 2], "reconciliation snapshot must survive later data deletion");
+  } finally {
+    const resolved = path.resolve(legacyDirectory);
+    assert.equal(path.dirname(resolved), fixturesRoot);
+    assert.ok(path.basename(resolved).startsWith("a1-conversations-"));
     await rm(resolved, { recursive: true, force: true });
   }
 });

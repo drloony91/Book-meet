@@ -5,6 +5,7 @@ import { CompactLocaleButtons, LocaleSwitcher } from "../../i18n/LocaleSwitcher"
 import { useI18n, type Translate } from "../../i18n";
 import type { RoutableMainView } from "../../navigation/routes";
 import type { UserProfileData } from "../../types/domain";
+import type { GroupSummary } from "../../types/domain";
 
 type WorkspaceNavigationItem = {
   view: RoutableMainView;
@@ -12,13 +13,14 @@ type WorkspaceNavigationItem = {
   group: "feed" | "library" | "personal";
 };
 
-function workspaceNavigationItems(t: Translate): WorkspaceNavigationItem[] {
+function workspaceNavigationItems(t: Translate, marketplaceVisible = false): WorkspaceNavigationItem[] {
   return [
     { view: "home", label: t("content.feed"), group: "feed" },
     { view: "events", label: t("desktop.nav.events"), group: "feed" },
     { view: "reviews", label: t("content.reviews"), group: "feed" },
     { view: "occasions", label: t("nav.dating"), group: "feed" },
     { view: "books", label: t("desktop.nav.books"), group: "library" },
+    ...(marketplaceVisible ? [{ view: "marketplace" as const, label: t("nav.marketplace"), group: "library" as const }] : []),
     { view: "publishing", label: t("nav.publishers"), group: "library" },
     { view: "users", label: t("desktop.nav.people"), group: "library" },
     { view: "communities", label: t("desktop.nav.communities"), group: "library" },
@@ -121,16 +123,18 @@ export function MobileNavigationDrawer({
   onClose,
   onNavigate,
   createOptions = [],
+  marketplaceVisible = false,
 }: {
   open: boolean;
   activeView?: string;
   onClose: () => void;
   onNavigate: (view: RoutableMainView) => void;
   createOptions?: MobileCreateOption[];
+  marketplaceVisible?: boolean;
 }) {
   const { t } = useI18n();
   const [drawerCreateOpen, setDrawerCreateOpen] = useState(false);
-  const items = workspaceNavigationItems(t);
+  const items = workspaceNavigationItems(t, marketplaceVisible);
   const isActive = (target: RoutableMainView) => target === "home" ? ["home", "publications"].includes(activeView ?? "") : target === activeView;
   if (!open) return null;
   return <>
@@ -227,6 +231,11 @@ export function WorkspaceScreen({
   onCreateReview,
   onCreatePublication,
   onCreatePublisherNews,
+  groups,
+  selectedGroupId,
+  onSelectGroup,
+  onCreateGroup,
+  marketplaceVisible = false,
 }: {
   friends: Friend[];
   selectedId: number | null;
@@ -248,6 +257,11 @@ export function WorkspaceScreen({
   onCreateReview?: () => void;
   onCreatePublication?: () => void;
   onCreatePublisherNews?: () => void;
+  groups?: GroupSummary[];
+  selectedGroupId?: number | null;
+  onSelectGroup?: (id: number) => void;
+  onCreateGroup?: () => void;
+  marketplaceVisible?: boolean;
 }) {
   const { t } = useI18n();
   const [friendsCollapsed, setFriendsCollapsed] = useState(false);
@@ -260,7 +274,7 @@ export function WorkspaceScreen({
     return () => document.removeEventListener("pointerdown", close);
   }, [desktopCreateOpen]);
   const chatPage = activeView === "chat";
-  const navigationItems = workspaceNavigationItems(t);
+  const navigationItems = workspaceNavigationItems(t, marketplaceVisible);
   const navItems = navigationItems.filter((item) => item.group === "feed");
   const quickItems: Array<{ view: RoutableMainView; label: string; icon: string }> = [
     { view: "liked", label: t("feed.liked"), icon: "/desktop-icons/heart.png" },
@@ -280,7 +294,7 @@ export function WorkspaceScreen({
         <div className="desktop-navigation-block">{navItems.map((item) => <button type="button" key={item.view} className={navActive(item.view) ? "is-active" : ""} onClick={() => navigate(item.view)} aria-current={navActive(item.view) ? "page" : undefined}><strong>{item.label}</strong></button>)}</div>
         <div className="desktop-navigation-block">{libraryItems.map((item) => <button type="button" key={item.view} className={navActive(item.view) ? "is-active" : ""} onClick={() => navigate(item.view)} aria-current={navActive(item.view) ? "page" : undefined}><strong>{item.label}</strong></button>)}</div>
       </aside>}
-      {(chatPage || mobileFriendsOpen) && <FriendsPanel friends={friends} selectedId={selectedId} adminMode={adminMode} variant={chatPage ? "page" : "default"} onSelectMessageSearchResult={chatPage ? onSelectMessageSearchResult : undefined} collapsed={chatPage ? false : friendsCollapsed} onToggleCollapsed={() => setFriendsCollapsed((value) => !value)} onExpandCollapsed={() => { if (friendsCollapsed) setFriendsCollapsed(false); }} onFindFriends={onFindFriends} onCreateOccasion={onCreateOccasion} onSelect={(friend) => { if (friendsCollapsed) setFriendsCollapsed(false); onSelectFriend(friend); }} />}
+      {(chatPage || mobileFriendsOpen) && <FriendsPanel friends={friends} selectedId={selectedId} adminMode={adminMode} variant={chatPage ? "page" : "default"} onSelectMessageSearchResult={chatPage ? onSelectMessageSearchResult : undefined} groups={groups} selectedGroupId={selectedGroupId} onSelectGroup={onSelectGroup} onCreateGroup={onCreateGroup} collapsed={chatPage ? false : friendsCollapsed} onToggleCollapsed={() => setFriendsCollapsed((value) => !value)} onExpandCollapsed={() => { if (friendsCollapsed) setFriendsCollapsed(false); }} onFindFriends={onFindFriends} onCreateOccasion={onCreateOccasion} onSelect={(friend) => { if (friendsCollapsed) setFriendsCollapsed(false); onSelectFriend(friend); }} />}
       <section className="workspace-main">
         {expandedChat ?? children}
       </section>

@@ -26,6 +26,8 @@ import { announceLibraryMutation, announceLibraryMutationStart, buildReadingPatc
 import { ReadingStateFields, ReadingStatusSelector, readingProgressIsValid, readingStatusLabel } from "../books/ReadingStateFields";
 import { readingPercent, sortBookReaders } from "../../lib/reading-state";
 import { BookProgressNotes, SaveBookNote } from "../books/BookProgressNotes";
+import { ReadingSessions } from "../books/ReadingSessions";
+import { useReadingSessionsEnabled } from "../books/ReadingSessionContext";
 import { BookShelfList, LibraryModeSwitch, openShelfEditor, useLibraryMode } from "../books/BookShelves";
 import { SocialComments } from "./SocialComments";
 import { MentionTextarea } from "./MentionTextarea";
@@ -760,6 +762,7 @@ export function UserProfileModal({ user, viewer, users, catalog, profileFriends 
 
 export function UnifiedBookModal({ book: sourceBook, users, catalog = [], viewer, events = [], onClose, onOpenUser, onOpenReview, onOpenEvent, onEdit, onDelete, onReport, nested = false, retainWhenInactive = false, initialStatusDialog = false }: { book: LibraryBook | AuthorBook; users: DemoUser[]; catalog?: (LibraryBook | AuthorBook)[]; viewer?: DemoUser; events?: BookEvent[]; onClose: () => void; onOpenUser?: (userId: number) => void; onOpenReview?: (review: UserReview, user: DemoUser) => void; onOpenEvent?: (event: BookEvent) => void; onEdit?: () => void; onDelete?: () => void; onReport?: () => void; nested?: boolean; retainWhenInactive?: boolean; initialStatusDialog?: boolean }) {
   const { locale, t } = useI18n();
+  const sessionsEnabled = useReadingSessionsEnabled();
   const effectiveViewer = viewer ?? users.find((user) => user.id === Number(document.documentElement.dataset.bookMeetUserId));
   const canonical = resolveCanonicalBook(sourceBook, users, catalog);
   const book = resolveViewerBook(canonical, catalog, effectiveViewer);
@@ -912,6 +915,7 @@ export function UnifiedBookModal({ book: sourceBook, users, catalog = [], viewer
             <span className="section-subtitle">{t("book.card")}{book.isAdult ? " · 18+" : ""}</span><h2 data-i18n-skip>{book.title}</h2>{bookAuthorProfile && onOpenUser ? <button className="book-author-profile" data-i18n-skip type="button" onClick={() => onOpenUser(bookAuthorProfile.id)}><span className={`avatar avatar-sm avatar-${bookAuthorProfile.color} ${bookAuthorProfile.avatarUrl ? "has-photo" : ""}`} style={bookAuthorProfile.avatarUrl ? { backgroundImage: `url(${bookAuthorProfile.avatarUrl})` } : undefined}>{!bookAuthorProfile.avatarUrl && bookAuthorProfile.initials}</span><span>{book.author}</span></button> : <p className="library-author" data-i18n-skip>{book.author}</p>}{book.ratingCount ? <p className="catalogue-rating" aria-label={t("book.ratingAria", { title: book.title })}>★ {book.averageRating?.toLocaleString(locale === "ru" ? "ru-RU" : locale === "kk" ? "kk-KZ" : "en-US", { minimumFractionDigits: 1, maximumFractionDigits: 1 })} ({book.ratingCount})</p> : null}
             <div className="profile-tags" data-i18n-skip>{book.genres.map((genre) => <span key={genre}>{genre}</span>)}</div>
             {ownsLibraryRelation && inlineDraft && inlineDraft.readingStatus !== "want" && <section data-testid="book-personal-state" className="book-personal-state" aria-label={t("library.bookStatus")}>{(((inlineDraft.readingStatus ?? "read") === "reading" && readingPercent(inlineDraft) !== null) || ((inlineDraft.readingStatus ?? "read") === "postponed" && inlineDraft.postponedOverdue)) && <div className="book-personal-state-heading">{inlineDraft.readingStatus === "reading" && readingPercent(inlineDraft) !== null && <span>{readingPercent(inlineDraft)}%</span>}{inlineDraft.readingStatus === "postponed" && inlineDraft.postponedOverdue && <span className="postponed-overdue">{locale === "ru" ? "Срок наступил" : locale === "kk" ? "Мерзімі келді" : "Due"}</span>}</div>}<ReadingStateFields value={inlineDraft} onChange={(next) => { const revision = inlineDraftRevision.current + 1; inlineDraftRevision.current = revision; setInlineDraft(next); publishReadingDraft(readingDraftKey, { book: next, state: "idle", revision }); }} /><SaveBookNote bookId={canonicalId} draft={inlineDraft} pending={inlineSaveState === "saving" || inlineHasUnsavedChanges} /><output data-testid="reading-autosave-status" aria-live="polite" className="reading-autosave-status">{autosaveText}</output>{inlineSaveState === "error" && <button type="button" onClick={() => { const revision = inlineDraftRevision.current + 1; inlineDraftRevision.current = revision; const next = { ...inlineDraft }; setInlineDraft(next); publishReadingDraft(readingDraftKey, { book: next, state: "idle", revision }); }}>{locale === "ru" ? "Повторить" : locale === "kk" ? "Қайталау" : "Retry"}</button>}</section>}
+            {sessionsEnabled && ownsLibraryRelation && effectiveViewer && !["Издатель", "Сообщество"].includes(effectiveViewer.profile.type) && <ReadingSessions bookId={catalogBookId} bookTitle={book.title} self={effectiveViewer} />}
             <button className="book-share-action" type="button" aria-label={t("share.action")} title={t("share.action")} onClick={(event) => { event.stopPropagation(); window.dispatchEvent(new CustomEvent("bookmeet:share-material", { detail: { attachment: { kind: "book", id: catalogBookId } } })); }}><ShareArrowIcon />{t("share.action")}</button><nav className="book-detail-tabs">
               <button className={tab === "about" ? "active" : ""} type="button" onClick={() => setTab("about")}>{t("book.about")}</button>
               <button className={tab === "readers" ? "active" : ""} type="button" onClick={() => setTab("readers")}>{t("book.readers")}</button>
@@ -1320,7 +1324,9 @@ export function BookEditor({ book, catalog, top3Count = 0, mode = "library", onC
 
 type ReadingGoalProjection = { plan?: Array<{ month: number; target: number; actual: number }>; target?: number; actual?: number; pace?: { text?: string; days?: number; daysPerBook?: number; moreThanOnePerDay?: boolean }; booksPerMonth?: number; startMonth?: number; currentMonth?: number | null };
 type ReadingGoalWithProjection = ReadingGoal & { projection?: ReadingGoalProjection };
-type ReadingStatisticsResponse = { year: number; month: number | null; goals: ReadingGoalWithProjection[]; counts: number[] };
+type ReadingStatsBook = { id: number; title: string; author: string; coverUrl?: string | null; coverTone?: string };
+type ReadingStatsBookDuration = { book: ReadingStatsBook; durationSeconds: number };
+type ReadingStatisticsResponse = { year: number; month: number | null; goals: ReadingGoalWithProjection[]; counts: number[]; bookCounts?: number[]; bookMonths?: Array<{ month: number; books: ReadingStatsBookDuration[] }>; currentReading?: Array<ReadingStatsBookDuration & { progressPercent: number | null }>; timeCounts?: number[]; timeMonths?: Array<{ month: number; books: ReadingStatsBookDuration[] }> };
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === "object" && !Array.isArray(value);
@@ -1341,7 +1347,20 @@ function parseReadingGoals(value: unknown): ReadingGoal[] {
   return value.goals.map(parseReadingGoal);
 }
 
-function parseReadingStatistics(value: unknown): ReadingStatisticsResponse {
+function parseReadingStatsBook(value: unknown): ReadingStatsBook {
+  if (!isRecord(value) || !Number.isInteger(value.id) || Number(value.id) < 1 || typeof value.title !== "string" || typeof value.author !== "string" || !(value.coverUrl === undefined || value.coverUrl === null || typeof value.coverUrl === "string") || !(value.coverTone === undefined || typeof value.coverTone === "string")) throw new Error("Некорректная книга в статистике");
+  return { id: Number(value.id), title: value.title, author: value.author, coverUrl: value.coverUrl as string | null | undefined, coverTone: value.coverTone as string | undefined };
+}
+
+function parseReadingStatsDurations(value: unknown): ReadingStatsBookDuration[] {
+  if (!Array.isArray(value)) throw new Error("Некорректное время чтения по месяцам");
+  return value.map((entry) => {
+    if (!isRecord(entry) || !Number.isSafeInteger(entry.durationSeconds) || Number(entry.durationSeconds) < 0) throw new Error("Некорректная длительность чтения");
+    return { book: parseReadingStatsBook(entry.book), durationSeconds: Number(entry.durationSeconds) };
+  });
+}
+
+function parseReadingStatistics(value: unknown, includeSessions = false): ReadingStatisticsResponse {
   if (!isRecord(value) || typeof value.year !== "number" || !Number.isInteger(value.year) || value.year < 1900 || !(value.month === null || (Number.isInteger(value.month) && Number(value.month) >= 1 && Number(value.month) <= 12)) || !Array.isArray(value.counts) || value.counts.length !== 12 || !Array.isArray(value.goals)) throw new Error("Некорректный формат статистики");
   const year = value.year as number;
   const counts = value.counts.map((count) => Number.isInteger(count) && count >= 0 ? count : NaN);
@@ -1384,7 +1403,35 @@ function parseReadingStatistics(value: unknown): ReadingStatisticsResponse {
     }
     return { ...parsed, projection };
   });
-  return { year, month: value.month as number | null, goals, counts };
+  const result: ReadingStatisticsResponse = { year, month: value.month as number | null, goals, counts };
+  if (includeSessions) {
+    const parseCounts = (raw: unknown, name: string) => {
+      if (!Array.isArray(raw) || raw.length !== 12 || raw.some((item) => !Number.isSafeInteger(item) || Number(item) < 0)) throw new Error(`Некорректные данные ${name}`);
+      return raw.map(Number);
+    };
+    const parseMonths = (raw: unknown, name: string) => {
+      if (!Array.isArray(raw) || raw.length !== 12) throw new Error(`Некорректные данные ${name}`);
+      const seen = new Set<number>();
+      return raw.map((item) => {
+        if (!isRecord(item) || !Number.isInteger(item.month) || Number(item.month) < 1 || Number(item.month) > 12 || seen.has(Number(item.month))) throw new Error(`Некорректные данные ${name}`);
+        seen.add(Number(item.month));
+        return { month: Number(item.month), books: parseReadingStatsDurations(item.books) };
+      }).sort((a, b) => a.month - b.month);
+    };
+    const bookCounts = parseCounts(value.bookCounts, "прочитанных книг");
+    const bookMonths = parseMonths(value.bookMonths, "книг по месяцам");
+    if (!Array.isArray(value.currentReading)) throw new Error("Некорректный список текущего чтения");
+    const currentReading = value.currentReading.map((entry) => {
+      if (!isRecord(entry) || !(entry.progressPercent === null || typeof entry.progressPercent === "number" && Number.isFinite(entry.progressPercent) && entry.progressPercent >= 0 && entry.progressPercent <= 100) || !Number.isSafeInteger(entry.durationSeconds) || Number(entry.durationSeconds) < 0) throw new Error("Некорректные данные текущего чтения");
+      return { book: parseReadingStatsBook(entry.book), progressPercent: entry.progressPercent as number | null, durationSeconds: Number(entry.durationSeconds) };
+    });
+    result.bookCounts = bookCounts;
+    result.bookMonths = bookMonths;
+    result.currentReading = currentReading;
+    result.timeCounts = parseCounts(value.timeCounts, "времени чтения");
+    result.timeMonths = parseMonths(value.timeMonths, "времени по месяцам");
+  }
+  return result;
 }
 
 function clientDaysInMonth(year: number, month: number) { return new Date(year, month, 0).getDate(); }
@@ -1488,7 +1535,8 @@ export function ReadingGoalsModal({ onClose, onOpenStats }: { onClose: () => voi
 }
 
 export function ReadingStatsModal({ books, users, viewer, catalog = [], initialYear, initialMonth, selectedGoalId, onClose }: { books: LibraryBook[]; users: DemoUser[]; viewer?: DemoUser; catalog?: (LibraryBook | AuthorBook)[]; initialYear?: number; initialMonth?: number | null; selectedGoalId?: number; onClose: () => void }) {
-  const { t } = useI18n();
+  const { t, locale } = useI18n();
+  const sessionsEnabled = useReadingSessionsEnabled();
   const currentYear = new Date().getFullYear();
   const completed = Array.isArray(viewer?.readingHistory) ? viewer.readingHistory.map((entry) => ({ ...entry, book: (catalog.find((book) => (book.catalogBookId ?? book.id) === entry.bookId) ?? entry.book) as LibraryBook })) : [];
   const historicalYears = completed.map((entry) => entry.completedYear).filter((value): value is number => typeof value === "number" && Number.isInteger(value) && value >= 1900);
@@ -1496,6 +1544,11 @@ export function ReadingStatsModal({ books, users, viewer, catalog = [], initialY
   const [year, setYear] = useState(initialYear ?? currentYear);
   const [selectedMonth] = useState(initialMonth ?? null);
   const [goalStats, setGoalStats] = useState<ReadingStatisticsResponse | null>(null);
+  const modeStorageKey = `bookmeet:reading-stats-mode:${viewer?.id ?? "anonymous"}`;
+  const [statsMode, setStatsMode] = useState<"books" | "time">(() => {
+    if (typeof window === "undefined") return "books";
+    try { return window.localStorage.getItem(modeStorageKey) === "time" ? "time" : "books"; } catch { return "books"; }
+  });
   const [statsLoading, setStatsLoading] = useState(true);
   const [statsError, setStatsError] = useState("");
   const [openedBook, setOpenedBook] = useState<LibraryBook | null>(null);
@@ -1503,15 +1556,37 @@ export function ReadingStatsModal({ books, users, viewer, catalog = [], initialY
   const annualGoal = goalStats?.goals.find((goal) => goal.goalKind === "year");
   const monthlyGoal = goalStats?.goals.find((goal) => goal.goalKind === "month");
   const planGoal = selectedGoal ?? annualGoal ?? monthlyGoal;
-  const counts = goalStats?.counts ?? Array.from({ length: 12 }, () => 0);
+  const counts = sessionsEnabled && statsMode === "books" ? goalStats?.bookCounts ?? Array.from({ length: 12 }, () => 0) : sessionsEnabled && statsMode === "time" ? goalStats?.timeCounts ?? Array.from({ length: 12 }, () => 0) : goalStats?.counts ?? Array.from({ length: 12 }, () => 0);
   const planTargets = planGoal?.goalKind === "year" ? planGoal.projection?.plan?.map((item) => item.target) ?? [] : planGoal?.targetCount !== undefined ? [planGoal.targetCount] : [];
-  const maxCount = Math.max(1, ...counts, ...planTargets);
+  const maxCount = sessionsEnabled && statsMode === "time" ? Math.max(60, ...counts) : Math.max(1, ...counts, ...planTargets);
   const chartLeft = 54; const chartTop = 20; const chartHeight = 220; const chartWidth = 660; const slot = chartWidth / 12;
   const tickCount = Math.min(5, maxCount + 1);
   const ticks = Array.from({ length: tickCount }, (_, index) => Math.round(index * maxCount / Math.max(1, tickCount - 1))).filter((value, index, list) => list.indexOf(value) === index);
-  const monthlyGroups = readingMonths.map((month, index) => ({ month, entries: completed.filter((entry) => entry.completedYear === year && entry.completedMonth === index + 1 && entry.book) })).filter((group) => group.entries.length);
+  type MonthlyStatsEntry = ReadingStatsBookDuration & { historyEntry?: (typeof completed)[number] };
+  const legacyMonthlyGroups: Array<{ month: typeof readingMonths[number]; entries: MonthlyStatsEntry[] }> = readingMonths.map((month, index) => ({ month, entries: completed.filter((entry) => entry.completedYear === year && entry.completedMonth === index + 1 && entry.book).map((entry) => ({ book: entry.book as ReadingStatsBook, durationSeconds: 0, historyEntry: entry })) })).filter((group) => group.entries.length);
+  const legacyByMonth = new Map(legacyMonthlyGroups.map((group) => [group.month, group.entries]));
+  const bookMonthGroups: Array<{ month: typeof readingMonths[number]; entries: MonthlyStatsEntry[] }> = (sessionsEnabled ? goalStats?.bookMonths?.map((group) => ({ month: readingMonths[group.month - 1], entries: group.books.length ? group.books : legacyByMonth.get(readingMonths[group.month - 1]) ?? [] })) : undefined) ?? legacyMonthlyGroups;
+  const monthlyGroups = bookMonthGroups.filter((group) => group.entries.length);
+  const timeMonthGroups = (sessionsEnabled ? goalStats?.timeMonths?.map((group) => ({ month: readingMonths[group.month - 1], entries: group.books })) : undefined)?.filter((group) => group.entries.length) ?? [];
   const targetForMonth = (index: number) => planGoal?.goalKind === "year" ? planGoal.projection?.plan?.find((item) => item.month === index + 1)?.target : planGoal?.goalKind === "month" && planGoal.targetMonth === index + 1 ? planGoal.targetCount : undefined;
   const closeLabel = t("common.close");
+  const statsCopy = {
+    ru: { modeBooks: "Книги", modeTime: "Время", current: "Читаю сейчас", progress: "Прогресс", time: "Прочитано за", noTime: "00:00:00", emptyBooks: "В этом году завершённых книг нет.", emptyTime: "В этом году учтённого времени чтения нет.", axisHours: "ч", axisMinutes: "мин", readYear: "Книги за год", timeYear: "Время чтения за год" },
+    kk: { modeBooks: "Кітаптар", modeTime: "Уақыт", current: "Қазір оқып жатырмын", progress: "Оқу барысы", time: "Оқылған уақыт", noTime: "00:00:00", emptyBooks: "Бұл жылы аяқталған кітаптар жоқ.", emptyTime: "Бұл жылы есептелген оқу уақыты жоқ.", axisHours: "сағ", axisMinutes: "мин", readYear: "Жылдағы кітаптар", timeYear: "Жылдағы оқу уақыты" },
+    en: { modeBooks: "Books", modeTime: "Time", current: "Currently reading", progress: "Progress", time: "Read for", noTime: "00:00:00", emptyBooks: "No books completed this year.", emptyTime: "No reading time recorded this year.", axisHours: "h", axisMinutes: "min", readYear: "Books this year", timeYear: "Reading time this year" },
+  }[locale];
+  const formatDuration = (seconds: number) => {
+    const safe = Math.max(0, Math.floor(seconds));
+    return `${String(Math.floor(safe / 3600)).padStart(2, "0")}:${String(Math.floor(safe % 3600 / 60)).padStart(2, "0")}:${String(safe % 60).padStart(2, "0")}`;
+  };
+
+  useEffect(() => {
+    if (!sessionsEnabled) return;
+    try { window.localStorage.setItem(modeStorageKey, statsMode); } catch { /* storage can be disabled; in-memory selection still works */ }
+  }, [modeStorageKey, sessionsEnabled, statsMode]);
+  useEffect(() => {
+    try { setStatsMode(window.localStorage.getItem(modeStorageKey) === "time" ? "time" : "books"); } catch { setStatsMode("books"); }
+  }, [modeStorageKey]);
 
   useEffect(() => {
     let active = true;
@@ -1519,23 +1594,45 @@ export function ReadingStatsModal({ books, users, viewer, catalog = [], initialY
     void apiFetch(`/api/reading-statistics?year=${year}${selectedMonth ? `&month=${selectedMonth}` : ""}`, { cache: "no-store" }).then(async (response) => {
       const payload = await response.json().catch(() => null);
       if (!response.ok) throw new Error(isRecord(payload) && typeof payload.error === "string" ? payload.error : t("library.goalStatsError"));
-      return parseReadingStatistics(payload);
+      return parseReadingStatistics(payload, sessionsEnabled);
     }).then((data) => { if (active) setGoalStats(data); }).catch((reason) => { if (active) setStatsError(reason instanceof Error ? reason.message : t("library.goalStatsError")); }).finally(() => { if (active) setStatsLoading(false); });
     return () => { active = false; };
-  }, [year, selectedMonth]);
+  }, [year, selectedMonth, sessionsEnabled]);
+
+  const isTimeMode = sessionsEnabled && statsMode === "time";
+  const timeScaleMax = Math.max(60, ...counts);
+  const timeUnitSeconds = timeScaleMax >= 3600 ? 3600 : 60;
+  const timeUnitLabel = timeScaleMax >= 3600 ? statsCopy.axisHours : statsCopy.axisMinutes;
+  const timeTicks = Array.from({ length: 5 }, (_, index) => Math.round(index * timeScaleMax / 4 / timeUnitSeconds * 10) / 10);
+  const statsBookCard = (entry: ReadingStatsBookDuration, key: string, includeProgress?: number | null) => {
+    const fullBook = [...catalog, ...books].find((item) => (item.catalogBookId ?? item.id) === entry.book.id) as LibraryBook | undefined;
+    const content = <><div className={`library-book-cover library-cover-${entry.book.coverTone || "blue"}`} style={entry.book.coverUrl ? { backgroundImage: `url(${entry.book.coverUrl})` } : undefined}>{!entry.book.coverUrl && <strong>{entry.book.title.slice(0, 1)}</strong>}</div><span><strong>{entry.book.title}</strong><small>{entry.book.author}</small>{includeProgress !== undefined && <small>{statsCopy.progress}: {includeProgress === null ? "—" : `${Math.round(includeProgress)}%`}</small>}<small>{statsCopy.time} {formatDuration(entry.durationSeconds)}</small></span></>;
+    return fullBook ? <button type="button" data-i18n-skip className="reading-stats-book" key={key} onClick={() => setOpenedBook(fullBook)}>{content}</button> : <article className="reading-stats-book" key={key}>{content}</article>;
+  };
+  const completedStatsBookCard = (entry: ReadingStatsBookDuration, key: string) => {
+    const fullBook = [...catalog, ...books].find((item) => (item.catalogBookId ?? item.id) === entry.book.id) as LibraryBook | undefined;
+    return <button type="button" data-i18n-skip className="reading-month-book reading-stats-book" key={key} onClick={() => { if (fullBook) setOpenedBook(fullBook); }}>
+      <div className={`library-book-cover library-cover-${entry.book.coverTone || "blue"}`} style={entry.book.coverUrl ? { backgroundImage: `url(${entry.book.coverUrl})` } : undefined}>{!entry.book.coverUrl && <strong>{entry.book.title.slice(0, 1)}</strong>}</div>
+      <span><strong>{entry.book.title}</strong><small>{entry.book.author}</small><small className="reading-stats-book-time">{statsCopy.time} {formatDuration(entry.durationSeconds || 0)}</small></span>
+    </button>;
+  };
 
   return <div className="nested-modal-backdrop workflow-page-backdrop reading-stats-backdrop" onMouseDown={onClose}><section className="reading-stats-modal" role="dialog" aria-modal="true" aria-label={t("library.readingStats")} onMouseDown={(event) => event.stopPropagation()}>
     <button className="modal-close" type="button" onClick={onClose} aria-label={closeLabel}>×</button><button className="reading-stats-mobile-back" type="button" onClick={onClose} aria-label={t("common.back")}>← {t("common.back")}</button>
-    <div className="reading-stats-heading"><div><span className="section-subtitle">{t("profile.library")}</span><h2>{t("library.readingStats")}</h2><p>{t("library.readByMonth")}{selectedMonth ? ` · ${t(readingMonths[selectedMonth - 1])}` : ""}</p></div><label>{t("library.year")}<CustomSelect ariaLabel={t("library.statsYear")} value={year} onChange={setYear} options={availableYears.map((item) => ({ value: item, label: String(item) }))} /></label></div>
+    <div className="reading-stats-heading"><div><span className="section-subtitle">{t("profile.library")}</span><h2>{t("library.readingStats")}</h2>{!sessionsEnabled && <p>{t("library.readByMonth")}{selectedMonth ? ` · ${t(readingMonths[selectedMonth - 1])}` : ""}</p>}</div><label>{t("library.year")}<CustomSelect ariaLabel={t("library.statsYear")} value={year} onChange={setYear} options={availableYears.map((item) => ({ value: item, label: String(item) }))} /></label></div>
     {statsLoading && <p className="reading-stats-status" role="status">{t("library.goalStatsLoading")}</p>}{statsError && <p className="form-error" role="alert">{statsError}</p>}
+    {sessionsEnabled && <div className="reading-stats-mode" role="group" aria-label={locale === "en" ? "Reading statistics view" : locale === "kk" ? "Оқу статистикасының көрінісі" : "Режим статистики чтения"}><button type="button" className={!isTimeMode ? "active" : ""} aria-pressed={!isTimeMode} onClick={() => setStatsMode("books")}>{statsCopy.modeBooks}</button><button type="button" className={isTimeMode ? "active" : ""} aria-pressed={isTimeMode} onClick={() => setStatsMode("time")}>{statsCopy.modeTime}</button></div>}
     {!statsLoading && !statsError && <div className="reading-chart-shell">
-      <svg className="reading-stats-chart" viewBox="0 0 750 290" role="img" aria-label={t("library.readInYear", { year })}>
-        {ticks.map((tick) => { const y = chartTop + chartHeight - tick / maxCount * chartHeight; return <g key={tick}><line x1={chartLeft} x2={chartLeft + chartWidth} y1={y} y2={y} className="chart-grid-line" /><text x={chartLeft - 14} y={y + 4} textAnchor="end" className="chart-y-label">{tick}</text></g>; })}
-        {counts.map((count, index) => { const target = targetForMonth(index); const color = target === undefined ? "blue" : target === 0 ? "green" : count / target * 100 < 50 ? "muted-red" : count / target * 100 <= 80 ? "muted-yellow" : count / target * 100 < 100 ? "muted-green" : "green"; const barHeight = count ? Math.max(8, count / maxCount * chartHeight) : 3; const x = chartLeft + index * slot + 8; const y = chartTop + chartHeight - barHeight; const planHeight = target === undefined ? 0 : Math.max(3, target / maxCount * chartHeight); const planY = chartTop + chartHeight - planHeight; const planLabelY = Math.max(12, planY - 8); const defaultActualLabelY = count > 0 ? y - 8 : chartTop + chartHeight - 7; const actualLabelY = target !== undefined && Math.abs(defaultActualLabelY - planLabelY) < 14 ? Math.min(chartTop + chartHeight + 1, defaultActualLabelY + 20) : defaultActualLabelY; return <g key={readingMonths[index]}><rect className={`chart-bar ${target === undefined ? count ? "has-value" : "" : `has-value goal-${color}`}`} x={x} y={y} width={slot - 16} height={barHeight} rx="7"><title>{t(readingMonths[index])}: {count} {booksWord(count)}{target !== undefined ? ` · ${t("library.goalPlan", { count: target })}` : ""}</title></rect>{target !== undefined && <><rect className="chart-plan-outline" x={x} y={planY} width={slot - 16} height={planHeight} rx="7" /><text x={x + (slot - 16) / 2} y={planLabelY} textAnchor="middle" className="chart-plan-label">{target}</text></>}<text x={x + (slot - 16) / 2} y={actualLabelY} textAnchor="middle" className={`chart-value${target === undefined ? "" : ` chart-value-${color}`}`}>{count}</text><text x={x + (slot - 16) / 2} y={chartTop + chartHeight + 24} textAnchor="middle" className="chart-month-label">{t(readingMonths[index]).slice(0, 3)}</text></g>; })}
+      <svg className="reading-stats-chart" viewBox="0 0 750 290" role="img" aria-label={`${isTimeMode ? statsCopy.timeYear : statsCopy.readYear} ${year}`}>
+        {isTimeMode ? timeTicks.map((tick) => { const y = chartTop + chartHeight - tick * timeUnitSeconds / timeScaleMax * chartHeight; return <g key={tick}><line x1={chartLeft} x2={chartLeft + chartWidth} y1={y} y2={y} className="chart-grid-line" /><text x={chartLeft - 14} y={y + 4} textAnchor="end" className="chart-y-label">{tick}{timeUnitLabel}</text></g>; }) : ticks.map((tick) => { const y = chartTop + chartHeight - tick / maxCount * chartHeight; return <g key={tick}><line x1={chartLeft} x2={chartLeft + chartWidth} y1={y} y2={y} className="chart-grid-line" /><text x={chartLeft - 14} y={y + 4} textAnchor="end" className="chart-y-label">{tick}</text></g>; })}
+        {counts.map((count, index) => { const target = isTimeMode ? undefined : targetForMonth(index); const color = target === undefined ? "blue" : target === 0 ? "green" : count / target * 100 < 50 ? "muted-red" : count / target * 100 <= 80 ? "muted-yellow" : count / target * 100 < 100 ? "muted-green" : "green"; const barHeight = count ? Math.max(8, count / maxCount * chartHeight) : 3; const x = chartLeft + index * slot + 8; const y = chartTop + chartHeight - barHeight; const planHeight = target === undefined ? 0 : Math.max(3, target / maxCount * chartHeight); const planY = chartTop + chartHeight - planHeight; const planLabelY = Math.max(12, planY - 8); const defaultActualLabelY = count > 0 ? y - 8 : chartTop + chartHeight - 7; const actualLabelY = target !== undefined && Math.abs(defaultActualLabelY - planLabelY) < 14 ? Math.min(chartTop + chartHeight + 1, defaultActualLabelY + 20) : defaultActualLabelY; const tooltip = isTimeMode ? `${t(readingMonths[index])}: ${formatDuration(count)}` : `${t(readingMonths[index])}: ${count} ${booksWord(count)}${target !== undefined ? ` · ${t("library.goalPlan", { count: target })}` : ""}`; return <g key={readingMonths[index]}><rect className={`chart-bar ${target === undefined ? count ? "has-value" : "" : `has-value goal-${color}`}`} x={x} y={y} width={slot - 16} height={barHeight} rx="7" aria-label={tooltip}><title>{tooltip}</title></rect>{target !== undefined && <><rect className="chart-plan-outline" x={x} y={planY} width={slot - 16} height={planHeight} rx="7" /><text x={x + (slot - 16) / 2} y={planLabelY} textAnchor="middle" className="chart-plan-label">{target}</text></>}<text x={x + (slot - 16) / 2} y={actualLabelY} textAnchor="middle" className={`chart-value${target === undefined ? "" : ` chart-value-${color}`}`}>{isTimeMode ? "" : count}</text><text x={x + (slot - 16) / 2} y={chartTop + chartHeight + 24} textAnchor="middle" className="chart-month-label">{t(readingMonths[index]).slice(0, 3)}</text></g>; })}
       </svg>
-      <div className="reading-stats-mobile-chart" role="img" aria-label={t("library.readInYear", { year })}>{counts.map((count, index) => { const target = targetForMonth(index); const color = target === undefined ? "blue" : target === 0 ? "green" : count / target * 100 < 50 ? "muted-red" : count / target * 100 <= 80 ? "muted-yellow" : count / target * 100 < 100 ? "muted-green" : "green"; const actualWidth = Math.min(100, count / maxCount * 100); const planWidth = target === undefined ? 0 : Math.min(100, target / maxCount * 100); return <div className="reading-stats-mobile-row" key={readingMonths[index]}><span>{t(readingMonths[index]).slice(0, 3)}</span><i className={target === undefined ? "" : `has-plan goal-${color}`}>{target !== undefined && <u style={{ width: `${planWidth}%` }} />}<b className={target === undefined ? "mobile-actual-blue" : `mobile-actual-${color}`} style={{ width: `${actualWidth}%` }}><em style={count === 0 ? { color: "#40566d" } : undefined}>{count}</em></b></i>{target !== undefined && <small>{t("library.goalPlan", { count: target })}</small>}</div>; })}</div>
+      <div className="reading-stats-mobile-chart" role="img" aria-label={`${isTimeMode ? statsCopy.timeYear : statsCopy.readYear} ${year}`}>{counts.map((count, index) => { const target = isTimeMode ? undefined : targetForMonth(index); const color = target === undefined ? "blue" : target === 0 ? "green" : count / target * 100 < 50 ? "muted-red" : count / target * 100 <= 80 ? "muted-yellow" : count / target * 100 < 100 ? "muted-green" : "green"; const actualWidth = Math.min(100, count / maxCount * 100); const planWidth = target === undefined ? 0 : Math.min(100, target / maxCount * 100); return <div className="reading-stats-mobile-row" key={readingMonths[index]} aria-label={isTimeMode ? `${t(readingMonths[index])}: ${formatDuration(count)}` : undefined} title={isTimeMode ? `${t(readingMonths[index])}: ${formatDuration(count)}` : undefined}><span>{t(readingMonths[index]).slice(0, 3)}</span><i className={target === undefined ? "" : `has-plan goal-${color}`}>{target !== undefined && <u style={{ width: `${planWidth}%` }} />}<b className={target === undefined ? "mobile-actual-blue" : `mobile-actual-${color}`} style={{ width: `${actualWidth}%` }}><em style={count === 0 ? { color: "#40566d" } : undefined}>{isTimeMode ? "" : count}</em></b></i>{target !== undefined && <small>{t("library.goalPlan", { count: target })}</small>}</div>; })}</div>
     </div>}
-    {monthlyGroups.length > 0 && <div className="reading-month-groups">{monthlyGroups.map((group) => <section className="reading-month-group" key={group.month}><h3>{t(group.month)}</h3><div>{group.entries.map((entry) => { const historyBook = entry.book; return historyBook ? <button type="button" data-i18n-skip className="reading-month-book" key={entry.id} onClick={() => setOpenedBook(historyBook)}><div className={`library-book-cover library-cover-${historyBook.coverTone}`} style={historyBook.coverUrl ? { backgroundImage: `url(${historyBook.coverUrl})` } : undefined}>{!historyBook.coverUrl && <strong>{historyBook.title.slice(0, 1)}</strong>}</div><span><strong>{historyBook.title}</strong><small>{historyBook.author}</small></span></button> : null; })}</div></section>)}</div>}
+    {!statsLoading && !statsError && sessionsEnabled && Boolean(goalStats?.currentReading?.length) && <section className="reading-stats-current"><h3>{statsCopy.current}</h3><div>{goalStats?.currentReading?.map((entry) => statsBookCard(entry, `current-${entry.book.id}`, entry.progressPercent))}</div></section>}
+    {!statsLoading && !statsError && !isTimeMode && monthlyGroups.length > 0 && <div className="reading-month-groups">{monthlyGroups.map((group) => <section className="reading-month-group" key={group.month}><h3>{t(group.month)}</h3><div>{group.entries.map((entry, index) => sessionsEnabled ? completedStatsBookCard(entry, `${group.month}-${entry.book.id}-${index}`) : entry.historyEntry?.book ? <button type="button" data-i18n-skip className="reading-month-book" key={entry.historyEntry.id} onClick={() => setOpenedBook(entry.historyEntry!.book as LibraryBook)}><div className={`library-book-cover library-cover-${entry.book.coverTone || "blue"}`} style={entry.book.coverUrl ? { backgroundImage: `url(${entry.book.coverUrl})` } : undefined}>{!entry.book.coverUrl && <strong>{entry.book.title.slice(0, 1)}</strong>}</div><span><strong>{entry.book.title}</strong><small>{entry.book.author}</small></span></button> : null)}</div></section>)}</div>}
+    {!statsLoading && !statsError && sessionsEnabled && isTimeMode && timeMonthGroups.length > 0 && <div className="reading-month-groups">{timeMonthGroups.map((group) => <section className="reading-month-group" key={group.month}><h3>{t(group.month)}</h3><div>{group.entries.map((entry) => statsBookCard(entry, `${group.month}-${entry.book.id}`))}</div></section>)}</div>}
+    {!statsLoading && !statsError && sessionsEnabled && (isTimeMode ? !timeMonthGroups.length : !monthlyGroups.length) && <p className="reading-stats-status">{isTimeMode ? statsCopy.emptyTime : statsCopy.emptyBooks}</p>}
     {openedBook && <UnifiedBookModal book={openedBook} viewer={viewer} users={users} catalog={catalog.length ? catalog : books} nested onClose={() => setOpenedBook(null)} />}
   </section></div>;
 }

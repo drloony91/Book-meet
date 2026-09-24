@@ -219,7 +219,7 @@ export type SafetyReport = {
   reference?: string;
   reporterId?: number;
   reporterName: string;
-  targetKind: "user" | ReportMaterialKind | "chat" | "comment" | "book_note";
+  targetKind: "user" | ReportMaterialKind | "chat" | "comment" | "book_note" | "marketplace_listing" | "marketplace_conversation";
   targetId: number;
   targetUserId?: number;
   targetUserName?: string;
@@ -249,7 +249,13 @@ export type LegalDocument = { id: number; type: "user_agreement" | "privacy_poli
 export type AccessGate = { profileComplete: boolean; missingProfileFields: string[]; legalConfigured: boolean; pendingLegalDocuments: LegalDocument[]; legalDocuments?: LegalDocument[] };
 export type LinkedProfileCard = { id: number; name: string; type: "Читатель" | "Писатель" | "Блогер" | "Сообщество"; avatarUrl?: string; profileCompleted?: boolean };
 export type MaterialActionRef = { kind: ReportMaterialKind | "book"; id: number; createdAt: string };
-export type BootstrapData = { shelves?: BookShelf[]; activeUserId: number; profileCompleted?: boolean; accessGate?: AccessGate; adultAccess?: AdultAccess; users: DemoUser[]; activeOrganizationIds?: number[]; books?: LibraryBook[]; linkedProfile?: LinkedProfileCard; messages: Record<string, Message[]>; friendRequests: FriendRequest[]; friendships: Friendship[]; communityMemberships?: CommunityMembership[]; follows: Follow[]; notifications: SocialNotification[]; likes: Record<string, number[]>; saves?: Record<string, number[]>; likedMaterialRefs?: MaterialActionRef[]; savedMaterialRefs?: MaterialActionRef[]; events?: BookEvent[]; occasions?: Occasion[]; blocks?: UserBlock[]; blockedByUserIds?: number[]; reports?: SafetyReport[] };
+export type GroupSummary = { id: number; name: string; avatarUrl?: string; role: "owner" | "moderator" | "member"; memberCount: number; lastMessage?: string; lastMessageAt?: string; unreadCount: number };
+export type GroupMember = { userId: number; role: "owner" | "moderator" | "member"; name: string; username?: string; avatarUrl?: string };
+export type GroupCandidate = { id: number; name: string; username?: string; avatarUrl?: string };
+export type GroupPoll = { id: number; question: string; allowsMultiple: boolean; mayChangeVote: boolean; closesAt?: string; closedAt?: string; closed: boolean; options: Array<{ id: number; text: string; order: number; voteCount: number; viewerSelected: boolean }> };
+export type GroupMessage = { id: number; senderId?: number; author?: { id?: number; name: string; username?: string; avatarUrl?: string }; mine: boolean; text: string; system: boolean; deleted: boolean; edited?: boolean; editedAt?: string; attachment?: { kind: string; id: number }; kind?: "text" | "sticker"; sticker?: import("../components/chat/types").BookSticker; mentions?: MentionRef[]; read: boolean; createdAt: string; likeCount: number; likedByViewer: boolean; likedByUserIds: number[]; poll?: GroupPoll };
+export type GroupDetail = { id: number; name: string; avatarUrl?: string; historyClearedMessageId?: number; addMembersPolicy: string; removeMembersPolicy: string; currentRole: "owner" | "moderator" | "member"; members: GroupMember[] };
+export type BootstrapData = { shelves?: BookShelf[]; activeUserId: number; profileCompleted?: boolean; accessGate?: AccessGate; adultAccess?: AdultAccess; features?: { groupChats?: boolean; readingSessions?: boolean; marketplace?: boolean }; users: DemoUser[]; activeOrganizationIds?: number[]; books?: LibraryBook[]; linkedProfile?: LinkedProfileCard; messages: Record<string, Message[]>; friendRequests: FriendRequest[]; friendships: Friendship[]; communityMemberships?: CommunityMembership[]; follows: Follow[]; notifications: SocialNotification[]; likes: Record<string, number[]>; saves?: Record<string, number[]>; likedMaterialRefs?: MaterialActionRef[]; savedMaterialRefs?: MaterialActionRef[]; events?: BookEvent[]; occasions?: Occasion[]; blocks?: UserBlock[]; blockedByUserIds?: number[]; reports?: SafetyReport[] };
 export type PublicCatalogBook = Pick<LibraryBook, "id" | "author" | "title" | "isbn" | "publisher" | "genres" | "annotation" | "coverUrl" | "coverTone"> & { addedAt?: string; popularity: number };
 export type PublicCatalogOwner = { id: number; name: string; initials: string; color: string; avatarUrl?: string };
 export type PublicCatalogMaterial = { id: number; kind: "review" | "excerpt" | "publisher_news"; title: string; preview: string; ownerName: string; owner: PublicCatalogOwner; createdAt?: string };

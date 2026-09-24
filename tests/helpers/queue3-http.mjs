@@ -3,6 +3,9 @@ import assert from "node:assert/strict";
 import { randomBytes } from "node:crypto";
 import express from "express";
 import mysql from "mysql2/promise";
+import path from "node:path";
+import { existsSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 import { assertSafeIntegrationEnvironment, testDatabaseEnvironment } from "../../scripts/db-test.mjs";
 import { hashSessionToken } from "../../server/security.js";
 
@@ -12,13 +15,21 @@ process.env.TELEGRAM_ALERTS_ENABLED = "0";
 process.env.TELEGRAM_BOT_TOKEN = "";
 process.env.SMTP_HOST = "";
 
-export async function queue3HttpFixture(prefix) {
+export async function queue3HttpFixture(prefix, { serveClient = false } = {}) {
   const { default: router } = await import("../../server/api.js");
   const { closePool } = await import("../../server/db.js");
   const db = mysql.createPool({ host: testDatabaseEnvironment.DB_HOST, port: Number(testDatabaseEnvironment.DB_PORT), database: testDatabaseEnvironment.DB_NAME, user: testDatabaseEnvironment.MYSQL_TEST_ROOT_USER, password: testDatabaseEnvironment.MYSQL_TEST_ROOT_PASSWORD, timezone: "Z", decimalNumbers: true, connectionLimit: 3 });
   const app = express();
   app.use(express.json());
   app.use("/api", router);
+  if (serveClient) {
+    const projectRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
+    const clientRoot = path.join(projectRoot, "dist", "client");
+    const indexPath = path.join(clientRoot, "index.html");
+    if (!existsSync(indexPath)) throw new Error("Built dist/client/index.html is required for the real-MySQL browser fixture");
+    app.use(express.static(clientRoot, { index: false, maxAge: 0 }));
+    app.get(/^\/(?!api\/).*/, (_request, response) => response.sendFile(indexPath));
+  }
   app.use((error, _request, response, _next) => response.status(error.statusCode ?? 500).json({ error: error.message, code: error.code }));
   const server = await new Promise((resolve) => { const listening = app.listen(0, "127.0.0.1", () => resolve(listening)); });
   const origin = `http://127.0.0.1:${server.address().port}`;

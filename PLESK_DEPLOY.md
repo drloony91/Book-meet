@@ -47,7 +47,11 @@ DB_PASSWORD=сложный_пароль
 DB_CONNECTION_LIMIT=5
 SESSION_DAYS=7
 UPLOAD_DIR=../book-meet-uploads
+MARKETPLACE_PRIVATE_UPLOAD_DIR=../book-meet-marketplace-private-uploads
 MAX_COVER_BYTES=5242880
+BOOK_MEET_GROUP_CHATS_ENABLED=0
+BOOK_MEET_READING_SESSIONS_ENABLED=0
+BOOK_MEET_MARKETPLACE_ENABLED=0
 # Только для явного db:seed/reset; после операции удалить из постоянного production environment.
 TEST1_PASSWORD=отдельный_сложный_пароль
 ADMIN_EMAIL=адрес_администратора
@@ -91,9 +95,10 @@ Document Root указывает на `dist/client`, поэтому Plesk/nginx 
 
 - MySQL-базу;
 - папку `book-meet-uploads`;
+- приватную папку `book-meet-marketplace-private-uploads` (после включения маркетплейса);
 - текущий production-релиз и файл с переменными окружения — в защищённом хранилище.
 
-База и `book-meet-uploads` составляют единый снимок данных. Восстановление только одного из них приведёт к потерянным обложкам или ссылкам на отсутствующие файлы.
+База, общие uploads и приватные изображения маркетплейса составляют единый снимок данных. Восстановление только части снимка приведёт к потерянным изображениям или ссылкам на отсутствующие файлы.
 
 ## Обновления после запуска
 
@@ -107,9 +112,31 @@ corepack pnpm run db:migrate
 
 После успешных миграций перезапустить приложение и проверить `/api/health`. `db:seed` на обычных обновлениях запускать не нужно: он предназначен для создания единственного seed-аккаунта администратора и сброса его пароля. Для recovery временно задать `ADMIN_EMAIL`/`TEST1_PASSWORD`, выполнить явную операцию, проверить вход и снова удалить `TEST1_PASSWORD` из постоянного environment; обычный restart и migration chain от неё не зависят.
 
+### Поэтапный выпуск ТЗ 6
+
+Релизный архив содержит все аддитивные миграции 052–057, но feature flags сначала остаются `0`. После согласованного backup и frozen install/build запускать миграции только до проверенного stop point; если части выпускаются в разные окна, перед каждым окном нужен новый согласованный backup. Параметр `--through` принимает точное имя существующего файла и не применяет следующие миграции:
+
+GitHub-репозиторий в Plesk подключён к `bookmeet.club` в режиме **ручного** развёртывания; активная ветка — `agent/modular-architecture`, путь развёртывания — `/httpdocs/book-meet`. Подключение и `Получить сейчас` не являются разрешением нажимать `Развернуть сейчас`. Перед каждым ручным развёртыванием сверить точный SHA ветки с утверждённым release commit, инвентаризировать файлы сервера, которых нет в Git или которые отличаются от предыдущего release, и включить их в проверяемый backup. Если есть неучтённые серверные правки, остановить развёртывание до решения, как сохранить их; не считать Git-копию единственным источником данных для существующего production-каталога.
+
+```bash
+node scripts/migrate.js --through=052_unified_conversations_stop_point.sql
+corepack pnpm run db:migrate:status
+# Сверить conversation_backfill_reconciliations и число orphan-сообщений до продолжения.
+node scripts/migrate.js --through=053_group_chat_server_foundations.sql
+corepack pnpm run db:migrate:status
+# После проверки 6A и отдельного включения его флага:
+node scripts/migrate.js --through=055_reading_presence_visibility.sql
+corepack pnpm run db:migrate:status
+# После проверки 6B и отдельного включения его флага:
+node scripts/migrate.js --through=057_marketplace_seller_restrictions.sql
+corepack pnpm run db:migrate:status
+```
+
+Каждый stop point требует нулевых unresolved attempts, повторного no-op запуска до той же границы, проверки API/UI соответствующей части и отдельного решения о включении её флага. До включения маркетплейса убедиться, что `MARKETPLACE_PRIVATE_UPLOAD_DIR` указывает на persistent приватную папку вне Document Root и включён в согласованный backup. Нельзя запускать обычный `db:migrate` до завершения всех stop points: он применяет весь оставшийся chain.
+
 ## Rollback обновления
 
-До production-обновления сохранить согласованный snapshot: текущий release-каталог, приватные environment settings, MySQL и `book-meet-uploads`. Backup базы и uploads должен относиться к одной точке времени.
+До production-обновления сохранить согласованный snapshot: текущий release-каталог, приватные environment settings, MySQL, `book-meet-uploads` и `book-meet-marketplace-private-uploads` (если папка существует). Backup базы и обоих хранилищ должен относиться к одной точке времени.
 
 1. Для rollback кода восстановить предыдущий release в `/httpdocs/book-meet`, не запускать seed или migrations повторно, перезапустить Node.js и проверить health/assets/direct routes.
 2. SQL-миграции не имеют универсального автоматического down-пути. Если прежний код совместим с уже расширенной схемой, оставить схему вперёд и откатить только код. Иначе восстанавливать pre-deploy backup базы вместе с соответствующим snapshot uploads.
@@ -124,8 +151,8 @@ corepack pnpm run db:migrate
 
 | Среда | Адрес/назначение | Данные и границы |
 | --- | --- | --- |
-| Production | `https://bookmeet.club` | production MariaDB, отдельный DB user и persistent `../book-meet-uploads`; production seed только с явными credentials |
-| Staging | `https://staging.bookmeet.club` | чистая отдельная MariaDB/database/user, persistent `../book-meet-staging-uploads`, отдельный staging admin и secrets; production data не копируется |
+| Production | `https://bookmeet.club` | production MariaDB, отдельный DB user и persistent `../book-meet-uploads` / `../book-meet-marketplace-private-uploads`; production seed только с явными credentials |
+| Staging | `https://staging.bookmeet.club` | чистая отдельная MariaDB/database/user, persistent `../book-meet-staging-uploads` / `../book-meet-staging-marketplace-private-uploads`, отдельный staging admin и secrets; production data не копируется |
 | Local/demo | `DEMO_MODE=1`, обычно `http://127.0.0.1:3000` | in-memory demo adapter, без внешней БД и без внешних integrations; не является staging или production |
 | Local disposable MySQL | `127.0.0.1:3307` через `compose.mysql-test.yml` | test-only `book_meet_test`, test-only user, disposable container/volume/network; production и staging не подключаются |
 
@@ -133,9 +160,9 @@ corepack pnpm run db:migrate
 
 1. Создать отдельный поддомен `staging.bookmeet.club` (отдельный application root, например `/httpdocs/book-meet-staging`) и не подключать его к production subscription paths. Включить HTTPS/Let's Encrypt и HTTP → HTTPS redirect.
 2. Создать чистые MariaDB database и DB user, например `book_meet_staging` и `book_meet_staging_app`, выдать user права только на staging database. Не использовать root и не переиспользовать production DB name, user или password.
-3. Создать persistent sibling directory `../book-meet-staging-uploads`, доступную Node process на запись. Она должна быть отдельной от production `../book-meet-uploads` и переживать build/redeploy.
+3. Создать persistent sibling directories `../book-meet-staging-uploads` и `../book-meet-staging-marketplace-private-uploads`, доступные Node process на запись. Они должны быть отдельными от production-хранилищ и переживать build/redeploy; приватную папку маркетплейса нельзя публиковать через web root.
 4. Настроить Node.js ровно по lock/runtime contract: Node `22.13.0` (или явно проверенный `>=22.13.0`), Corepack `pnpm@11.9.0`, Application Startup File `server/index.js`, Document Root `dist/client`, `NODE_ENV=production`, `DEMO_MODE=0`.
-5. Задать staging `APP_ORIGIN=https://staging.bookmeet.club`, отдельные `DB_*`, `UPLOAD_DIR=../book-meet-staging-uploads`, новый `AUDIT_HASH_SECRET`, новый `ADMIN_EMAIL` и новый `TEST1_PASSWORD`. Значения секретов не записывать в Git, ticket, logs или этот runbook. Не задавать `LEGACY_ORIGIN`.
+5. Задать staging `APP_ORIGIN=https://staging.bookmeet.club`, отдельные `DB_*`, `UPLOAD_DIR=../book-meet-staging-uploads`, `MARKETPLACE_PRIVATE_UPLOAD_DIR=../book-meet-staging-marketplace-private-uploads`, новый `AUDIT_HASH_SECRET`, новый `ADMIN_EMAIL` и новый `TEST1_PASSWORD`. Флаги частей 6A/6B/6C включать последовательно только для их приёмки. Значения секретов не записывать в Git, ticket, logs или этот runbook. Не задавать `LEGACY_ORIGIN`.
 6. До отдельного явного решения Google, SMTP и Telegram оставить выключены: пустые `GOOGLE_CLIENT_ID`/`GOOGLE_CLIENT_SECRET`, пустые SMTP settings и `TELEGRAM_ALERTS_ENABLED=0`. Не добавлять staging credentials production OAuth, SMTP или Telegram и не отправлять сообщения обычным пользователям.
 
 Безопасный baseline отключённых staging integrations:

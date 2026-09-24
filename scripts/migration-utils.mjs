@@ -26,6 +26,17 @@ export async function migrationFiles(migrationsDir = resolveMigrationsDir()) {
   return (await readdir(migrationsDir)).filter((name) => name.endsWith(".sql")).sort();
 }
 
+export function selectMigrationFiles(files, args = []) {
+  if (args.length === 0) return files;
+  if (args.length !== 1 || !args[0].startsWith("--through=")) {
+    throw new Error("Use exactly --through=<migration filename> for a staged migration run.");
+  }
+  const target = args[0].slice("--through=".length);
+  const index = files.indexOf(target);
+  if (index < 0) throw new Error(`Unknown migration stop point: ${target}`);
+  return files.slice(0, index + 1);
+}
+
 export function splitMigrationStatements(sql) {
   return sql.split(/;\s*(?:\r?\n|$)/).map((part) => part.trim()).filter(Boolean);
 }

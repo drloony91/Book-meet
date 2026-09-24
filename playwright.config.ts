@@ -35,6 +35,8 @@ export default defineConfig({
       DEMO_MODE: "1",
       PORT: String(port),
       APP_ORIGIN: baseURL,
+      BOOK_MEET_GROUP_CHATS_ENABLED: "1",
+      BOOK_MEET_READING_SESSIONS_ENABLED: "1",
       USER_TELEGRAM_NOTIFICATIONS_READY: "1",
       TELEGRAM_WEBHOOK_SECRET: "playwright-only-webhook-secret",
     },

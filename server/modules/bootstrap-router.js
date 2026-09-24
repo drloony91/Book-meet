@@ -1,8 +1,11 @@
 import { Router } from "express";
 import { loadBootstrap } from "../data.js";
+import { groupChatsEnabled } from "./group-chat-feature.js";
+import { marketplaceEnabled } from "./marketplace-feature.js";
+import { readingSessionsEnabled } from "./reading-sessions.js";
 
 const sectionKeys = {
-  session: ["activeUserId", "profileCompleted", "accessGate", "linkedProfile"],
+  session: ["activeUserId", "profileCompleted", "accessGate", "linkedProfile", "features"],
   catalog: ["activeUserId", "adultAccess", "users", "activeOrganizationIds", "books", "events", "occasions"],
   social: ["activeUserId", "blocks", "blockedByUserIds", "friendRequests", "friendships", "communityMemberships", "follows", "notifications", "messages", "likes", "saves", "likedMaterialRefs", "savedMaterialRefs"],
   moderation: ["activeUserId", "reports"],
@@ -37,10 +40,19 @@ export function createBootstrapRouter({ authenticatedUser, loadData = loadBootst
     return user;
   }
 
+  async function bootstrapProjection(userId, sections) {
+    const data = await loadData(userId, sections ? { sections } : undefined);
+    const features = { ...(data.features ?? {}) };
+    if (groupChatsEnabled()) features.groupChats = true;
+    if (marketplaceEnabled()) features.marketplace = true;
+    if (readingSessionsEnabled()) features.readingSessions = true;
+    return Object.keys(features).length ? { ...data, features } : data;
+  }
+
   router.get("/bootstrap", asyncRoute(async (request, response) => {
     const user = await requireActiveUser(request, response);
     if (!user) return;
-    response.json(await loadData(user.id));
+    response.json(await bootstrapProjection(user.id));
   }));
 
   router.get("/bootstrap/:section", asyncRoute(async (request, response) => {
@@ -49,7 +61,7 @@ export function createBootstrapRouter({ authenticatedUser, loadData = loadBootst
     const user = await requireActiveUser(request, response);
     if (!user) return;
     const sections = request.params.section === "session" ? [] : [request.params.section];
-    const data = await loadData(user.id, { sections });
+    const data = await bootstrapProjection(user.id, sections);
     response.json(pick(data, keys));
   }));
 

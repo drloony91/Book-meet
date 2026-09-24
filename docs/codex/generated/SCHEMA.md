@@ -56,3 +56,9 @@ This is a deterministic file-level inventory of migration names and `CREATE TABL
 | `049_message_search.sql` | `ALTER TABLE messages` |
 | `050_message_stickers.sql` | `ALTER TABLE messages`, `ALTER TABLE message_deletion_evidence` |
 | `051_notification_channel_integrations.sql` | `ALTER TABLE users`, `CREATE TABLE telegram_link_tokens` |
+| `052_unified_conversations_stop_point.sql` | `CREATE TABLE conversations`, `CREATE TABLE conversation_members`, `CREATE TABLE conversation_backfill_orphans`, `CREATE TABLE conversation_backfill_reconciliations`, `ALTER TABLE messages` |
+| `053_group_chat_server_foundations.sql` | `ALTER TABLE sessions`, `ALTER TABLE conversation_members`, `ALTER TABLE messages`, `ALTER TABLE message_deletion_evidence`, `CREATE TABLE conversation_polls`, `CREATE TABLE conversation_poll_options`, `CREATE TABLE conversation_poll_votes`, `CREATE TABLE group_message_moderation_evidence` |
+| `054_reading_sessions.sql` | `CREATE TABLE reading_sessions`, `CREATE TABLE reading_session_days` |
+| `055_reading_presence_visibility.sql` | `ALTER TABLE profiles` |
+| `056_marketplace_foundation.sql` | `CREATE TABLE marketplace_listings`, `CREATE TABLE marketplace_listing_images`, `ALTER TABLE conversations`, `CREATE TABLE marketplace_conversation_hidden` |
+| `057_marketplace_seller_restrictions.sql` | `CREATE TABLE marketplace_seller_restrictions` |

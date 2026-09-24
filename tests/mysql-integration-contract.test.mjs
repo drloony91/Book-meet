@@ -3,8 +3,18 @@ import { readFile } from "node:fs/promises";
 import path from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
+import { selectMigrationFiles } from "../scripts/migration-utils.mjs";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+
+test("staged migration stop points require an exact existing filename", () => {
+  const files = ["051_previous.sql", "052_unified_conversations_stop_point.sql", "053_group_chat_server_foundations.sql"];
+  assert.deepEqual(selectMigrationFiles(files), files);
+  assert.deepEqual(selectMigrationFiles(files, ["--through=052_unified_conversations_stop_point.sql"]), files.slice(0, 2));
+  assert.throws(() => selectMigrationFiles(files, ["--through=053_missing.sql"]), /Unknown migration stop point/);
+  assert.throws(() => selectMigrationFiles(files, ["--through=../052_unified_conversations_stop_point.sql"]), /Unknown migration stop point/);
+  assert.throws(() => selectMigrationFiles(files, ["--through=052_unified_conversations_stop_point.sql", "extra"]), /Use exactly/);
+});
 
 async function text(relativePath) {
   return readFile(path.join(root, relativePath), "utf8");

@@ -513,11 +513,12 @@ export async function loadBootstrap(userId, options = {}) {
     [userId],
   ) : [[]];
   const [messageRows] = includeSocial ? await pool.query(
-    `SELECT id, sender_user_id, recipient_user_id, body, attachment_kind, attachment_id, message_kind, sticker_id, is_system, read_at, edited_at,
-            deleted_at, deleted_before_read, created_at
-      FROM messages
-      WHERE sender_user_id = ? OR recipient_user_id = ?
-      ORDER BY created_at, id`, [userId, userId],
+    `SELECT m.id, m.sender_user_id, m.recipient_user_id, m.body, m.attachment_kind, m.attachment_id, m.message_kind, m.sticker_id, m.is_system, m.read_at, m.edited_at,
+            m.deleted_at, m.deleted_before_read, m.created_at
+      FROM messages m LEFT JOIN conversations conversation ON conversation.id = m.conversation_id
+      WHERE (m.sender_user_id = ? OR m.recipient_user_id = ?)
+        AND (m.conversation_id IS NULL OR conversation.conversation_type = 'direct')
+      ORDER BY m.created_at, m.id`, [userId, userId],
   ) : [[]];
   const clearedThroughByPeer = new Map(chatHistoryClearRows.map((row) => [Number(row.peer_user_id), Number(row.cleared_through_message_id)]));
   const selectedMessageRows = messageRows.filter((row) => {
@@ -625,6 +626,8 @@ export async function loadBootstrap(userId, options = {}) {
               CASE WHEN r.target_kind = 'book_note' THEN CONCAT('Заметка: ', (SELECT LEFT(body, 180) FROM book_progress_notes WHERE id = r.target_id)) END,
               CASE WHEN r.target_kind = 'chat' THEN CONCAT('Диалог с ', target.display_name) END,
               CASE WHEN r.target_kind = 'comment' THEN CONCAT('Комментарий: ', (SELECT LEFT(body, 180) FROM material_comments WHERE id = r.target_id)) END,
+              CASE WHEN r.target_kind = 'marketplace_listing' THEN (SELECT book_title FROM marketplace_listings WHERE id = r.target_id) END,
+              CASE WHEN r.target_kind = 'marketplace_conversation' THEN CONCAT('Диалог: ', (SELECT l.book_title FROM conversations c JOIN marketplace_listings l ON l.id = c.marketplace_listing_id WHERE c.id = r.target_id)) END,
               'Удалённый материал'
             ) AS target_title,
             CASE WHEN r.target_kind = 'comment' THEN (SELECT body FROM material_comments WHERE id = r.target_id) END AS comment_text,
@@ -641,10 +644,10 @@ export async function loadBootstrap(userId, options = {}) {
     `SELECT r.id AS report_id, m.id, m.sender_user_id, m.recipient_user_id, m.body,
             m.attachment_kind, m.attachment_id, m.message_kind, m.sticker_id, m.is_system, m.read_at, m.edited_at, m.deleted_at, m.deleted_before_read, m.created_at
        FROM reports r
-       JOIN messages m ON r.target_kind = 'chat' AND (
+       JOIN messages m ON ((r.target_kind = 'chat' AND (
          (m.sender_user_id = r.reporter_user_id AND m.recipient_user_id = r.target_user_id)
          OR (m.sender_user_id = r.target_user_id AND m.recipient_user_id = r.reporter_user_id)
-       ) AND m.deleted_before_read = 0
+       )) OR (r.target_kind = 'marketplace_conversation' AND m.conversation_id = r.target_id)) AND m.deleted_before_read = 0
       ORDER BY r.id, m.created_at, m.id`,
   ) : [[]];
   const conversationByReport = new Map();

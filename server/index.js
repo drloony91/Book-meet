@@ -49,6 +49,9 @@ async function start() {
   });
 
   await mkdir(uploadRoot, { recursive: true });
+  // Older local marketplace files must never be exposed by the generic static
+  // upload mount. New listing images live outside this public directory.
+  app.use("/uploads", (request, response, next) => /^\/marketplace-/i.test(request.path) ? response.status(404).end() : next());
   app.use("/uploads", express.static(uploadRoot, { dotfiles: "deny", fallthrough: false, maxAge: production ? "7d" : 0 }));
   app.use("/api", (request, response, next) => {
     const origin = request.headers.origin;

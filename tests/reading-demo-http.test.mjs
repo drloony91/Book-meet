@@ -143,6 +143,70 @@ test("demo reading API shares production state, history and privacy contracts", 
       assert.equal(added.addedCount, 1); assert.equal(added.addedBooks[0].readingStatus, "want");
       assert.equal((await call(shelfViewer, "POST", `/shelves/${created.shelf.id}/add-to-library`, {})).skippedExistingCount, 1);
     });
+    await t.test("reading-session demo flag and timer/manual lifecycle match the production route contract", async () => {
+      await call(null, "POST", "/__test__/reset");
+      const sessionOwner = await login(3);
+      const previous = process.env.BOOK_MEET_READING_SESSIONS_ENABLED;
+      process.env.BOOK_MEET_READING_SESSIONS_ENABLED = "0";
+      await call(sessionOwner, "GET", "/reading-sessions/active", undefined, 404);
+      process.env.BOOK_MEET_READING_SESSIONS_ENABLED = "1";
+      try {
+        assert.equal((await call(sessionOwner, "GET", "/bootstrap")).features.readingSessions, true);
+        assert.equal((await call(sessionOwner, "GET", "/reading-sessions/active")).session, null);
+        await call(sessionOwner, "POST", "/books", { useExistingId: 21, readingStatus: "want" }, 201);
+        const started = await call(sessionOwner, "POST", "/books/24/reading-sessions/timer/start", {}, 201);
+        const sessionId = started.session.id;
+        assert.equal(started.session.state, "running");
+        await call(sessionOwner, "POST", "/books/24/reading-sessions/timer/start", {}, 200);
+        await call(sessionOwner, "POST", "/books/21/reading-sessions/timer/start", {}, 409);
+        const peer = await login(4);
+        await call(peer, "POST", `/reading-sessions/${sessionId}/stop`, {}, 404);
+        await call(sessionOwner, "POST", `/reading-sessions/${sessionId}/heartbeat`, {});
+        await call(sessionOwner, "POST", `/reading-sessions/${sessionId}/pause`, {});
+        await call(sessionOwner, "POST", `/reading-sessions/${sessionId}/resume`, {});
+        const closed = await call(sessionOwner, "POST", `/reading-sessions/${sessionId}/stop`, {});
+        assert.equal(closed.session.state, "closed");
+        assert.equal((await call(sessionOwner, "GET", "/reading-sessions/active")).session, null);
+        const today = new Intl.DateTimeFormat("en-CA", { timeZone: "UTC" }).format(new Date());
+        await call(sessionOwner, "POST", "/books/24/reading-sessions", { date: today, hours: 0, minutes: 0, seconds: 0 }, 422);
+        await call(sessionOwner, "POST", "/books/24/reading-sessions", { date: today, hours: 0, minutes: 60, seconds: 0 }, 422);
+        const manual = await call(sessionOwner, "POST", "/books/24/reading-sessions", { date: today, hours: 0, minutes: 2, seconds: 3 }, 201);
+        const listed = await call(sessionOwner, "GET", "/books/24/reading-sessions");
+        assert.equal(listed.sessions.some((item) => item.id === manual.session.id), true);
+        const changed = await call(sessionOwner, "PATCH", `/reading-sessions/${manual.session.id}`, { date: today, hours: 0, minutes: 0, seconds: 9 });
+        assert.equal(changed.session.durationSeconds, 9);
+        await call(sessionOwner, "DELETE", `/reading-sessions/${manual.session.id}`);
+        await call(null, "POST", "/__test__/reset");
+      } finally {
+        if (previous === undefined) delete process.env.BOOK_MEET_READING_SESSIONS_ENABLED;
+        else process.env.BOOK_MEET_READING_SESSIONS_ENABLED = previous;
+      }
+    });
+    await t.test("reading presence and book/time statistics stay feature-gated and owner-scoped", async () => {
+      await call(null, "POST", "/__test__/reset");
+      const reader = await login(3);
+      const previous = process.env.BOOK_MEET_READING_SESSIONS_ENABLED;
+      process.env.BOOK_MEET_READING_SESSIONS_ENABLED = "0";
+      await call(reader, "GET", "/reading-presence/preferences", undefined, 404);
+      process.env.BOOK_MEET_READING_SESSIONS_ENABLED = "1";
+      try {
+        assert.equal((await call(reader, "GET", "/reading-presence/preferences")).visibility, "nobody");
+        await call(reader, "PATCH", "/reading-presence/preferences", { visibility: "everyone" });
+        const session = await call(reader, "POST", "/books/24/reading-sessions/timer/start", {}, 201);
+        assert.deepEqual((await call(reader, "GET", "/books/24/reading-presence")).readers.map((item) => item.userId), [3]);
+        await call(reader, "POST", `/reading-sessions/${session.session.id}/stop`, {});
+        assert.deepEqual((await call(reader, "GET", "/books/24/reading-presence")).readers, []);
+        const today = new Date().toISOString().slice(0, 10);
+        await call(reader, "POST", "/books/24/reading-sessions", { date: today, hours: 0, minutes: 2, seconds: 3 }, 201);
+        const statistics = await call(reader, "GET", `/reading-statistics?year=${Number(today.slice(0, 4))}`);
+        assert.equal(statistics.timeCounts[Number(today.slice(5, 7)) - 1] >= 123, true);
+        assert.equal(statistics.timeMonths[Number(today.slice(5, 7)) - 1].books[0].durationSeconds >= 123, true);
+        assert.equal(statistics.bookMonths.length, 12);
+      } finally {
+        if (previous === undefined) delete process.env.BOOK_MEET_READING_SESSIONS_ENABLED;
+        else process.env.BOOK_MEET_READING_SESSIONS_ENABLED = previous;
+      }
+    });
   } finally {
     server.closeAllConnections();
     await new Promise((resolve) => server.close(resolve));

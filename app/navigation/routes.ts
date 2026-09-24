@@ -11,6 +11,7 @@ export type MainView =
   | "users"
   | "publishing"
   | "books"
+  | "marketplace"
   | "communities"
   | "partners"
   | "chat"
@@ -22,7 +23,7 @@ export type MainView =
 
 // Search is a mobile-only nested screen, never a desktop main-navigation view.
 export type RoutableMainView = Exclude<MainView, "profile" | "search">;
-export type OverlayRouteKind = "user" | "book" | "event" | "review" | "excerpt" | "occasion" | "publisher-news" | "chat" | "notification" | "report" | "shelf";
+export type OverlayRouteKind = "user" | "book" | "event" | "review" | "excerpt" | "occasion" | "publisher-news" | "chat" | "group-chat" | "notification" | "report" | "shelf";
 export type MobileWorkflowKind = "review" | "excerpt" | "event" | "occasion" | "book" | "book-status" | "publisher-news" | "reading-goal" | "shelf";
 export type MobileWorkflowRoute = { mode: "create" | "edit"; kind: MobileWorkflowKind; id?: number };
 export type ParsedAppRoute = { view: MainView; overlay?: { kind: OverlayRouteKind; id: number }; workflow?: MobileWorkflowRoute };
@@ -61,6 +62,7 @@ export const mainViewPaths: Record<RoutableMainView, string> = {
   users: "/users",
   publishing: "/publishing",
   books: "/books",
+  marketplace: "/marketplace",
   communities: "/communities",
   partners: "/partners",
   events: "/events",
@@ -78,6 +80,7 @@ export const mainViewTitleKeys: Record<RoutableMainView, MessageKey> = {
   users: "directory.users",
   publishing: "nav.publishing",
   books: "nav.books",
+  marketplace: "nav.marketplace",
   communities: "nav.communities",
   partners: "nav.partners",
   events: "content.bookEvents",
@@ -147,7 +150,7 @@ export function mainViewFromPathname(pathname: string): RoutableMainView {
   if (/^\/blog\/\d+$/.test(normalized)) return "publications";
   if (/^\/meet\/\d+$/.test(normalized)) return "occasions";
   if (/^\/publishing\/\d+$/.test(normalized)) return "publishing";
-  if (/^\/chat\/\d+$/.test(normalized)) return "chat";
+  if (/^\/chat\/(?:groups\/)?\d+$/.test(normalized)) return "chat";
   if (/^\/(?:create|edit)\/(?:review|publication|event|occasion|book|book-status|news|reading-goal|shelf)(?:\/\d+)?$/.test(normalized)) return "home";
   return "home";
 }
@@ -176,6 +179,7 @@ export function appRouteFromPathname(pathname: string): ParsedAppRoute {
     { pattern: /^\/meet\/(\d+)$/, kind: "occasion", view: "occasions" },
     { pattern: /^\/publishing\/(\d+)$/, kind: "publisher-news", view: "publishing" },
     { pattern: /^\/chat\/(\d+)$/, kind: "chat", view: "chat" },
+    { pattern: /^\/chat\/groups\/(\d+)$/, kind: "group-chat", view: "chat" },
     { pattern: /^\/notifications\/(\d+)$/, kind: "notification", view: "notifications" },
     { pattern: /^\/reports\/[a-z_-]+\/(\d+)$/, kind: "report", view: "home" },
   ];

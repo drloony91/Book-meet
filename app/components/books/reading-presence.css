@@ -1,0 +1,66 @@
+.reading-presence-field {
+  position: relative;
+  width: min(100%, 520px);
+  min-height: 185px;
+  overflow: hidden;
+  border-radius: 18px;
+  background: linear-gradient(145deg, #f5faff, #f9f7ff);
+  pointer-events: none;
+}
+
+.reading-presence-motion {
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: 44px;
+  height: 44px;
+  animation: reading-presence-x 7s linear infinite alternate, reading-presence-y 9s linear infinite alternate;
+}
+
+.reading-presence-avatar {
+  display: grid;
+  place-items: center;
+  width: 44px;
+  height: 44px;
+  border: 2px solid #fff;
+  box-shadow: 0 2px 8px #29466324;
+  background-size: cover;
+  background-position: center;
+}
+
+.reading-presence-placeholder {
+  width: 20px;
+  height: 20px;
+  border-radius: 50% 50% 40% 40%;
+  background: currentColor;
+  opacity: .32;
+  clip-path: polygon(31% 0, 69% 0, 84% 22%, 79% 50%, 100% 76%, 100% 100%, 0 100%, 0 76%, 21% 50%, 16% 22%);
+}
+
+@keyframes reading-presence-x {
+  from { left: 0; }
+  to { left: calc(100% - 44px); }
+}
+
+@keyframes reading-presence-y {
+  from { top: 0; }
+  to { top: calc(100% - 44px); }
+}
+
+@media (max-width: 600px) {
+  .reading-presence-field { min-height: 150px; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .reading-presence-field {
+    display: flex;
+    flex-wrap: wrap;
+    align-content: flex-start;
+    gap: 8px;
+    padding: 12px;
+  }
+  .reading-presence-motion {
+    position: static;
+    animation: none !important;
+  }
+}

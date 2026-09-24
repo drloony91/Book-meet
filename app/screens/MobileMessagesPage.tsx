@@ -1,6 +1,8 @@
 import { useMemo, useState } from "react";
 import { Avatar, GeneralMessageSearch } from "../components/chat/ChatComponents";
 import type { Friend } from "../components/chat/types";
+import type { GroupSummary } from "../types/domain";
+import { GroupChatRows } from "../components/chat/GroupChatComponents";
 import { useI18n } from "../i18n";
 
 export type MobileMessageRequest = {
@@ -15,12 +17,18 @@ export function MobileMessagesPage({
   onSelectFriend,
   onOpenRequest,
   onSelectMessageSearchResult,
+  groups,
+  onSelectGroup,
+  onCreateGroup,
 }: {
   friends: Friend[];
   requests: MobileMessageRequest[];
   onSelectFriend: (friend: Friend) => void;
   onOpenRequest: (userId: number) => void;
   onSelectMessageSearchResult: (peerId: number, messageId: number) => void;
+  groups?: GroupSummary[];
+  onSelectGroup?: (id: number) => void;
+  onCreateGroup?: () => void;
 }) {
   const { t } = useI18n();
   const [query, setQuery] = useState("");
@@ -52,6 +60,7 @@ export function MobileMessagesPage({
         </div>
       </div>
       <section className="mobile-messages-list" role="tabpanel">
+        {tab === "incoming" && groups && onSelectGroup && onCreateGroup && <GroupChatRows groups={groups} onOpen={onSelectGroup} onCreate={onCreateGroup} />}
         {tab === "incoming" ? filteredFriends.map((friend) => (
           <button type="button" className="mobile-message-row" key={friend.id} onClick={() => onSelectFriend(friend)}>
             <Avatar friend={friend} size="md" />

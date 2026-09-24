@@ -7,6 +7,7 @@ import {
   ensureMigrationMetadata,
   migrationFiles,
   resolveMigrationsDir,
+  selectMigrationFiles,
   splitMigrationStatements,
   statementPreview,
   unresolvedAttemptError,
@@ -33,7 +34,11 @@ try {
   if (unresolvedAttempts.length) throw new Error(unresolvedAttemptError(unresolvedAttempts[0]));
   const [appliedRows] = await metadataConnection.query("SELECT migration_name FROM schema_migrations");
   const applied = new Set(appliedRows.map((row) => row.migration_name));
-  const files = await migrationFiles(migrationsDir);
+  const migrationArgs = process.argv.slice(2);
+  const files = selectMigrationFiles(await migrationFiles(migrationsDir), migrationArgs);
+  if (migrationArgs.length && [...applied].some((file) => !files.includes(file))) {
+    throw new Error("The database already contains migrations beyond the requested stop point.");
+  }
   for (const file of files) {
     if (applied.has(file)) continue;
     const sql = await readFile(path.join(migrationsDir, file), "utf8");
@@ -98,7 +103,7 @@ try {
       console.log(`Применена миграция ${file}`);
     }
   }
-  console.log("MySQL-схема Book Meet готова");
+  console.log(migrationArgs.length ? `MySQL-схема Book Meet готова до ${files.at(-1)}` : "MySQL-схема Book Meet готова");
 } finally {
   try {
     if (metadataConnection) await metadataConnection.end();

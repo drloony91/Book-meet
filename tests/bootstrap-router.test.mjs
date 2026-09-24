@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import http from "node:http";
 import express from "express";
 import { createBootstrapRouter } from "../server/modules/bootstrap-router.js";
+import { marketplaceEnabled } from "../server/modules/marketplace-feature.js";
 
 function requestJson(server, path) {
   const address = server.address();
@@ -52,4 +53,35 @@ test("bootstrap API запрашивает только выбранную се�
     assert.deepEqual(response.body, { activeUserId: 7, users: [{ id: 7 }], books: [{ id: 88, title: "Книга без владельца" }], events: [], occasions: [] });
     assert.deepEqual(calls, [{ userId: 7, options: { sections: ["catalog"] } }]);
   });
+});
+
+test("marketplace feature gate is closed unless explicitly enabled", () => {
+  assert.equal(marketplaceEnabled({}), false);
+  assert.equal(marketplaceEnabled({ BOOK_MEET_MARKETPLACE_ENABLED: "" }), false);
+  assert.equal(marketplaceEnabled({ BOOK_MEET_MARKETPLACE_ENABLED: "yes" }), false);
+  assert.equal(marketplaceEnabled({ BOOK_MEET_MARKETPLACE_ENABLED: "0" }), false);
+  assert.equal(marketplaceEnabled({ BOOK_MEET_MARKETPLACE_ENABLED: " 1 " }), true);
+  assert.equal(marketplaceEnabled({ BOOK_MEET_MARKETPLACE_ENABLED: " TRUE " }), true);
+});
+
+test("bootstrap projects marketplace feature only while its flag is enabled", async () => {
+  const previous = process.env.BOOK_MEET_MARKETPLACE_ENABLED;
+  const router = createBootstrapRouter({ authenticatedUser: async () => ({ id: 7 }), loadData: async () => ({ activeUserId: 7 }) });
+  try {
+    process.env.BOOK_MEET_MARKETPLACE_ENABLED = "0";
+    await withServer(router, async (server) => {
+      const disabled = await requestJson(server, "/api/bootstrap/session");
+      assert.equal(disabled.status, 200);
+      assert.equal(disabled.body.features?.marketplace, undefined);
+    });
+    process.env.BOOK_MEET_MARKETPLACE_ENABLED = "true";
+    await withServer(router, async (server) => {
+      const enabled = await requestJson(server, "/api/bootstrap/session");
+      assert.equal(enabled.status, 200);
+      assert.equal(enabled.body.features.marketplace, true);
+    });
+  } finally {
+    if (previous === undefined) delete process.env.BOOK_MEET_MARKETPLACE_ENABLED;
+    else process.env.BOOK_MEET_MARKETPLACE_ENABLED = previous;
+  }
 });

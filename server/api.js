@@ -8,11 +8,18 @@ import { fileURLToPath } from "node:url";
 import { getPool, withTransaction } from "./db.js";
 import { ageFromBirthDate, loadBootstrap, loadUsers, resolveBook } from "./data.js";
 import { createBootstrapRouter } from "./modules/bootstrap-router.js";
+import { groupChatsEnabled } from "./modules/group-chat-feature.js";
+import { createReadingSessionsRouter, readingSessionsEnabled } from "./modules/reading-sessions.js";
+import { loadReadingStatistics } from "./modules/reading-statistics.js";
+import { authorizedReadingPresenceRecipients, createReadingPresenceRouter } from "./modules/reading-presence-router.js";
+import { assertMarketplaceAdult, createMarketplaceListingsRouter } from "./modules/marketplace-listings.js";
+import { createMarketplaceConversationsRouter } from "./modules/marketplace-conversations.js";
+import { createMarketplaceModerationRouter } from "./modules/marketplace-moderation.js";
 import { searchBootstrapMaterials } from "./modules/material-search.js";
 import { decodeMessageSearchCursor, encodeMessageSearchCursor, messageSearchLimit, messageSearchSnippet, normalizeMessageSearchQuery, MESSAGE_SEARCH_GROUP_LIMIT, MESSAGE_SEARCH_GROUP_MATCH_LIMIT } from "./modules/message-search.js";
 import { activeBookSticker, archivedBookSticker, bookStickerCatalog, stickerDto } from "./modules/book-stickers.js";
 import { plainTextFromHtml, validateRichHtml } from "./modules/content-security.js";
-import { previewRemoteCover, saveAvatar, saveCover, saveRemoteCover } from "./modules/image-storage.js";
+import { previewRemoteCover, removeMarketplaceImage, saveAvatar, saveCover, saveMarketplaceImage, saveRemoteCover } from "./modules/image-storage.js";
 import { cleanUrl, eventPayload, knownCities, knownCity, occasionPayload } from "./modules/material-input.js";
 import { createLocationRouter } from "./modules/location-router.js";
 import { canCreateFriendRequest, canMessagePair } from "./modules/social-permissions.js";
@@ -91,6 +98,7 @@ async function purgeDeletedProfile(connection, userId) {
   await connection.query("DELETE FROM user_blocks WHERE blocker_user_id = ? OR blocked_user_id = ?", [userId, userId]);
   await connection.query("DELETE FROM event_reminders WHERE user_id = ?", [userId]);
   await connection.query("DELETE FROM wishlist_items WHERE user_id = ?", [userId]);
+  await connection.query("DELETE FROM reading_sessions WHERE user_id = ?", [userId]);
   await connection.query("DELETE FROM user_books WHERE user_id = ? AND is_author = 0", [userId]);
   await connection.query("DELETE FROM reading_cycles WHERE user_id = ?", [userId]);
   await connection.query("DELETE FROM reading_goals WHERE user_id = ?", [userId]);
@@ -107,7 +115,7 @@ async function purgeDeletedProfile(connection, userId) {
   await connection.query("UPDATE report_appeals SET appellant_user_id = NULL WHERE appellant_user_id = ?", [userId]);
   await connection.query(
     `UPDATE profiles SET display_name = 'Удалённый пользователь', city = '', city_id = NULL, gender = 'Не указан', birth_date = NULL,
-            show_birth_date_to_friends = 1, birth_date_visibility = 'friends', followers_visibility = 'friends', friends_visibility = 'friends', wishlist_visibility = 'friends', profile_tab_order = NULL, hidden_profile_tabs = NULL, bio = '', author_influences = '', writing_themes = '', weekend = '', joy = '', talk = '',
+            show_birth_date_to_friends = 1, birth_date_visibility = 'friends', followers_visibility = 'friends', friends_visibility = 'friends', wishlist_visibility = 'friends', reading_presence_visibility = 'nobody', profile_tab_order = NULL, hidden_profile_tabs = NULL, bio = '', author_influences = '', writing_themes = '', weekend = '', joy = '', talk = '',
             stranger_message = '', favorite_genres = '[]', disliked_genres = '[]', publisher_website = NULL, publisher_sales_links = NULL,
             publisher_legal_name = NULL, publisher_bin = NULL, publisher_account = NULL, publisher_bik = NULL, publisher_bank = NULL,
             publisher_legal_address = NULL, publisher_postal_address = NULL, publisher_moderation_note = NULL, community_type = NULL, community_rules = NULL WHERE user_id = ?`,
@@ -171,6 +179,31 @@ function broadcastChatRealtime({ userIds, payload }) {
   if (!userIds.length) return;
   const recipients = new Set(userIds);
   const event = `event: chat\ndata: ${JSON.stringify(payload)}\n\n`;
+  for (const client of realtimeClients) {
+    if (!recipients.has(client.userId)) continue;
+    try { client.response.write(event); } catch { realtimeClients.delete(client); }
+  }
+}
+
+function broadcastReadingRealtime(userId) {
+  const event = `event: reading\ndata: ${JSON.stringify({ type: "reading-sessions-changed" })}\n\n`;
+  for (const client of realtimeClients) {
+    if (client.userId !== userId) continue;
+    try { client.response.write(event); } catch { realtimeClients.delete(client); }
+  }
+}
+
+async function broadcastReadingPresenceRealtime({ readerId, bookId, visibilities }) {
+  const connectedUserIds = [...new Set([...realtimeClients].map((client) => client.userId))];
+  if (!connectedUserIds.length) return;
+  let audience = visibilities;
+  if (!audience?.length) {
+    const [[profile]] = await getPool().query("SELECT reading_presence_visibility FROM profiles WHERE user_id = ?", [readerId]);
+    audience = [profile?.reading_presence_visibility];
+  }
+  const recipients = new Set(await authorizedReadingPresenceRecipients(getPool(), { readerId, bookId, visibilities: audience, connectedUserIds }));
+  if (!recipients.size) return;
+  const event = `event: reading-presence\ndata: ${JSON.stringify({ type: "reading-presence-changed" })}\n\n`;
   for (const client of realtimeClients) {
     if (!recipients.has(client.userId)) continue;
     try { client.response.write(event); } catch { realtimeClients.delete(client); }
@@ -325,7 +358,7 @@ function loginAttemptState(request, email) {
   return loginAttempts.state([`ip:${client}`, `identity:${normalizeEmail(email)}`]);
 }
 
-async function createSession(connection, userId, request = null) {
+async function createSession(connection, userId, request = null, operatorUserId = userId) {
   const { token, tokenHash } = createSessionToken();
   const [[account]] = await connection.query("SELECT role FROM users WHERE id = ? LIMIT 1", [userId]);
   const sessionDays = account?.role === "admin"
@@ -334,8 +367,8 @@ async function createSession(connection, userId, request = null) {
   const { ipHash, userAgentHash } = request ? requestAuditMetadata(request) : { ipHash: null, userAgentHash: null };
   await connection.query("DELETE FROM sessions WHERE expires_at <= UTC_TIMESTAMP()");
   await connection.query(
-    "INSERT INTO sessions (token_hash, user_id, expires_at, last_seen_at, ip_hash, user_agent_hash) VALUES (?, ?, DATE_ADD(UTC_TIMESTAMP(), INTERVAL ? SECOND), UTC_TIMESTAMP(), ?, ?)",
-    [tokenHash, userId, Math.max(60, Math.round(sessionDays * 86400)), ipHash, userAgentHash],
+    "INSERT INTO sessions (token_hash, user_id, operator_user_id, expires_at, last_seen_at, ip_hash, user_agent_hash) VALUES (?, ?, ?, DATE_ADD(UTC_TIMESTAMP(), INTERVAL ? SECOND), UTC_TIMESTAMP(), ?, ?)",
+    [tokenHash, userId, operatorUserId, Math.max(60, Math.round(sessionDays * 86400)), ipHash, userAgentHash],
   );
   return token;
 }
@@ -627,7 +660,7 @@ async function authenticatedUser(request) {
   if (!token) return null;
   const tokenHash = hashSessionToken(token);
   const [[user]] = await getPool().query(
-    `SELECT u.id, u.username, u.role, u.preferred_locale, u.suspension_reason, u.suspended_until, u.suspended_permanently,
+    `SELECT u.id, u.username, u.role, u.preferred_locale, u.suspension_reason, u.suspended_until, u.suspended_permanently, s.operator_user_id,
             u.deleted_at, u.deletion_expires_at, u.purged_at
        FROM sessions s JOIN users u ON u.id = s.user_id
       WHERE s.token_hash = ? AND s.expires_at > UTC_TIMESTAMP() LIMIT 1`, [tokenHash],
@@ -646,7 +679,7 @@ async function authenticatedUser(request) {
     user.suspension_reason = null;
   }
   return {
-    id: userId, username: user.username, tokenHash, role: user.role, locale: user.preferred_locale || "ru",
+    id: userId, username: user.username, tokenHash, role: user.role, operatorUserId: Number(user.operator_user_id ?? userId), locale: user.preferred_locale || "ru",
     deletedProfile: Boolean(user.deleted_at && !user.purged_at),
     deletionExpiresAt: user.deletion_expires_at ? new Date(user.deletion_expires_at).toISOString() : null,
     purged: Boolean(user.purged_at),
@@ -1123,6 +1156,25 @@ async function assertMessagePairAccess(connection, userId, targetId, { lock = tr
   return { participants };
 }
 
+async function canonicalDirectConversation(connection, firstUserId, secondUserId) {
+  const low = Math.min(Number(firstUserId), Number(secondUserId));
+  const high = Math.max(Number(firstUserId), Number(secondUserId));
+  await connection.query(
+    "INSERT IGNORE INTO conversations (conversation_type, direct_user_low_id, direct_user_high_id) VALUES ('direct', ?, ?)",
+    [low, high],
+  );
+  const [[conversation]] = await connection.query(
+    "SELECT id FROM conversations WHERE conversation_type = 'direct' AND direct_user_low_id = ? AND direct_user_high_id = ? FOR UPDATE",
+    [low, high],
+  );
+  const [liveUsers] = await connection.query(
+    "SELECT id FROM users WHERE id IN (?, ?) AND deleted_at IS NULL AND purged_at IS NULL",
+    [low, high],
+  );
+  for (const user of liveUsers) await connection.query("INSERT IGNORE INTO conversation_members (conversation_id, user_id) VALUES (?, ?)", [conversation.id, user.id]);
+  return Number(conversation.id);
+}
+
 async function assertMessageReactionAccess(connection, userId, messageId) {
   if (!Number.isInteger(messageId) || messageId <= 0) {
     throw Object.assign(new Error("Сообщение не найдено"), { statusCode: 404, code: "MESSAGE_NOT_FOUND" });
@@ -1370,6 +1422,8 @@ async function reportTarget(connection, kind, id) {
     chat: ["SELECT u.id, p.display_name AS title, u.id AS owner_id FROM users u JOIN profiles p ON p.user_id = u.id WHERE u.id = ?", id],
     comment: ["SELECT mc.id, LEFT(mc.body, 180) AS title, mc.user_id AS owner_id FROM material_comments mc WHERE mc.id = ?", id],
     book_note: ["SELECT n.id, CONCAT('Заметка: ', LEFT(n.body, 180)) AS title, n.user_id AS owner_id FROM book_progress_notes n WHERE n.id = ?", id],
+    marketplace_listing: ["SELECT id, book_title AS title, seller_user_id AS owner_id FROM marketplace_listings WHERE id = ?", id],
+    marketplace_conversation: ["SELECT c.id, CONCAT('Диалог объявления #', c.marketplace_listing_id) AS title, l.seller_user_id AS owner_id, c.marketplace_buyer_user_id AS buyer_id FROM conversations c JOIN marketplace_listings l ON l.id = c.marketplace_listing_id WHERE c.id = ? AND c.conversation_type = 'marketplace'", id],
   };
   const spec = specs[kind];
   if (!spec || !Number(id)) return null;
@@ -2410,8 +2464,13 @@ router.post("/linked-profiles/switch", asyncRoute(async (request, response) => {
     if (!target || target.deleted_at || target.purged_at || target.suspended_permanently || target.suspended_until && new Date(target.suspended_until).getTime() > Date.now()) {
       throw Object.assign(new Error("Связанный профиль недоступен"), { statusCode: 409 });
     }
+    const [[link]] = await connection.query(
+      "SELECT personal_user_id FROM linked_profiles WHERE (personal_user_id = ? AND community_user_id = ?) OR (personal_user_id = ? AND community_user_id = ?) FOR UPDATE",
+      [request.bookMeetUser.id, targetId, targetId, request.bookMeetUser.id],
+    );
+    if (!link) throw Object.assign(new Error("Связанный профиль не найден"), { statusCode: 404 });
     await connection.query("DELETE FROM sessions WHERE token_hash = ?", [request.bookMeetUser.tokenHash]);
-    return { token: await createSession(connection, targetId, request), targetId };
+    return { token: await createSession(connection, targetId, request, Number(link.personal_user_id)), targetId };
   });
   response.setHeader("Set-Cookie", sessionCookie(token.token, request));
   response.json(await loadBootstrap(token.targetId));
@@ -2450,12 +2509,26 @@ router.use((request, response, next) => {
   if (!["GET", "HEAD", "OPTIONS"].includes(request.method)) {
     response.once("finish", () => {
       if (response.statusCode >= 400) return;
-      if (response.locals.chatRealtime) broadcastChatRealtime(response.locals.chatRealtime);
-      else broadcastRealtime();
+      if (response.locals.suppressRealtime) return;
+      if (response.locals.readingRealtimeUserId) broadcastReadingRealtime(response.locals.readingRealtimeUserId);
+      if (response.locals.readingPresenceSignal) void broadcastReadingPresenceRealtime(response.locals.readingPresenceSignal).catch((error) => console.warn("Unable to signal reading presence", error));
+      if (!response.locals.readingRealtimeUserId && !response.locals.readingPresenceSignal) {
+        if (response.locals.chatRealtime) broadcastChatRealtime(response.locals.chatRealtime);
+        else broadcastRealtime();
+      }
     });
   }
   next();
 });
+
+router.use(createReadingSessionsRouter({ getPool, withTransaction, queueOwnerRealtime: (response, userId, { presenceBookId } = {}) => {
+  response.locals.readingRealtimeUserId = Number(userId);
+  if (presenceBookId) response.locals.readingPresenceSignal = { readerId: Number(userId), bookId: Number(presenceBookId) };
+} }));
+router.use(createReadingPresenceRouter({ getPool, withTransaction, queuePresenceRealtime: (response, signal) => {
+  response.locals.readingRealtimeUserId = signal.readerId;
+  response.locals.readingPresenceSignal = signal;
+} }));
 
 router.delete("/users/me/profile", asyncRoute(async (request, response) => {
   const userId = request.bookMeetUser.id;
@@ -2504,6 +2577,12 @@ router.use(asyncRoute(async (request, response, next) => {
   await withTransaction((connection) => requireApprovedPublisher(connection, request.bookMeetUser.id));
   next();
 }));
+
+router.use(createMarketplaceListingsRouter({
+  getPool, withTransaction, asyncRoute, saveImage: saveMarketplaceImage, removeImage: removeMarketplaceImage, ageFromBirthDate,
+}));
+router.use(createMarketplaceConversationsRouter({ getPool, withTransaction, asyncRoute, ageFromBirthDate, queueChatRealtime }));
+router.use(createMarketplaceModerationRouter({ getPool, withTransaction, asyncRoute, isAdmin, logModerationAction, queueChatRealtime }));
 
 router.post("/users/:userId/hide", asyncRoute(async (request, response) => {
   const hiderId = request.bookMeetUser.id;
@@ -3414,7 +3493,9 @@ router.get("/reading-statistics", asyncRoute(async (request, response) => {
     ownerGoalCompletions(connection, userId, year),
   ]);
   const items = goals[0].map(goalDto).map((goal) => ({ ...goal, projection: goal.goalKind === "month" ? { target: goal.targetCount, actual: completions.filter((item) => item.completedMonth === goal.targetMonth).length, pace: monthPace(goal, timezone) } : annualPlan(goal, completions, timezone) }));
-  response.json({ year, month, goals: items, counts: Array.from({ length: 12 }, (_, index) => completions.filter((item) => item.completedMonth === index + 1).length) });
+  const legacyCounts = Array.from({ length: 12 }, (_, index) => completions.filter((item) => item.completedMonth === index + 1).length);
+  const sessionStatistics = readingSessionsEnabled() ? await loadReadingStatistics(connection, userId, year) : null;
+  response.json({ year, month, goals: items, counts: legacyCounts, ...(sessionStatistics ?? {}) });
 }));
 
 function adminBookImportInput(value = {}) {
@@ -4494,8 +4575,22 @@ router.post("/reports", asyncRoute(async (request, response) => {
   const result = await withTransaction(async (connection) => {
     if (targetKind === "book_note") await assertBookNoteReadable(connection, reporterId, targetId);
     if (targetKind === "shelf") await readableMaterialInfo(connection, reporterId, "shelf", targetId);
+    if (targetKind === "marketplace_listing" || targetKind === "marketplace_conversation") {
+      await assertMarketplaceAdult(connection, reporterId, ageFromBirthDate);
+      if (targetKind === "marketplace_listing") {
+        const [[visible]] = await connection.query(`SELECT l.id FROM marketplace_listings l
+          WHERE l.id = ? AND l.seller_user_id IS NOT NULL AND
+            (l.status = 'active' OR EXISTS (SELECT 1 FROM conversations c JOIN conversation_members cm ON cm.conversation_id = c.id
+              WHERE c.marketplace_listing_id = l.id AND cm.user_id = ? AND cm.left_at IS NULL))`, [targetId, reporterId]);
+        if (!visible) throw Object.assign(new Error("Объявление не найдено"), { statusCode: 404 });
+      } else {
+        const [[member]] = await connection.query("SELECT cm.user_id FROM conversations c JOIN conversation_members cm ON cm.conversation_id = c.id AND cm.user_id = ? AND cm.left_at IS NULL WHERE c.id = ? AND c.conversation_type = 'marketplace'", [reporterId, targetId]);
+        if (!member) throw Object.assign(new Error("Диалог не найден"), { statusCode: 404 });
+      }
+    }
     const target = await reportTarget(connection, targetKind, targetId);
     if (!target) throw Object.assign(new Error("Материал или пользователь не найден"), { statusCode: 404 });
+    if (targetKind === "marketplace_conversation" && Number(target.owner_id) === reporterId) target.owner_id = target.buyer_id;
     if (Number(target.owner_id) === reporterId) throw Object.assign(new Error("Нельзя пожаловаться на собственный материал"), { statusCode: 400 });
     const provisionalReference = `pending-${randomBytes(12).toString("hex")}`;
     const [created] = await connection.query(
@@ -5202,6 +5297,720 @@ router.delete("/social/follows/:targetId", asyncRoute(async (request, response) 
   response.json({ ok: true });
 }));
 
+function requireGroupChats() {
+  if (!groupChatsEnabled()) throw Object.assign(new Error("Не найдено"), { statusCode: 404 });
+}
+
+function groupName(value) {
+  const name = String(value ?? "").trim();
+  if (!name || [...name].length > 160) throw Object.assign(new Error("Укажите название группы до 160 символов"), { statusCode: 422 });
+  return name;
+}
+
+function groupParticipantIds(value, ownerId) {
+  if (!Array.isArray(value)) throw Object.assign(new Error("Укажите участников группы"), { statusCode: 422 });
+  const ids = [...new Set(value.map(Number).filter((id) => Number.isSafeInteger(id) && id > 0 && id !== Number(ownerId)))];
+  if (ids.length > 100) throw Object.assign(new Error("Слишком много участников"), { statusCode: 422 });
+  return ids;
+}
+
+async function groupActor(connection, selectedUserId, operatorUserId) {
+  const [[selected]] = await connection.query(
+    `SELECT u.id, u.deleted_at, u.purged_at, p.profile_type, p.publisher_status
+       FROM users u JOIN profiles p ON p.user_id = u.id WHERE u.id = ? FOR UPDATE`, [selectedUserId],
+  );
+  if (!selected || selected.deleted_at || selected.purged_at) throw Object.assign(new Error("Профиль недоступен"), { statusCode: 404 });
+  if (["Читатель", "Писатель", "Блогер"].includes(selected.profile_type)) return { type: "user", id: Number(selected.id), createdBy: Number(selectedUserId) };
+  if (selected.profile_type === "Сообщество") {
+    const [[operator]] = await connection.query(
+      `SELECT p.profile_type FROM users u JOIN profiles p ON p.user_id = u.id
+        WHERE u.id = ? AND u.deleted_at IS NULL AND u.purged_at IS NULL`, [operatorUserId],
+    );
+    const [[linked]] = await connection.query(
+      "SELECT 1 FROM linked_profiles WHERE personal_user_id = ? AND community_user_id = ? FOR UPDATE",
+      [operatorUserId, selectedUserId],
+    );
+    if (!linked || !["Читатель", "Писатель", "Блогер"].includes(operator?.profile_type) || Number(operatorUserId) === Number(selectedUserId)) throw Object.assign(new Error("Для сообщества требуется сессия, переключённая уполномоченным личным профилем"), { statusCode: 403 });
+    return { type: "community", id: Number(selected.id), createdBy: Number(operatorUserId) };
+  }
+  if (selected.profile_type === "Издатель" && selected.publisher_status === "approved" && Number(operatorUserId) === Number(selectedUserId)) return { type: "publisher", id: Number(selected.id), createdBy: Number(selectedUserId) };
+  throw Object.assign(new Error("Создание группы для этого профиля недоступно"), { statusCode: 403 });
+}
+
+async function assertGroupMember(connection, userId, conversationId, { lock = false, owner = false, moderator = false } = {}) {
+  const [[row]] = await connection.query(
+    `SELECT c.id, c.name, c.avatar_path, c.state, c.add_members_policy, c.remove_members_policy, c.history_cleared_message_id,
+            cm.role, cm.left_at, cm.last_read_message_id
+       FROM conversations c JOIN conversation_members cm ON cm.conversation_id = c.id
+      WHERE c.id = ? AND c.conversation_type = 'group' AND cm.user_id = ?${lock ? " FOR UPDATE" : ""}`,
+    [conversationId, userId],
+  );
+  if (!row || row.state !== "active" || row.left_at) throw Object.assign(new Error("Группа не найдена"), { statusCode: 404 });
+  const [[blocked]] = await connection.query(
+    `SELECT 1
+       FROM user_blocks block JOIN conversation_members other ON other.user_id IN (block.blocker_user_id, block.blocked_user_id)
+      WHERE other.conversation_id = ? AND other.left_at IS NULL AND other.user_id <> ?
+        AND ((block.blocker_user_id = ? AND block.blocked_user_id = other.user_id)
+          OR (block.blocked_user_id = ? AND block.blocker_user_id = other.user_id))
+      LIMIT 1`,
+    [conversationId, userId, userId, userId],
+  );
+  if (blocked) throw Object.assign(new Error("Группа не найдена"), { statusCode: 404 });
+  const members = await groupAccessProfiles(connection, conversationId);
+  const viewer = members.find((member) => Number(member.user_id) === Number(userId));
+  if (!viewer || members.some((member) => !groupAgePairAllowed(viewer, member))) throw Object.assign(new Error("Группа не найдена"), { statusCode: 404 });
+  if (owner && row.role !== "owner") throw Object.assign(new Error("Группа не найдена"), { statusCode: 404 });
+  if (moderator && !["owner", "moderator"].includes(row.role)) throw Object.assign(new Error("Группа не найдена"), { statusCode: 404 });
+  return row;
+}
+
+function groupAgePairAllowed(first, second) {
+  if (first.role === "admin" || second.role === "admin" || first.profile_type === "Сообщество" || second.profile_type === "Сообщество") return true;
+  const firstAge = first.profile_type === "Издатель" ? 18 : ageFromBirthDate(first.birth_date);
+  const secondAge = second.profile_type === "Издатель" ? 18 : ageFromBirthDate(second.birth_date);
+  return firstAge !== null && secondAge !== null && (firstAge < 18) === (secondAge < 18);
+}
+
+async function groupAccessProfiles(connection, conversationId) {
+  const [rows] = await connection.query(
+    `SELECT member.user_id, u.role, p.profile_type, p.birth_date
+       FROM conversation_members member JOIN users u ON u.id = member.user_id JOIN profiles p ON p.user_id = u.id
+      WHERE member.conversation_id = ? AND member.left_at IS NULL`, [conversationId],
+  );
+  return rows;
+}
+
+async function assertGroupCandidate(connection, actorId, candidateId, { lock = true } = {}) {
+  try {
+    await assertMessagePairAccess(connection, actorId, candidateId, { lock });
+    await assertAgeCompatible(connection, actorId, candidateId, { lock });
+  } catch (error) {
+    throw Object.assign(new Error("Участник недоступен"), { statusCode: 404 });
+  }
+}
+
+async function assertGroupCompatibility(connection, firstUserId, secondUserId) {
+  try {
+    await assertUsersCanInteract(connection, firstUserId, secondUserId);
+    await assertAgeCompatible(connection, firstUserId, secondUserId);
+  } catch {
+    throw Object.assign(new Error("Участник недоступен"), { statusCode: 404 });
+  }
+}
+
+async function groupMemberIds(connection, conversationId) {
+  const [rows] = await connection.query("SELECT user_id FROM conversation_members WHERE conversation_id = ? AND left_at IS NULL", [conversationId]);
+  return rows.map((row) => Number(row.user_id));
+}
+
+async function groupSignalMemberIds(connection, conversationId) {
+  const [rows] = await connection.query(
+    `SELECT member.user_id FROM conversation_members member
+      WHERE member.conversation_id = ? AND member.left_at IS NULL
+        AND NOT EXISTS (
+          SELECT 1 FROM conversation_members peer JOIN user_blocks b
+            ON (b.blocker_user_id = member.user_id AND b.blocked_user_id = peer.user_id)
+            OR (b.blocked_user_id = member.user_id AND b.blocker_user_id = peer.user_id)
+           WHERE peer.conversation_id = member.conversation_id AND peer.left_at IS NULL AND peer.user_id <> member.user_id
+        )`, [conversationId],
+  );
+  const members = await groupAccessProfiles(connection, conversationId);
+  return rows.map((row) => Number(row.user_id)).filter((id) => {
+    const viewer = members.find((member) => Number(member.user_id) === id);
+    return viewer && members.every((member) => groupAgePairAllowed(viewer, member));
+  });
+}
+
+async function assertGroupJoinCandidate(connection, inviterId, candidateId, conversationId) {
+  await assertGroupCandidate(connection, inviterId, candidateId);
+  const members = await groupMemberIds(connection, conversationId);
+  for (const memberId of members) {
+    if (memberId === candidateId) continue;
+    try {
+      await assertUsersCanInteract(connection, memberId, candidateId);
+      await assertAgeCompatible(connection, memberId, candidateId);
+    } catch {
+      throw Object.assign(new Error("Участник недоступен"), { statusCode: 404 });
+    }
+  }
+}
+
+async function groupSystemRow(connection, conversationId, body) {
+  const [created] = await connection.query("INSERT INTO messages (conversation_id, sender_user_id, recipient_user_id, body, is_system) VALUES (?, NULL, NULL, ?, 1)", [conversationId, body]);
+  return Number(created.insertId);
+}
+
+async function validatedGroupChatAttachment(connection, input, senderUserId, conversationId) {
+  if (!input) return null;
+  const members = await groupMemberIds(connection, conversationId);
+  for (const memberId of members) {
+    if (memberId !== Number(senderUserId)) await validatedChatAttachment(connection, input, senderUserId, memberId);
+  }
+  return { kind: String(input.kind ?? ""), id: Number(input.id) };
+}
+
+async function syncGroupMentions(connection, { conversationId, messageId, authorUserId, mentionUserIds, text }) {
+  const refs = mentionRefs(mentionUserIds).filter((entry) => entry.userId !== Number(authorUserId) && String(text).includes(entry.token));
+  if (refs.length) {
+    const ids = [...new Set(refs.map((entry) => entry.userId))];
+    const [active] = await connection.query(
+      `SELECT user_id FROM conversation_members WHERE conversation_id = ? AND left_at IS NULL AND user_id IN (${ids.map(() => "?").join(",")})`,
+      [conversationId, ...ids],
+    );
+    if (active.length !== ids.length) throw Object.assign(new Error("Упомянутый пользователь не состоит в группе"), { statusCode: 422 });
+  }
+  await syncMentions(connection, { entityType: "message", entityId: messageId, authorUserId, mentionUserIds, text });
+}
+
+function groupDeletedText(row) {
+  if (!row.deleted_at) return row.body;
+  if (row.group_deleted_by_role === "owner") return "Сообщение удалено администратором";
+  if (row.group_deleted_by_role === "moderator") return "Сообщение удалено модератором";
+  return DELETED_MESSAGE_TOMBSTONE;
+}
+
+function pollText(value, maximum, field) {
+  const text = String(value ?? "").trim();
+  if (!text || Array.from(text).length > maximum) throw Object.assign(new Error(`Некорректный ${field}`), { statusCode: 422 });
+  return text;
+}
+
+function pollBoolean(value, field) {
+  if (typeof value !== "boolean") throw Object.assign(new Error(`Поле ${field} должно быть boolean`), { statusCode: 422 });
+  return value;
+}
+
+function pollClosesAt(value) {
+  if (value === undefined || value === null || value === "") return null;
+  if (typeof value !== "string") throw Object.assign(new Error("Некорректное время закрытия опроса"), { statusCode: 422 });
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime()) || date.getTime() <= Date.now()) throw Object.assign(new Error("Время закрытия опроса должно быть в будущем"), { statusCode: 422 });
+  return date.toISOString().slice(0, 19).replace("T", " ");
+}
+
+function pollOptions(value) {
+  if (!Array.isArray(value) || value.length < 2 || value.length > 10) throw Object.assign(new Error("Опрос должен содержать от 2 до 10 вариантов"), { statusCode: 422 });
+  const options = value.map((entry) => pollText(entry, 300, "вариант опроса"));
+  if (new Set(options.map((entry) => entry.normalize("NFKC").toLocaleLowerCase("ru-RU"))).size !== options.length) throw Object.assign(new Error("Варианты опроса должны быть уникальны"), { statusCode: 422 });
+  return options;
+}
+
+async function pollDtosForMessages(connection, messageIds, viewerId) {
+  const ids = [...new Set(messageIds.map(Number).filter(Number.isInteger))];
+  const result = new Map();
+  if (!ids.length) return result;
+  const [rows] = await connection.query(
+    `SELECT poll.id AS poll_id, poll.message_id, poll.question, poll.allows_multiple, poll.may_change_vote, poll.closes_at, poll.closed_at,
+            (poll.closed_at IS NOT NULL OR (poll.closes_at IS NOT NULL AND poll.closes_at <= UTC_TIMESTAMP())) AS is_closed,
+            option_row.id AS option_id, option_row.option_order, option_row.body AS option_body, COUNT(vote.user_id) AS vote_count,
+            MAX(vote.user_id = ?) AS viewer_selected
+       FROM conversation_polls poll JOIN conversation_poll_options option_row ON option_row.poll_id = poll.id
+       LEFT JOIN conversation_poll_votes vote ON vote.poll_id = option_row.poll_id AND vote.option_id = option_row.id
+      WHERE poll.message_id IN (${ids.map(() => "?").join(",")})
+      GROUP BY poll.id, poll.message_id, poll.question, poll.allows_multiple, poll.may_change_vote, poll.closes_at, poll.closed_at, option_row.id, option_row.option_order, option_row.body
+      ORDER BY poll.message_id, option_row.option_order, option_row.id`,
+    [viewerId, ...ids],
+  );
+  for (const row of rows) {
+    const messageId = Number(row.message_id); let poll = result.get(messageId);
+    if (!poll) {
+      poll = { id: Number(row.poll_id), question: row.question, allowsMultiple: Boolean(row.allows_multiple), mayChangeVote: Boolean(row.may_change_vote), closesAt: row.closes_at ? new Date(row.closes_at).toISOString() : undefined, closedAt: row.closed_at ? new Date(row.closed_at).toISOString() : undefined, closed: Boolean(row.is_closed), options: [] };
+      result.set(messageId, poll);
+    }
+    poll.options.push({ id: Number(row.option_id), text: row.option_body, order: Number(row.option_order), voteCount: Number(row.vote_count), viewerSelected: Boolean(row.viewer_selected) });
+  }
+  return result;
+}
+
+async function pollDto(connection, pollId, viewerId) {
+  const [[poll]] = await connection.query("SELECT message_id FROM conversation_polls WHERE id = ?", [pollId]);
+  if (!poll) throw Object.assign(new Error("Опрос не найден"), { statusCode: 404 });
+  return (await pollDtosForMessages(connection, [Number(poll.message_id)], viewerId)).get(Number(poll.message_id));
+}
+
+async function groupMessageDtos(connection, rows, viewerId, readThrough, locale) {
+  const ids = rows.map((row) => Number(row.id));
+  const mentionsByMessage = await mentionDtos(connection, "message", ids, viewerId);
+  const pollsByMessage = await pollDtosForMessages(connection, ids, viewerId);
+  const reactionsByMessage = new Map(ids.map((id) => [id, []]));
+  if (ids.length) {
+    const [reactions] = await connection.query(
+      `SELECT reaction.message_id, reaction.user_id
+         FROM message_reactions reaction JOIN conversation_members member ON member.user_id = reaction.user_id
+        WHERE reaction.message_id IN (${ids.map(() => "?").join(",")}) AND reaction.reaction_type = 'like'
+          AND member.conversation_id = ? AND member.left_at IS NULL
+        ORDER BY reaction.created_at, reaction.user_id`,
+      [...ids, rows[0]?.conversation_id],
+    );
+    for (const reaction of reactions) reactionsByMessage.get(Number(reaction.message_id))?.push(Number(reaction.user_id));
+  }
+  return rows.map((row) => {
+    const id = Number(row.id); const deleted = Boolean(row.deleted_at); const mentions = deleted ? [] : mentionsByMessage.get(id) ?? [];
+    const likedByUserIds = deleted ? [] : reactionsByMessage.get(id) ?? [];
+    const senderId = row.sender_user_id ? Number(row.sender_user_id) : undefined;
+    const author = senderId && !row.author_deleted_at && !row.author_purged_at
+      ? { id: senderId, name: row.author_name, username: row.author_username, avatarUrl: row.author_avatar_path ?? undefined }
+      : senderId ? { name: "Удалённый пользователь" } : undefined;
+    return {
+      id, senderId, author, mine: senderId === Number(viewerId), text: groupDeletedText(row), system: Boolean(row.is_system), deleted,
+      ...(row.edited_at && !deleted ? { editedAt: new Date(row.edited_at).toISOString(), edited: true } : {}),
+      ...(row.attachment_kind && row.attachment_id && !deleted ? { attachment: { kind: row.attachment_kind, id: Number(row.attachment_id) } } : {}),
+      ...(row.message_kind === "sticker" && !deleted ? { kind: "sticker", sticker: stickerDto(archivedBookSticker(row.sticker_id), locale) } : {}),
+      ...(pollsByMessage.has(id) && !deleted ? { poll: pollsByMessage.get(id) } : {}),
+      mentions, read: id <= readThrough || senderId === Number(viewerId), createdAt: new Date(row.created_at).toISOString(),
+      likeCount: likedByUserIds.length, likedByViewer: likedByUserIds.includes(Number(viewerId)), likedByUserIds,
+    };
+  });
+}
+
+async function groupMessageForMutation(connection, userId, conversationId, messageId, { lock = true } = {}) {
+  const group = await assertGroupMember(connection, userId, conversationId, { lock });
+  if (!Number.isInteger(messageId) || messageId <= 0) throw Object.assign(new Error("Сообщение не найдено"), { statusCode: 404 });
+  const [[message]] = await connection.query(
+    `SELECT * FROM messages WHERE id = ? AND conversation_id = ? AND id > COALESCE(?, 0)${lock ? " FOR UPDATE" : ""}`,
+    [messageId, conversationId, group.history_cleared_message_id],
+  );
+  if (!message) throw Object.assign(new Error("Сообщение не найдено"), { statusCode: 404 });
+  return { group, message };
+}
+
+router.get("/group-conversations", asyncRoute(async (request, response) => {
+  requireGroupChats();
+  const userId = Number(request.bookMeetUser.id);
+  const [rows] = await getPool().query(
+    `SELECT c.id, c.name, c.avatar_path, c.state, c.updated_at, cm.role,
+            (SELECT COUNT(*) FROM conversation_members active_member WHERE active_member.conversation_id = c.id AND active_member.left_at IS NULL) AS member_count,
+            (SELECT m.id FROM messages m WHERE m.conversation_id = c.id AND m.id > COALESCE(c.history_cleared_message_id, 0) AND m.deleted_before_read = 0 ORDER BY m.id DESC LIMIT 1) AS last_message_id,
+            (SELECT m.body FROM messages m WHERE m.conversation_id = c.id AND m.id > COALESCE(c.history_cleared_message_id, 0) AND m.deleted_before_read = 0 ORDER BY m.id DESC LIMIT 1) AS last_message_body,
+            (SELECT m.created_at FROM messages m WHERE m.conversation_id = c.id AND m.id > COALESCE(c.history_cleared_message_id, 0) AND m.deleted_before_read = 0 ORDER BY m.id DESC LIMIT 1) AS last_message_at,
+            (SELECT m.is_system FROM messages m WHERE m.conversation_id = c.id AND m.id > COALESCE(c.history_cleared_message_id, 0) AND m.deleted_before_read = 0 ORDER BY m.id DESC LIMIT 1) AS last_message_system,
+            (SELECT m.deleted_at FROM messages m WHERE m.conversation_id = c.id AND m.id > COALESCE(c.history_cleared_message_id, 0) AND m.deleted_before_read = 0 ORDER BY m.id DESC LIMIT 1) AS last_message_deleted_at,
+            (SELECT m.group_deleted_by_role FROM messages m WHERE m.conversation_id = c.id AND m.id > COALESCE(c.history_cleared_message_id, 0) AND m.deleted_before_read = 0 ORDER BY m.id DESC LIMIT 1) AS last_message_deleted_by_role,
+            (SELECT m.message_kind FROM messages m WHERE m.conversation_id = c.id AND m.id > COALESCE(c.history_cleared_message_id, 0) AND m.deleted_before_read = 0 ORDER BY m.id DESC LIMIT 1) AS last_message_kind,
+            (SELECT COUNT(*) FROM messages m WHERE m.conversation_id = c.id
+              AND m.id > GREATEST(COALESCE(cm.last_read_message_id, 0), COALESCE(c.history_cleared_message_id, 0))
+              AND m.sender_user_id <> ? AND m.is_system = 0 AND m.deleted_at IS NULL AND m.deleted_before_read = 0) AS unread_count
+      FROM conversations c JOIN conversation_members cm ON cm.conversation_id = c.id
+      WHERE c.conversation_type = 'group' AND c.state = 'active' AND cm.user_id = ? AND cm.left_at IS NULL
+        AND NOT EXISTS (
+          SELECT 1 FROM conversation_members peer JOIN user_blocks b
+            ON (b.blocker_user_id = ? AND b.blocked_user_id = peer.user_id)
+            OR (b.blocked_user_id = ? AND b.blocker_user_id = peer.user_id)
+           WHERE peer.conversation_id = c.id AND peer.left_at IS NULL AND peer.user_id <> ?
+        )
+      ORDER BY c.updated_at DESC, c.id DESC`, [userId, userId, userId, userId, userId],
+  );
+  const membersByGroup = new Map();
+  if (rows.length) {
+    const [accessRows] = await getPool().query(
+      `SELECT member.conversation_id, member.user_id, u.role, p.profile_type, p.birth_date
+         FROM conversation_members member JOIN users u ON u.id = member.user_id JOIN profiles p ON p.user_id = u.id
+        WHERE member.left_at IS NULL AND member.conversation_id IN (${rows.map(() => "?").join(",")})`, rows.map((row) => row.id),
+    );
+    for (const member of accessRows) {
+      const members = membersByGroup.get(Number(member.conversation_id)) ?? [];
+      members.push(member); membersByGroup.set(Number(member.conversation_id), members);
+    }
+  }
+  response.json({ conversations: rows.filter((row) => {
+    const members = membersByGroup.get(Number(row.id)) ?? [];
+    const viewer = members.find((member) => Number(member.user_id) === userId);
+    return viewer && members.every((member) => groupAgePairAllowed(viewer, member));
+  }).map((row) => {
+    const lastMessage = !row.last_message_id ? undefined : row.last_message_deleted_at
+      ? row.last_message_deleted_by_role === "owner" ? "Сообщение удалено администратором" : row.last_message_deleted_by_role === "moderator" ? "Сообщение удалено модератором" : DELETED_MESSAGE_TOMBSTONE
+      : row.last_message_kind === "sticker" ? "Стикер" : row.last_message_system ? row.last_message_body : row.last_message_body;
+    return { id: Number(row.id), name: row.name, avatarUrl: row.avatar_path ?? undefined, role: row.role, memberCount: Number(row.member_count), lastMessage, lastMessageAt: row.last_message_at ? new Date(row.last_message_at).toISOString() : undefined, unreadCount: Number(row.unread_count) };
+  }) });
+}));
+
+router.get("/group-conversations/candidates", asyncRoute(async (request, response) => {
+  requireGroupChats();
+  const userId = Number(request.bookMeetUser.id);
+  const query = String(request.query.q ?? "").trim().slice(0, 40);
+  if (!query) return response.json({ users: [] });
+  const users = await withTransaction(async (connection) => {
+    const [rows] = await connection.query(
+      `SELECT u.id, u.username, u.avatar_path, p.display_name
+         FROM users u JOIN profiles p ON p.user_id = u.id
+        WHERE u.id <> ? AND u.deleted_at IS NULL AND u.purged_at IS NULL
+          AND (u.username LIKE ? OR p.display_name LIKE ?)
+        ORDER BY p.display_name, u.id LIMIT 50`,
+      [userId, `%${query}%`, `%${query}%`],
+    );
+    const available = [];
+    for (const row of rows) {
+      try { await assertGroupCandidate(connection, userId, Number(row.id), { lock: false }); }
+      catch { continue; }
+      available.push({ id: Number(row.id), name: row.display_name, username: row.username, avatarUrl: row.avatar_path ?? undefined });
+      if (available.length >= 20) break;
+    }
+    return available;
+  });
+  response.json({ users });
+}));
+
+router.post("/group-conversations", asyncRoute(async (request, response) => {
+  requireGroupChats();
+  const userId = Number(request.bookMeetUser.id);
+  const name = groupName(request.body?.name);
+  const participants = groupParticipantIds(request.body?.participantIds, userId);
+  const avatarUrl = request.body?.avatarUrl;
+  if (Object.hasOwn(request.body ?? {}, "avatarPath") || (avatarUrl !== undefined && avatarUrl !== null && (typeof avatarUrl !== "string" || (avatarUrl !== "" && !avatarUrl.startsWith("data:image/"))))) throw Object.assign(new Error("Некорректный аватар группы"), { statusCode: 422 });
+  let savedAvatarPath = null;
+  let result;
+  try {
+    result = await withTransaction(async (connection) => {
+      const actor = await groupActor(connection, userId, Number(request.bookMeetUser.operatorUserId));
+      for (const participantId of participants) await assertGroupCandidate(connection, userId, participantId);
+      for (let index = 0; index < participants.length; index += 1) {
+        for (const previousParticipantId of participants.slice(0, index)) await assertGroupCompatibility(connection, previousParticipantId, participants[index]);
+      }
+      if (avatarUrl) savedAvatarPath = await saveAvatar(avatarUrl);
+      const [created] = await connection.query(
+        "INSERT INTO conversations (conversation_type, name, avatar_path, created_actor_type, created_actor_id, created_by_user_id) VALUES ('group', ?, ?, ?, ?, ?)",
+        [name, savedAvatarPath, actor.type, actor.id, actor.createdBy],
+      );
+      const conversationId = Number(created.insertId);
+      await connection.query("INSERT INTO conversation_members (conversation_id, user_id, role) VALUES (?, ?, 'owner')", [conversationId, userId]);
+      for (const participantId of participants) await connection.query("INSERT INTO conversation_members (conversation_id, user_id) VALUES (?, ?)", [conversationId, participantId]);
+      return { conversationId, recipients: [userId, ...participants] };
+    });
+  } catch (error) {
+    if (savedAvatarPath) await removeAvatarFile(savedAvatarPath);
+    throw error;
+  }
+  queueChatRealtime(response, result.recipients, { type: "group.created", conversationId: result.conversationId });
+  response.status(201).json({ id: result.conversationId, name, avatarUrl: savedAvatarPath ?? undefined });
+}));
+
+router.get("/group-conversations/:conversationId", asyncRoute(async (request, response) => {
+  requireGroupChats();
+  const userId = Number(request.bookMeetUser.id); const conversationId = Number(request.params.conversationId);
+  const detail = await withTransaction(async (connection) => {
+    const group = await assertGroupMember(connection, userId, conversationId);
+    const [members] = await connection.query(
+      `SELECT cm.user_id, cm.role, cm.joined_at, p.display_name, u.username, u.avatar_path
+         FROM conversation_members cm JOIN users u ON u.id = cm.user_id JOIN profiles p ON p.user_id = u.id
+        WHERE cm.conversation_id = ? AND cm.left_at IS NULL ORDER BY FIELD(cm.role, 'owner', 'moderator', 'member'), p.display_name, cm.user_id`, [conversationId],
+    );
+    return { id: conversationId, name: group.name, avatarUrl: group.avatar_path ?? undefined, historyClearedMessageId: Number(group.history_cleared_message_id ?? 0), addMembersPolicy: group.add_members_policy, removeMembersPolicy: group.remove_members_policy, currentRole: group.role, members: members.map((member) => ({ userId: Number(member.user_id), role: member.role, name: member.display_name, username: member.username, avatarUrl: member.avatar_path ?? undefined })) };
+  });
+  response.json(detail);
+}));
+
+router.patch("/group-conversations/:conversationId", asyncRoute(async (request, response) => {
+  requireGroupChats();
+  const userId = Number(request.bookMeetUser.id); const conversationId = Number(request.params.conversationId);
+  const allowedAdd = new Set(["owner_only", "owner_or_moderators", "members"]); const allowedRemove = new Set(["owner_only", "owner_or_moderators"]);
+  const avatarUpdated = Object.hasOwn(request.body ?? {}, "avatarUrl");
+  const avatarUrl = request.body?.avatarUrl;
+  if (Object.hasOwn(request.body ?? {}, "avatarPath") || (avatarUpdated && avatarUrl !== null && (typeof avatarUrl !== "string" || (avatarUrl !== "" && !avatarUrl.startsWith("data:image/"))))) throw Object.assign(new Error("Некорректный аватар группы"), { statusCode: 422 });
+  let savedAvatarPath = null; let previousAvatarPath = null; let result;
+  try {
+    result = await withTransaction(async (connection) => {
+      const group = await assertGroupMember(connection, userId, conversationId, { lock: true, owner: true });
+      const changes = []; const values = [];
+      if (Object.hasOwn(request.body ?? {}, "name")) { changes.push("name = ?"); values.push(groupName(request.body.name)); }
+      if (Object.hasOwn(request.body ?? {}, "addMembersPolicy")) { if (!allowedAdd.has(request.body.addMembersPolicy)) throw Object.assign(new Error("Некорректная политика добавления"), { statusCode: 422 }); changes.push("add_members_policy = ?"); values.push(request.body.addMembersPolicy); }
+      if (Object.hasOwn(request.body ?? {}, "removeMembersPolicy")) { if (!allowedRemove.has(request.body.removeMembersPolicy)) throw Object.assign(new Error("Некорректная политика удаления"), { statusCode: 422 }); changes.push("remove_members_policy = ?"); values.push(request.body.removeMembersPolicy); }
+      if (avatarUpdated) { previousAvatarPath = group.avatar_path; if (avatarUrl) savedAvatarPath = await saveAvatar(avatarUrl); changes.push("avatar_path = ?"); values.push(savedAvatarPath); }
+      if (!changes.length) throw Object.assign(new Error("Нет изменений"), { statusCode: 422 });
+      await connection.query(`UPDATE conversations SET ${changes.join(", ")} WHERE id = ?`, [...values, conversationId]);
+      return { recipients: await groupSignalMemberIds(connection, conversationId) };
+    });
+  } catch (error) {
+    if (savedAvatarPath) await removeAvatarFile(savedAvatarPath);
+    throw error;
+  }
+  if (avatarUpdated && previousAvatarPath && previousAvatarPath !== savedAvatarPath) await removeAvatarFile(previousAvatarPath);
+  queueChatRealtime(response, result.recipients, { type: "group.updated", conversationId }); response.json({ ok: true });
+}));
+
+router.post("/group-conversations/:conversationId/members", asyncRoute(async (request, response) => {
+  requireGroupChats(); const userId = Number(request.bookMeetUser.id); const conversationId = Number(request.params.conversationId); const candidateId = Number(request.body?.userId);
+  const result = await withTransaction(async (connection) => {
+    const group = await assertGroupMember(connection, userId, conversationId, { lock: true });
+    const canAdd = group.add_members_policy === "members" || group.add_members_policy === "owner_or_moderators" && ["owner", "moderator"].includes(group.role) || group.add_members_policy === "owner_only" && group.role === "owner";
+    if (!canAdd) throw Object.assign(new Error("Группа не найдена"), { statusCode: 404 });
+    await assertGroupJoinCandidate(connection, userId, candidateId, conversationId);
+    await connection.query("INSERT INTO conversation_members (conversation_id, user_id, role, joined_at, left_at, last_read_message_id, last_read_at) VALUES (?, ?, 'member', UTC_TIMESTAMP(), NULL, NULL, NULL) ON DUPLICATE KEY UPDATE role = 'member', joined_at = UTC_TIMESTAMP(), left_at = NULL, last_read_message_id = NULL, last_read_at = NULL", [conversationId, candidateId]);
+    await groupSystemRow(connection, conversationId, "Участник добавлен в группу"); return { recipients: await groupSignalMemberIds(connection, conversationId) };
+  });
+  queueChatRealtime(response, result.recipients, { type: "group.members.changed", conversationId }); response.status(201).json({ ok: true });
+}));
+
+router.delete("/group-conversations/:conversationId/members/:userId", asyncRoute(async (request, response) => {
+  requireGroupChats(); const userId = Number(request.bookMeetUser.id); const conversationId = Number(request.params.conversationId); const targetId = Number(request.params.userId);
+  const result = await withTransaction(async (connection) => {
+    const group = await assertGroupMember(connection, userId, conversationId, { lock: true });
+    const canRemove = group.remove_members_policy === "owner_or_moderators" && ["owner", "moderator"].includes(group.role) || group.remove_members_policy === "owner_only" && group.role === "owner";
+    if (!canRemove || targetId === userId) throw Object.assign(new Error("Группа не найдена"), { statusCode: 404 });
+    const [[target]] = await connection.query("SELECT role FROM conversation_members WHERE conversation_id = ? AND user_id = ? AND left_at IS NULL FOR UPDATE", [conversationId, targetId]);
+    if (!target || target.role === "owner" && group.role !== "owner") throw Object.assign(new Error("Группа не найдена"), { statusCode: 404 });
+    if (target.role === "owner") { const [[owners]] = await connection.query("SELECT COUNT(*) AS count FROM conversation_members WHERE conversation_id = ? AND role = 'owner' AND left_at IS NULL", [conversationId]); if (Number(owners.count) <= 1) throw Object.assign(new Error("Последнего владельца нельзя удалить без передачи роли или удаления группы"), { statusCode: 409 }); }
+    await connection.query("UPDATE conversation_members SET left_at = UTC_TIMESTAMP() WHERE conversation_id = ? AND user_id = ?", [conversationId, targetId]);
+    await groupSystemRow(connection, conversationId, "Участник удалён из группы"); return { recipients: await groupSignalMemberIds(connection, conversationId) };
+  });
+  queueChatRealtime(response, [...result.recipients, targetId], { type: "group.members.changed", conversationId }); response.json({ ok: true });
+}));
+
+router.patch("/group-conversations/:conversationId/members/:userId/role", asyncRoute(async (request, response) => {
+  requireGroupChats(); const userId = Number(request.bookMeetUser.id); const conversationId = Number(request.params.conversationId); const targetId = Number(request.params.userId); const role = request.body?.role;
+  if (!["owner", "moderator", "member"].includes(role)) throw Object.assign(new Error("Некорректная роль"), { statusCode: 422 });
+  const result = await withTransaction(async (connection) => {
+    await assertGroupMember(connection, userId, conversationId, { lock: true, owner: true });
+    const [[target]] = await connection.query("SELECT role FROM conversation_members WHERE conversation_id = ? AND user_id = ? AND left_at IS NULL FOR UPDATE", [conversationId, targetId]);
+    if (!target) throw Object.assign(new Error("Группа не найдена"), { statusCode: 404 });
+    if (target.role === "owner" && role !== "owner") { const [[owners]] = await connection.query("SELECT COUNT(*) AS count FROM conversation_members WHERE conversation_id = ? AND role = 'owner' AND left_at IS NULL", [conversationId]); if (Number(owners.count) <= 1) throw Object.assign(new Error("Последнего владельца нельзя понизить"), { statusCode: 409 }); }
+    await connection.query("UPDATE conversation_members SET role = ? WHERE conversation_id = ? AND user_id = ?", [role, conversationId, targetId]);
+    return { recipients: await groupSignalMemberIds(connection, conversationId) };
+  });
+  queueChatRealtime(response, result.recipients, { type: "group.members.changed", conversationId }); response.json({ ok: true });
+}));
+
+router.post("/group-conversations/:conversationId/owner-transfer", asyncRoute(async (request, response) => {
+  requireGroupChats(); const userId = Number(request.bookMeetUser.id); const conversationId = Number(request.params.conversationId); const targetId = Number(request.body?.userId);
+  const result = await withTransaction(async (connection) => {
+    await assertGroupMember(connection, userId, conversationId, { lock: true, owner: true });
+    if (!Number.isSafeInteger(targetId) || targetId === userId) throw Object.assign(new Error("Укажите другого активного участника"), { statusCode: 422 });
+    const [[target]] = await connection.query("SELECT user_id FROM conversation_members WHERE conversation_id = ? AND user_id = ? AND left_at IS NULL FOR UPDATE", [conversationId, targetId]);
+    if (!target) throw Object.assign(new Error("Группа не найдена"), { statusCode: 404 });
+    await connection.query("UPDATE conversation_members SET role = CASE WHEN user_id = ? THEN 'owner' WHEN user_id = ? THEN 'member' ELSE role END WHERE conversation_id = ? AND user_id IN (?, ?)", [targetId, userId, conversationId, targetId, userId]);
+    await groupSystemRow(connection, conversationId, "Владелец группы передан");
+    return { recipients: await groupSignalMemberIds(connection, conversationId) };
+  });
+  queueChatRealtime(response, result.recipients, { type: "group.members.changed", conversationId }); response.json({ ok: true });
+}));
+
+router.post("/group-conversations/:conversationId/leave", asyncRoute(async (request, response) => {
+  requireGroupChats(); const userId = Number(request.bookMeetUser.id); const conversationId = Number(request.params.conversationId);
+  const result = await withTransaction(async (connection) => {
+    const group = await assertGroupMember(connection, userId, conversationId, { lock: true });
+    if (group.role === "owner") { const [[owners]] = await connection.query("SELECT COUNT(*) AS count FROM conversation_members WHERE conversation_id = ? AND role = 'owner' AND left_at IS NULL", [conversationId]); if (Number(owners.count) <= 1) throw Object.assign(new Error("Последний владелец должен передать роль или удалить группу"), { statusCode: 409 }); }
+    await connection.query("UPDATE conversation_members SET left_at = UTC_TIMESTAMP() WHERE conversation_id = ? AND user_id = ?", [conversationId, userId]);
+    await groupSystemRow(connection, conversationId, "Участник покинул группу"); return { recipients: await groupSignalMemberIds(connection, conversationId) };
+  });
+  queueChatRealtime(response, [...result.recipients, userId], { type: "group.members.changed", conversationId }); response.json({ ok: true });
+}));
+
+router.post("/group-conversations/:conversationId/history/clear", asyncRoute(async (request, response) => {
+  requireGroupChats(); const userId = Number(request.bookMeetUser.id); const conversationId = Number(request.params.conversationId);
+  const result = await withTransaction(async (connection) => {
+    await assertGroupMember(connection, userId, conversationId, { lock: true, moderator: true });
+    const [[cursor]] = await connection.query("SELECT COALESCE(MAX(id), 0) AS id FROM messages WHERE conversation_id = ? FOR UPDATE", [conversationId]);
+    await connection.query("UPDATE conversations SET history_cleared_message_id = GREATEST(COALESCE(history_cleared_message_id, 0), ?), history_cleared_at = UTC_TIMESTAMP() WHERE id = ?", [cursor.id, conversationId]);
+    return { clearedThroughMessageId: Number(cursor.id), recipients: await groupSignalMemberIds(connection, conversationId) };
+  });
+  queueChatRealtime(response, result.recipients, { type: "group.history.cleared", conversationId }); response.json({ ok: true, clearedThroughMessageId: result.clearedThroughMessageId });
+}));
+
+router.patch("/group-conversations/:conversationId/read", asyncRoute(async (request, response) => {
+  requireGroupChats(); const userId = Number(request.bookMeetUser.id); const conversationId = Number(request.params.conversationId); const messageId = Number(request.body?.messageId);
+  const result = await withTransaction(async (connection) => {
+    const member = await assertGroupMember(connection, userId, conversationId, { lock: true });
+    const [[message]] = await connection.query("SELECT id FROM messages WHERE id = ? AND conversation_id = ? FOR UPDATE", [messageId, conversationId]);
+    if (!message) throw Object.assign(new Error("Сообщение не найдено"), { statusCode: 404 });
+    const currentCursor = Math.max(Number(member.last_read_message_id ?? 0), Number(member.history_cleared_message_id ?? 0));
+    if (messageId <= currentCursor) return { advanced: false, recipients: [] };
+    await connection.query("UPDATE conversation_members SET last_read_message_id = ?, last_read_at = UTC_TIMESTAMP() WHERE conversation_id = ? AND user_id = ?", [messageId, conversationId, userId]);
+    return { advanced: true, recipients: await groupSignalMemberIds(connection, conversationId) };
+  });
+  if (result.advanced) queueChatRealtime(response, result.recipients, { type: "group.messages.read", conversationId });
+  response.json({ ok: true, advanced: result.advanced });
+}));
+
+router.delete("/group-conversations/:conversationId", asyncRoute(async (request, response) => {
+  requireGroupChats(); const userId = Number(request.bookMeetUser.id); const conversationId = Number(request.params.conversationId);
+  const deleted = await withTransaction(async (connection) => {
+    const group = await assertGroupMember(connection, userId, conversationId, { lock: true, owner: true });
+    const active = await groupMemberIds(connection, conversationId);
+    await connection.query("UPDATE conversations SET state = 'deleted', avatar_path = NULL WHERE id = ?", [conversationId]);
+    await connection.query("UPDATE conversation_members SET left_at = COALESCE(left_at, UTC_TIMESTAMP()) WHERE conversation_id = ?", [conversationId]);
+    await connection.query("UPDATE conversation_polls SET closed_at = COALESCE(closed_at, UTC_TIMESTAMP()) WHERE conversation_id = ?", [conversationId]);
+    return { formerRecipients: active, avatarPath: group.avatar_path };
+  });
+  if (deleted.avatarPath) await removeAvatarFile(deleted.avatarPath);
+  // The one exception to current-members-only delivery: the committed delete
+  // invalidates every active member, so former members receive one empty
+  // invalidator to remove the group from an already-open client.
+  queueChatRealtime(response, deleted.formerRecipients, { type: "group.deleted", conversationId });
+  response.json({ ok: true });
+}));
+
+router.get("/group-conversations/:conversationId/messages", asyncRoute(async (request, response) => {
+  requireGroupChats();
+  const userId = Number(request.bookMeetUser.id); const conversationId = Number(request.params.conversationId);
+  const before = request.query.before === undefined ? null : Number(request.query.before);
+  if (before !== null && (!Number.isSafeInteger(before) || before <= 0)) throw Object.assign(new Error("Некорректный курсор истории"), { statusCode: 422 });
+  const page = await withTransaction(async (connection) => {
+    const group = await assertGroupMember(connection, userId, conversationId);
+    const [rows] = await connection.query(
+      `SELECT m.*, author.username AS author_username, author.avatar_path AS author_avatar_path, author.deleted_at AS author_deleted_at,
+              author.purged_at AS author_purged_at, author_profile.display_name AS author_name
+         FROM messages m LEFT JOIN users author ON author.id = m.sender_user_id LEFT JOIN profiles author_profile ON author_profile.user_id = author.id
+        WHERE m.conversation_id = ? AND m.id > COALESCE(?, 0) AND m.deleted_before_read = 0
+          ${before === null ? "" : "AND m.id < ?"}
+        ORDER BY m.id DESC LIMIT 201`, before === null ? [conversationId, group.history_cleared_message_id] : [conversationId, group.history_cleared_message_id, before],
+    );
+    const readThrough = Math.max(Number(group.last_read_message_id ?? 0), Number(group.history_cleared_message_id ?? 0));
+    const selected = rows.slice(0, 200);
+    return { messages: await groupMessageDtos(connection, selected.reverse(), userId, readThrough, requestLocale(request)), nextCursor: rows.length > 200 ? Number(selected[0].id) : null };
+  });
+  response.json(page);
+}));
+
+router.post("/group-conversations/:conversationId/messages", asyncRoute(async (request, response) => {
+  requireGroupChats();
+  const userId = Number(request.bookMeetUser.id); const conversationId = Number(request.params.conversationId); const body = normalizeMessageBody(request.body?.body);
+  const stickerId = typeof request.body?.stickerId === "string" ? request.body.stickerId.trim() : "";
+  const sticker = stickerId ? activeBookSticker(stickerId) : undefined;
+  if (stickerId && !sticker) return response.status(422).json({ code: "MESSAGE_STICKER_UNKNOWN", error: "Неизвестный или отключённый стикер" });
+  if (sticker && (body || request.body?.attachment || request.body?.mentions || request.body?.mentionUserIds)) return response.status(422).json({ code: "MESSAGE_STICKER_MUST_BE_STANDALONE", error: "Стикер отправляется отдельным сообщением" });
+  if (!body && !request.body?.attachment && !sticker) throw Object.assign(new Error("Сообщение пусто"), { statusCode: 422 });
+  const result = await withTransaction(async (connection) => {
+    await assertGroupMember(connection, userId, conversationId, { lock: true });
+    const attachment = sticker ? null : await validatedGroupChatAttachment(connection, request.body?.attachment, userId, conversationId);
+    const [created] = await connection.query("INSERT INTO messages (conversation_id, sender_user_id, recipient_user_id, body, attachment_kind, attachment_id, message_kind, sticker_id) VALUES (?, ?, NULL, ?, ?, ?, ?, ?)", [conversationId, userId, sticker ? "" : body, attachment?.kind ?? null, attachment?.id ?? null, sticker ? "sticker" : "text", sticker?.id ?? null]);
+    if (!sticker) await syncGroupMentions(connection, { conversationId, messageId: Number(created.insertId), authorUserId: userId, mentionUserIds: request.body?.mentionUserIds ?? request.body?.mentions, text: body });
+    return { messageId: Number(created.insertId), recipients: await groupSignalMemberIds(connection, conversationId) };
+  });
+  queueChatRealtime(response, result.recipients, { type: "group.message.created", conversationId, messageId: result.messageId });
+  response.status(201).json({ id: result.messageId });
+}));
+
+router.get("/group-conversations/:conversationId/polls", asyncRoute(async (request, response) => {
+  requireGroupChats(); const userId = Number(request.bookMeetUser.id); const conversationId = Number(request.params.conversationId);
+  const polls = await withTransaction(async (connection) => {
+    const group = await assertGroupMember(connection, userId, conversationId);
+    const [rows] = await connection.query("SELECT message_id FROM conversation_polls WHERE conversation_id = ? AND message_id > COALESCE(?, 0) ORDER BY message_id ASC", [conversationId, group.history_cleared_message_id]);
+    const byMessage = await pollDtosForMessages(connection, rows.map((row) => Number(row.message_id)), userId);
+    return rows.map((row) => ({ messageId: Number(row.message_id), ...byMessage.get(Number(row.message_id)) }));
+  });
+  response.json({ polls });
+}));
+
+router.post("/group-conversations/:conversationId/polls", asyncRoute(async (request, response) => {
+  requireGroupChats(); const userId = Number(request.bookMeetUser.id); const conversationId = Number(request.params.conversationId);
+  const question = pollText(request.body?.question, 500, "вопрос опроса"); const options = pollOptions(request.body?.options);
+  const allowsMultiple = pollBoolean(request.body?.allowsMultiple, "allowsMultiple"); const mayChangeVote = pollBoolean(request.body?.mayChangeVote, "mayChangeVote"); const closesAt = pollClosesAt(request.body?.closesAt);
+  const result = await withTransaction(async (connection) => {
+    await assertGroupMember(connection, userId, conversationId, { lock: true });
+    const messageId = await groupSystemRow(connection, conversationId, "Опрос");
+    const [created] = await connection.query("INSERT INTO conversation_polls (conversation_id, message_id, creator_user_id, question, allows_multiple, may_change_vote, closes_at) VALUES (?, ?, ?, ?, ?, ?, ?)", [conversationId, messageId, userId, question, allowsMultiple ? 1 : 0, mayChangeVote ? 1 : 0, closesAt]);
+    const pollId = Number(created.insertId);
+    for (const [index, option] of options.entries()) await connection.query("INSERT INTO conversation_poll_options (poll_id, option_order, body) VALUES (?, ?, ?)", [pollId, index + 1, option]);
+    return { messageId, poll: await pollDto(connection, pollId, userId), recipients: await groupSignalMemberIds(connection, conversationId) };
+  });
+  queueChatRealtime(response, result.recipients, { type: "group.poll.created", conversationId, messageId: result.messageId, pollId: result.poll.id });
+  response.status(201).json({ messageId: result.messageId, poll: result.poll });
+}));
+
+router.post("/group-conversations/:conversationId/polls/:pollId/vote", asyncRoute(async (request, response) => {
+  requireGroupChats(); const userId = Number(request.bookMeetUser.id); const conversationId = Number(request.params.conversationId); const pollId = Number(request.params.pollId);
+  const rawOptionIds = Array.isArray(request.body?.optionIds) ? request.body.optionIds.map(Number) : null;
+  if (!rawOptionIds?.length || rawOptionIds.some((id) => !Number.isSafeInteger(id) || id <= 0) || new Set(rawOptionIds).size !== rawOptionIds.length) throw Object.assign(new Error("Выберите уникальные варианты опроса"), { statusCode: 422 });
+  const optionIds = rawOptionIds;
+  const result = await withTransaction(async (connection) => {
+    const group = await assertGroupMember(connection, userId, conversationId, { lock: true });
+    const [[poll]] = await connection.query(
+      "SELECT id, message_id, allows_multiple, may_change_vote, closes_at, closed_at FROM conversation_polls WHERE id = ? AND conversation_id = ? AND message_id > COALESCE(?, 0) FOR UPDATE",
+      [pollId, conversationId, group.history_cleared_message_id],
+    );
+    if (!poll) throw Object.assign(new Error("Опрос не найден"), { statusCode: 404 });
+    if (poll.closed_at || poll.closes_at && new Date(poll.closes_at).getTime() <= Date.now()) throw Object.assign(new Error("Опрос закрыт"), { statusCode: 409, code: "POLL_CLOSED" });
+    const [options] = await connection.query(`SELECT id FROM conversation_poll_options WHERE poll_id = ? AND id IN (${optionIds.map(() => "?").join(",")}) ORDER BY id`, [pollId, ...optionIds]);
+    if (options.length !== optionIds.length) throw Object.assign(new Error("Вариант опроса не найден"), { statusCode: 422 });
+    const [[optionCount]] = await connection.query("SELECT COUNT(*) AS count FROM conversation_poll_options WHERE poll_id = ?", [pollId]);
+    if (poll.allows_multiple ? optionIds.length > Number(optionCount.count) : optionIds.length !== 1) throw Object.assign(new Error("Некорректное число вариантов"), { statusCode: 422 });
+    const [previous] = await connection.query("SELECT option_id FROM conversation_poll_votes WHERE poll_id = ? AND user_id = ? ORDER BY option_id FOR UPDATE", [pollId, userId]);
+    const selected = optionIds.slice().sort((left, right) => left - right); const old = previous.map((row) => Number(row.option_id)); const identical = selected.length === old.length && selected.every((id, index) => id === old[index]);
+    if (!poll.may_change_vote && previous.length && !identical) throw Object.assign(new Error("Изменение голоса отключено"), { statusCode: 409, code: "POLL_VOTE_LOCKED" });
+    if (!identical) {
+      await connection.query("DELETE FROM conversation_poll_votes WHERE poll_id = ? AND user_id = ?", [pollId, userId]);
+      for (const optionId of selected) await connection.query("INSERT INTO conversation_poll_votes (poll_id, option_id, user_id) VALUES (?, ?, ?)", [pollId, optionId, userId]);
+    }
+    return { poll: await pollDto(connection, pollId, userId), recipients: await groupSignalMemberIds(connection, conversationId) };
+  });
+  queueChatRealtime(response, result.recipients, { type: "group.poll.voted", conversationId, pollId }); response.json({ poll: result.poll });
+}));
+
+router.patch("/group-conversations/:conversationId/messages/:messageId", messageEditRateLimit, asyncRoute(async (request, response) => {
+  requireGroupChats(); const userId = Number(request.bookMeetUser.id); const conversationId = Number(request.params.conversationId); const messageId = Number(request.params.messageId); const body = normalizeMessageBody(request.body?.body);
+  if (!body) throw Object.assign(new Error("Сообщение не может быть пустым. Для удаления используйте отдельное действие"), { statusCode: 422, code: "MESSAGE_BODY_REQUIRED" });
+  const result = await withTransaction(async (connection) => {
+    const { group, message } = await groupMessageForMutation(connection, userId, conversationId, messageId);
+    if (Number(message.sender_user_id) !== userId) throw Object.assign(new Error("Сообщение не найдено"), { statusCode: 404 });
+    if (message.is_system) throw Object.assign(new Error("Системные сообщения нельзя редактировать"), { statusCode: 409, code: "MESSAGE_SYSTEM_NOT_EDITABLE" });
+    if (message.deleted_at) throw Object.assign(new Error("Сообщение не найдено"), { statusCode: 404 });
+    if (message.message_kind === "sticker") throw Object.assign(new Error("Стикеры нельзя редактировать"), { statusCode: 409, code: "MESSAGE_STICKER_NOT_EDITABLE" });
+    if (message.attachment_kind || message.attachment_id) throw Object.assign(new Error("Сообщения с вложениями нельзя редактировать"), { statusCode: 409, code: "MESSAGE_ATTACHMENT_NOT_EDITABLE" });
+    await connection.query("INSERT INTO message_edit_history (message_id, message_reference_id, editor_user_id, previous_body) VALUES (?, ?, ?, ?)", [messageId, messageId, userId, message.body]);
+    await connection.query("UPDATE messages SET body = ?, edited_at = UTC_TIMESTAMP() WHERE id = ?", [body, messageId]);
+    await syncGroupMentions(connection, { conversationId, messageId, authorUserId: userId, mentionUserIds: request.body?.mentionUserIds ?? request.body?.mentions, text: body });
+    const [rows] = await connection.query("SELECT m.*, author.username AS author_username, author.avatar_path AS author_avatar_path, author.deleted_at AS author_deleted_at, author.purged_at AS author_purged_at, author_profile.display_name AS author_name FROM messages m LEFT JOIN users author ON author.id = m.sender_user_id LEFT JOIN profiles author_profile ON author_profile.user_id = author.id WHERE m.id = ?", [messageId]);
+    const [dto] = await groupMessageDtos(connection, rows, userId, Math.max(Number(group.last_read_message_id ?? 0), Number(group.history_cleared_message_id ?? 0)), requestLocale(request));
+    return { message: dto, recipients: await groupSignalMemberIds(connection, conversationId) };
+  });
+  queueChatRealtime(response, result.recipients, { type: "group.message.edited", conversationId, messageId }); response.json({ ok: true, message: result.message });
+}));
+
+router.delete("/group-conversations/:conversationId/messages/:messageId", messageEditRateLimit, asyncRoute(async (request, response) => {
+  requireGroupChats(); const userId = Number(request.bookMeetUser.id); const conversationId = Number(request.params.conversationId); const messageId = Number(request.params.messageId);
+  const result = await withTransaction(async (connection) => {
+    const { group, message } = await groupMessageForMutation(connection, userId, conversationId, messageId);
+    if (message.is_system) throw Object.assign(new Error("Системные сообщения нельзя удалять"), { statusCode: 409, code: "MESSAGE_SYSTEM_NOT_DELETABLE" });
+    if (message.deleted_at) throw Object.assign(new Error("Сообщение не найдено"), { statusCode: 404 });
+    const authorDelete = Number(message.sender_user_id) === userId;
+    if (!authorDelete && !["owner", "moderator"].includes(group.role)) throw Object.assign(new Error("Сообщение не найдено"), { statusCode: 404 });
+    const [[clock]] = await connection.query("SELECT UTC_TIMESTAMP() AS deleted_at");
+    if (authorDelete) {
+      await connection.query("INSERT INTO message_deletion_evidence (message_id, message_reference_id, sender_user_id, sender_reference_id, recipient_user_id, recipient_reference_id, original_body, message_kind, sticker_id, attachment_kind, attachment_id, was_read, original_read_at, deleted_before_read, deleted_at, moderation_retained_until) VALUES (?, ?, ?, ?, NULL, NULL, ?, ?, ?, ?, ?, 1, NULL, 0, ?, NULL)", [messageId, messageId, userId, userId, message.body, message.message_kind, message.sticker_id, message.attachment_kind, message.attachment_id, clock.deleted_at]);
+    } else {
+      await connection.query("INSERT INTO group_message_moderation_evidence (message_reference_id, message_id, conversation_id, author_reference_id, author_user_id, deleter_reference_id, deleted_by_user_id, deleted_by_role, original_body, original_message_kind, original_sticker_id, original_attachment_kind, original_attachment_id, deleted_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)", [messageId, messageId, conversationId, message.sender_user_id, message.sender_user_id, userId, userId, group.role, message.body, message.message_kind, message.sticker_id, message.attachment_kind, message.attachment_id, clock.deleted_at]);
+    }
+    await connection.query("UPDATE messages SET body = '', attachment_kind = NULL, attachment_id = NULL, sticker_id = NULL, message_kind = 'text', deleted_at = ?, deleted_by_sender_at = ?, deleted_before_read = 0, moderation_retained_until = NULL, group_deleted_by_role = ? WHERE id = ?", [clock.deleted_at, authorDelete ? clock.deleted_at : null, authorDelete ? null : group.role, messageId]);
+    await connection.query("DELETE FROM message_reactions WHERE message_id = ?", [messageId]);
+    await connection.query("DELETE FROM content_mentions WHERE entity_type = 'message' AND entity_id = ?", [messageId]);
+    return { recipients: await groupSignalMemberIds(connection, conversationId), moderated: !authorDelete };
+  });
+  queueChatRealtime(response, result.recipients, { type: result.moderated ? "group.message.moderated" : "group.message.deleted", conversationId, messageId }); response.json({ ok: true, messageId });
+}));
+
+async function groupReactionDto(connection, conversationId, messageId, viewerId) {
+  const [rows] = await connection.query("SELECT reaction.user_id FROM message_reactions reaction JOIN conversation_members member ON member.user_id = reaction.user_id WHERE reaction.message_id = ? AND reaction.reaction_type = 'like' AND member.conversation_id = ? AND member.left_at IS NULL ORDER BY reaction.created_at, reaction.user_id", [messageId, conversationId]);
+  const likedByUserIds = rows.map((row) => Number(row.user_id));
+  return { messageId, likeCount: likedByUserIds.length, likedByViewer: likedByUserIds.includes(viewerId), likedByUserIds };
+}
+
+for (const [method, path, sql] of [["post", "/group-conversations/:conversationId/messages/:messageId/reactions/like", "INSERT IGNORE INTO message_reactions (message_id, user_id, reaction_type) VALUES (?, ?, 'like')"], ["delete", "/group-conversations/:conversationId/messages/:messageId/reactions/like", "DELETE FROM message_reactions WHERE message_id = ? AND user_id = ? AND reaction_type = 'like'"]]) {
+  router[method](path, messageReactionRateLimit, asyncRoute(async (request, response) => {
+    requireGroupChats(); const userId = Number(request.bookMeetUser.id); const conversationId = Number(request.params.conversationId); const messageId = Number(request.params.messageId);
+    const result = await withTransaction(async (connection) => {
+      const { message } = await groupMessageForMutation(connection, userId, conversationId, messageId);
+      if (message.is_system || message.deleted_at) throw Object.assign(new Error("Реакция для этого сообщения недоступна"), { statusCode: 409, code: "MESSAGE_REACTION_NOT_ALLOWED" });
+      await connection.query(sql, [messageId, userId]);
+      return { reaction: await groupReactionDto(connection, conversationId, messageId, userId), recipients: await groupSignalMemberIds(connection, conversationId) };
+    });
+    queueChatRealtime(response, result.recipients, { type: "group.message.reaction.changed", conversationId, messageId }); response.json(result.reaction);
+  }));
+}
+
+router.get("/group-conversations/:conversationId/messages/search", messageSearchRateLimit, asyncRoute(async (request, response) => {
+  requireGroupChats(); const userId = Number(request.bookMeetUser.id); const conversationId = Number(request.params.conversationId); const search = normalizeMessageSearchQuery(request.query.q); const cursor = decodeMessageSearchCursor(request.query.cursor); const limit = messageSearchLimit(request.query.limit);
+  const result = await withTransaction(async (connection) => {
+    const group = await assertGroupMember(connection, userId, conversationId);
+    const cursorSql = cursor ? " AND (m.created_at < ? OR (m.created_at = ? AND m.id < ?))" : "";
+    const values = [conversationId, group.history_cleared_message_id, search.booleanQuery]; const cursorValues = cursor ? [cursor.createdAt, cursor.createdAt, cursor.id] : [];
+    const commonSql = "FROM messages m FORCE INDEX (messages_body_fulltext) LEFT JOIN users author ON author.id = m.sender_user_id LEFT JOIN profiles author_profile ON author_profile.user_id = author.id WHERE m.conversation_id = ? AND m.id > COALESCE(?, 0) AND m.is_system = 0 AND m.message_kind <> 'sticker' AND m.deleted_at IS NULL AND m.deleted_before_read = 0 AND MATCH(m.body) AGAINST (? IN BOOLEAN MODE)";
+    const [rows] = await connection.query(`SELECT m.id, m.sender_user_id, m.body, m.created_at, author.username AS author_username, author_profile.display_name AS author_name, author.deleted_at AS author_deleted_at, author.purged_at AS author_purged_at ${commonSql}${cursorSql} ORDER BY m.created_at DESC, m.id DESC LIMIT ?`, [...values, ...cursorValues, limit + 1]);
+    const [[count]] = await connection.query(`SELECT COUNT(*) AS total ${commonSql}`, values);
+    const page = rows.slice(0, limit); const last = page[page.length - 1];
+    return { total: Number(count.total), matches: page.map((row) => ({ messageId: Number(row.id), snippet: messageSearchSnippet(row.body, search.tokens), createdAt: new Date(row.created_at).toISOString(), author: row.sender_user_id && !row.author_deleted_at && !row.author_purged_at ? { id: Number(row.sender_user_id), name: row.author_name, username: row.author_username } : { name: "Удалённый пользователь" } })), nextCursor: rows.length > limit && last ? encodeMessageSearchCursor({ id: Number(last.id), createdAt: new Date(last.created_at).toISOString() }) : null };
+  });
+  response.json({ query: search.text, ...result });
+}));
+
 router.get("/conversations/:id/messages/search", messageSearchRateLimit, asyncRoute(async (request, response) => {
   const userId = Number(request.bookMeetUser.id);
   const peerId = Number(request.params.id);
@@ -5306,7 +6115,8 @@ router.post("/social/messages", asyncRoute(async (request, response) => {
   const createdMessage = await withTransaction(async (connection) => {
     const { participants } = await assertMessagePairAccess(connection, userId, targetId);
     const attachment = sticker ? undefined : await validatedChatAttachment(connection, request.body?.attachment, userId, targetId);
-    const [created] = await connection.query("INSERT INTO messages (sender_user_id, recipient_user_id, body, attachment_kind, attachment_id, message_kind, sticker_id) VALUES (?, ?, ?, ?, ?, ?, ?)", [userId, targetId, sticker ? "" : body, attachment?.kind ?? null, attachment?.id ?? null, sticker ? "sticker" : "text", sticker?.id ?? null]);
+    const conversationId = await canonicalDirectConversation(connection, userId, targetId);
+    const [created] = await connection.query("INSERT INTO messages (conversation_id, sender_user_id, recipient_user_id, body, attachment_kind, attachment_id, message_kind, sticker_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?)", [conversationId, userId, targetId, sticker ? "" : body, attachment?.kind ?? null, attachment?.id ?? null, sticker ? "sticker" : "text", sticker?.id ?? null]);
     // Messages retain stable mention links but deliberately do not create a
     // second general notification: chat delivery already covers this event.
     if (!sticker) await syncMentions(connection, { entityType: "message", entityId: Number(created.insertId), authorUserId: userId, mentionUserIds: request.body?.mentionUserIds ?? request.body?.mentions, text: body });
