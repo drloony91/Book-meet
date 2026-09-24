@@ -1,0 +1,42 @@
+CREATE TABLE IF NOT EXISTS reading_sessions (
+  id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+  user_id BIGINT UNSIGNED NOT NULL,
+  book_id BIGINT UNSIGNED NOT NULL,
+  library_user_id BIGINT UNSIGNED NULL,
+  library_book_id BIGINT UNSIGNED NULL,
+  reading_cycle_id BIGINT UNSIGNED NULL,
+  local_date DATE NOT NULL,
+  timezone VARCHAR(64) NOT NULL,
+  started_at DATETIME NULL,
+  ended_at DATETIME NULL,
+  duration_seconds INT UNSIGNED NOT NULL DEFAULT 0,
+  source ENUM('timer', 'manual') NOT NULL,
+  state ENUM('running', 'paused', 'closed') NOT NULL,
+  running_since DATETIME NULL,
+  lease_expires_at DATETIME NULL,
+  expired_at DATETIME NULL,
+  active_slot TINYINT UNSIGNED GENERATED ALWAYS AS (CASE WHEN state IN ('running', 'paused') THEN 1 ELSE NULL END) STORED,
+  created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  PRIMARY KEY (id),
+  UNIQUE KEY uq_reading_session_active_user (user_id, active_slot),
+  KEY idx_reading_session_owner_book (user_id, book_id, id),
+  KEY idx_reading_session_cycle (reading_cycle_id),
+  KEY idx_reading_session_library (library_user_id, library_book_id),
+  CONSTRAINT fk_reading_session_user FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+  CONSTRAINT fk_reading_session_book FOREIGN KEY (book_id) REFERENCES books(id) ON DELETE CASCADE,
+  CONSTRAINT fk_reading_session_library FOREIGN KEY (library_user_id, library_book_id) REFERENCES user_books(user_id, book_id) ON DELETE SET NULL,
+  CONSTRAINT fk_reading_session_cycle FOREIGN KEY (reading_cycle_id) REFERENCES reading_cycles(id) ON DELETE SET NULL,
+  CONSTRAINT chk_reading_session_duration CHECK (duration_seconds <= 4294967295),
+  CONSTRAINT chk_reading_session_state CHECK ((source = 'manual' AND state = 'closed' AND started_at IS NULL AND ended_at IS NULL AND running_since IS NULL AND lease_expires_at IS NULL) OR (source = 'timer' AND started_at IS NOT NULL AND ((state = 'running' AND running_since IS NOT NULL AND lease_expires_at IS NOT NULL AND ended_at IS NULL) OR (state = 'paused' AND running_since IS NULL AND lease_expires_at IS NULL AND ended_at IS NULL) OR (state = 'closed' AND running_since IS NULL AND lease_expires_at IS NULL AND ended_at IS NOT NULL))))
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE IF NOT EXISTS reading_session_days (
+  session_id BIGINT UNSIGNED NOT NULL,
+  local_date DATE NOT NULL,
+  duration_seconds INT UNSIGNED NOT NULL,
+  PRIMARY KEY (session_id, local_date),
+  KEY idx_reading_session_days_date (local_date),
+  CONSTRAINT fk_reading_session_days_session FOREIGN KEY (session_id) REFERENCES reading_sessions(id) ON DELETE CASCADE,
+  CONSTRAINT chk_reading_session_days_duration CHECK (duration_seconds > 0)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;

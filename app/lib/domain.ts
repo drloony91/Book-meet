@@ -1,10 +1,18 @@
 import type { AuthorBook, BookEvent, DemoUser, LibraryBook, ReadingItem } from "../types/domain";
 
-export function sanitizeRichHtml(value: string) {
+export function sortLibraryBooks(books: LibraryBook[]) {
+  return books.map((book, index) => ({ book, index })).sort((first, second) => {
+    const firstRank = first.book.topRank ?? Number.POSITIVE_INFINITY;
+    const secondRank = second.book.topRank ?? Number.POSITIVE_INFINITY;
+    return firstRank - secondRank || first.index - second.index;
+  }).map(({ book }) => book);
+}
+
+export function sanitizeRichHtml(value: string, inlineImageAlt: string) {
   if (typeof document === "undefined" || !value) return "";
   const template = document.createElement("template");
   template.innerHTML = value;
-  const allowed = new Set(["P", "DIV", "BR", "STRONG", "B", "EM", "I", "U", "S", "STRIKE", "UL", "OL", "LI", "SPAN"]);
+  const allowed = new Set(["P", "DIV", "BR", "H2", "STRONG", "B", "EM", "I", "U", "S", "STRIKE", "UL", "OL", "LI", "SPAN", "IMG"]);
   const clean = (node: Node) => {
     for (const child of Array.from(node.childNodes)) {
       if (child.nodeType === Node.COMMENT_NODE) { child.remove(); continue; }
@@ -16,13 +24,60 @@ export function sanitizeRichHtml(value: string) {
       }
       const textAlign = element.style.textAlign;
       const fontSize = element.style.fontSize;
+      const spoiler = element.tagName === "SPAN" && element.classList.contains("spoiler");
+      const imageFrame = element.tagName === "DIV" && element.classList.contains("rich-image-frame");
+      const inlineBook = element.tagName === "DIV" && element.classList.contains("rich-inline-book");
+      const preservedSpanClass = element.tagName === "SPAN" ? ["rich-image-resize-handle", "rich-inline-book-cover", "rich-inline-book-copy", "rich-inline-book-remove"].find((name) => element.classList.contains(name)) : undefined;
+      const coverBackground = preservedSpanClass === "rich-inline-book-cover" ? element.style.backgroundImage : "";
+      const bookId = inlineBook ? element.getAttribute("data-book-id") ?? "" : "";
+      const imageSource = element.tagName === "IMG" ? element.getAttribute("src") ?? "" : "";
+      const imageWidth = imageFrame ? element.style.width : element.tagName === "IMG" ? element.style.width : "";
       for (const attribute of Array.from(element.attributes)) element.removeAttribute(attribute.name);
+      if (element.tagName === "IMG" && imageSource.startsWith("data:image/")) {
+        element.setAttribute("src", imageSource);
+        element.setAttribute("alt", inlineImageAlt);
+        element.setAttribute("contenteditable", "false");
+        element.style.width = /^\d{1,3}(?:\.\d+)?%$/.test(imageWidth) ? imageWidth : "100%";
+        element.style.maxWidth = "100%";
+      }
+      if (spoiler) element.className = "spoiler";
+      if (preservedSpanClass) { element.className = preservedSpanClass; element.setAttribute("contenteditable", "false"); }
+      if (preservedSpanClass === "rich-inline-book-cover" && /^url\(["']?(?:https?:\/\/|\/uploads\/|data:image\/)/i.test(coverBackground)) element.style.backgroundImage = coverBackground;
+      if (imageFrame) { element.className = "rich-image-frame"; element.setAttribute("contenteditable", "false"); element.style.width = /^\d{1,3}(?:\.\d+)?%$/.test(imageWidth) ? imageWidth : "100%"; element.style.maxWidth = "100%"; }
+      if (inlineBook && /^\d+$/.test(bookId)) { element.className = "rich-inline-book"; element.setAttribute("data-book-id", bookId); element.setAttribute("contenteditable", "false"); }
       if (["left", "right", "center", "justify"].includes(textAlign)) element.style.textAlign = textAlign;
       if (["12px", "14px", "16px", "18px", "22px", "28px"].includes(fontSize)) element.style.fontSize = fontSize;
       clean(element);
     }
   };
   clean(template.content);
+  return template.innerHTML;
+}
+
+export function renderRichHtml(value: string, books: Array<LibraryBook | AuthorBook>, labels: { inlineImageAlt: string; noAnnotation: string }) {
+  const clean = sanitizeRichHtml(value, labels.inlineImageAlt);
+  if (typeof document === "undefined" || !clean || !books.length) return clean;
+  const template = document.createElement("template");
+  template.innerHTML = clean;
+  template.content.querySelectorAll<HTMLElement>(".rich-inline-book[data-book-id]").forEach((card) => {
+    const book = books.find((item) => item.id === Number(card.dataset.bookId));
+    if (!book) return;
+    card.replaceChildren();
+    const cover = document.createElement("span");
+    cover.className = `event-modal-book-cover rich-inline-book-cover library-cover-${book.coverTone || "blue"}`;
+    if (book.coverUrl) cover.style.backgroundImage = `url(${JSON.stringify(book.coverUrl)})`;
+    else cover.textContent = book.title.slice(0, 1);
+    const copy = document.createElement("span");
+    copy.className = "rich-inline-book-copy";
+    const title = document.createElement("strong");
+    title.textContent = book.title;
+    const author = document.createElement("small");
+    author.textContent = book.author;
+    const annotation = document.createElement("p");
+    annotation.textContent = book.annotation || labels.noAnnotation;
+    copy.append(title, author, annotation);
+    card.append(cover, copy);
+  });
   return template.innerHTML;
 }
 
@@ -45,35 +100,91 @@ export function normalizeBookKey(value: string) {
   return value.trim().toLocaleLowerCase("ru").replace(/[«»"'.,:;!?()[\]{}]/g, "").replace(/\s+/g, " ");
 }
 
+export function normalizeBookSearchText(value: string) {
+  return value.normalize("NFKC").toLocaleLowerCase("ru").replace(/[^\p{L}\p{N}]+/gu, " ").trim().replace(/\s+/g, " ");
+}
+
+export function matchesBookQuery(book: Pick<LibraryBook | AuthorBook, "title" | "author" | "annotation" | "isbn" | "publisher">, query: string) {
+  const tokens = normalizeBookSearchText(query).split(" ").filter(Boolean);
+  if (!tokens.length) return false;
+  const searchable = normalizeBookSearchText([book.title, book.author, book.annotation, book.isbn, book.publisher].filter(Boolean).join(" "));
+  return tokens.every((token) => searchable.includes(token));
+}
+
 export function catalogFromUsers(users: DemoUser[]) {
   const all = users.flatMap((user) => [...(user.authorBooks ?? []), ...user.books]);
   return all.filter((book, index) => all.findIndex((item) => item.id === book.id || (book.isbn && item.isbn === book.isbn) || (item.title.toLowerCase() === book.title.toLowerCase() && item.author.toLowerCase() === book.author.toLowerCase())) === index);
 }
 
+/** The database catalogue is authoritative; user libraries only enrich it for legacy data. */
+export function catalogFromSources(books: Array<LibraryBook | AuthorBook>, users: DemoUser[]) {
+  const all = [...books, ...catalogFromUsers(users)];
+  return all.filter((book, index) => all.findIndex((item) => item.id === book.id || (book.isbn && item.isbn === book.isbn) || (item.title.toLowerCase() === book.title.toLowerCase() && item.author.toLowerCase() === book.author.toLowerCase())) === index);
+}
+
+/** Canonical metadata always wins; only the authenticated viewer's relation is overlaid. */
+export function resolveViewerBook(source: LibraryBook | AuthorBook, catalog: Array<LibraryBook | AuthorBook>, viewer?: DemoUser): LibraryBook | AuthorBook {
+  const canonicalId = source.catalogBookId ?? source.id;
+  const canonical = catalog.find((book) => (book.catalogBookId ?? book.id) === canonicalId) ?? source;
+  const relation = viewer?.books.find((book) => (book.catalogBookId ?? book.id) === canonicalId);
+  if (!relation) return canonical;
+  return {
+    ...canonical,
+    id: canonical.id,
+    catalogBookId: canonical.catalogBookId ?? canonical.id,
+    rating: relation.rating,
+    review: relation.review,
+    readMonth: relation.readMonth,
+    readYear: relation.readYear,
+    readingStatus: relation.readingStatus,
+    topRank: relation.topRank,
+    lastReadChapter: relation.lastReadChapter,
+    readingComment: relation.readingComment,
+    chaptersCurrent: relation.chaptersCurrent,
+    chaptersTotal: relation.chaptersTotal,
+    pagesCurrent: relation.pagesCurrent,
+    pagesTotal: relation.pagesTotal,
+    progressUnit: relation.progressUnit,
+    progressPercent: relation.progressPercent,
+    postponedMonth: relation.postponedMonth,
+    postponedYear: relation.postponedYear,
+    postponedOverdue: relation.postponedOverdue,
+    hasCompletedReading: relation.hasCompletedReading,
+  } as LibraryBook;
+}
+
 export function reviewReadingItemById(users: DemoUser[], id: number): ReadingItem | null {
   for (const user of users) {
     const review = user.reviews.find((item) => item.id === id);
-    if (review) return { id: review.id, kind: "review", title: review.bookTitle, author: user.profile.name, text: review.fullText, ownerId: user.id, createdAt: review.createdAt, preview: review.preview, bookAuthor: review.bookAuthor };
+    if (review) return { id: review.id, kind: "review", title: review.bookTitle, author: user.profile.name, text: review.fullText, bodyHtml: review.bodyHtml, linkedBookId: review.bookId, ownerId: user.id, createdAt: review.createdAt, preview: review.preview, bookAuthor: review.bookAuthor, rating: review.rating, mentions: review.mentions, isAdult: review.isAdult };
   }
   return null;
 }
 
-export function excerptReadingItemById(users: DemoUser[], id: number): ReadingItem | null {
+export function excerptReadingItemById(users: DemoUser[], id: number, fallbackTitle: string): ReadingItem | null {
   for (const user of users) {
     const excerpt = (user.excerpts ?? []).find((item) => item.id === id);
-    if (excerpt) return { id: excerpt.id, kind: "excerpt", title: excerpt.bookTitle || "Публикация", author: user.profile.name, text: excerpt.text, preview: excerpt.previewText, bodyHtml: excerpt.bodyHtml, linkedBookId: excerpt.bookId, ownerId: user.id, createdAt: excerpt.createdAt };
+    if (excerpt) return { id: excerpt.id, kind: "excerpt", title: excerpt.bookTitle || fallbackTitle, author: user.profile.name, text: excerpt.text, preview: excerpt.previewText, bodyHtml: excerpt.bodyHtml, linkedBookId: excerpt.bookId, linkedBookIds: excerpt.bookIds, ownerId: user.id, createdAt: excerpt.createdAt, mentions: excerpt.mentions, isAdult: excerpt.isAdult };
   }
   return null;
 }
 
-export function resolveCanonicalBook(book: LibraryBook | AuthorBook, users: DemoUser[]): LibraryBook | AuthorBook {
-  const sameBook = (item: LibraryBook | AuthorBook) => item.id === book.id || Boolean(book.isbn && item.isbn === book.isbn) || (item.title.toLowerCase() === book.title.toLowerCase() && item.author.toLowerCase() === book.author.toLowerCase());
+export function resolveCanonicalBook(book: LibraryBook | AuthorBook, users: DemoUser[], catalog: Array<LibraryBook | AuthorBook> = []): LibraryBook | AuthorBook {
+  const canonicalId = book.catalogBookId ?? book.id;
+  const sameBook = (item: LibraryBook | AuthorBook) => (item.catalogBookId ?? item.id) === canonicalId || Boolean(book.isbn && item.isbn === book.isbn) || (item.title.toLowerCase() === book.title.toLowerCase() && item.author.toLowerCase() === book.author.toLowerCase());
+  const authoritativeCatalogBook = catalog.find(sameBook);
   const writerBook = users.flatMap((user) => user.authorBooks ?? []).find(sameBook);
   if (writerBook) {
     const links = [...writerBook.links, ...(book.links ?? [])].filter((link, index, all) => all.findIndex((item) => item.url === link.url) === index);
-    return { ...book, ...writerBook, links } as LibraryBook & AuthorBook;
+    // Catalogue aggregates describe the book, not a particular owner's
+    // relation. Keep them authoritative when an author card is also present.
+    const aggregate = authoritativeCatalogBook ? {
+      ratingCount: authoritativeCatalogBook.ratingCount,
+      averageRating: authoritativeCatalogBook.averageRating,
+    } : {};
+    return { ...book, ...writerBook, ...aggregate, links } as LibraryBook & AuthorBook;
   }
-  return catalogFromUsers(users).find(sameBook) ?? book;
+  return authoritativeCatalogBook ?? catalogFromSources(catalog, users).find(sameBook) ?? book;
 }
 
 export function formatKazakhstanPhone(value: string) {

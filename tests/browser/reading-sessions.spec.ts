@@ -1,0 +1,52 @@
+import { expect, loginAs, test } from "./fixtures";
+
+test.beforeEach(async ({ resetDemo }) => { await resetDemo(); });
+test.afterEach(async ({ browserDiagnostics }) => { await browserDiagnostics.assertNoErrors(); });
+
+test("personal book timer restores and manual sessions can be managed", async ({ page }) => {
+  await loginAs(page, 3, "/profile/library");
+  const bootstrap = await (await page.request.get("/api/bootstrap")).json() as { users: Array<{ id: number; books: Array<{ id: number; catalogBookId?: number; isAdult?: boolean }> }> };
+  const firstBook = bootstrap.users.find((user) => user.id === 3)?.books.find((book) => !book.isAdult);
+  expect(firstBook).toBeTruthy();
+  await page.locator(".library-grid .library-book").first().click();
+  const modal = page.locator(".unified-book-modal");
+  await expect(modal).toBeVisible();
+  await modal.getByRole("button", { name: /^Читать/ }).click();
+  const focus = page.getByRole("region", { name: /Чтение:/ });
+  await expect(focus).toBeVisible();
+  await expect(focus.locator("output")).toHaveText("00:00:00");
+  await focus.getByRole("button", { name: "▶ Пуск" }).click();
+  await expect(focus.getByRole("button", { name: "Пауза" })).toBeVisible();
+  const presence = focus.locator(".reading-presence-field");
+  await expect(presence).toBeVisible();
+  const presenceBounds = await presence.evaluate((node) => { const bounds = node.getBoundingClientRect(); return { left: bounds.left, right: bounds.right, width: bounds.width, scrollWidth: node.scrollWidth, clientWidth: node.clientWidth }; });
+  expect(presenceBounds.left).toBeGreaterThanOrEqual(-1);
+  expect(presenceBounds.right).toBeLessThanOrEqual(await page.evaluate(() => window.innerWidth + 1));
+  expect(presenceBounds.scrollWidth).toBeLessThanOrEqual(presenceBounds.clientWidth);
+  await page.reload();
+  await expect(page.getByRole("region", { name: /Чтение:/ })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Пауза" })).toBeVisible();
+  await page.getByRole("button", { name: "Пауза" }).click();
+  await expect(page.getByRole("button", { name: "Продолжить", exact: true })).toBeVisible();
+  await page.getByRole("button", { name: "Продолжить", exact: true }).click();
+  page.on("dialog", (dialog) => dialog.accept());
+  await page.getByRole("button", { name: "Стоп" }).click();
+  await expect(page.getByRole("region", { name: /Чтение:/ })).toHaveCount(0);
+
+  const reopened = page.locator(".unified-book-modal");
+  await reopened.getByRole("button", { name: "Сессии чтения" }).click();
+  const history = page.getByRole("dialog", { name: "Сессии чтения" });
+  await expect(history).toBeVisible();
+  await history.getByLabel("Когда").fill(new Date().toISOString().slice(0, 10));
+  await history.getByLabel("Минуты").fill("0");
+  await history.getByLabel("Секунды").fill("45");
+  await history.getByRole("button", { name: "Добавить", exact: true }).click();
+  await expect(history.getByText("00:00:45")).toBeVisible();
+  await history.locator(".reading-session-list article").filter({ hasText: "00:00:45" }).getByRole("button", { name: "Изменить сессию" }).click();
+  await history.getByLabel("Секунды").fill("50");
+  await history.getByRole("button", { name: "Сохранить", exact: true }).click();
+  await expect(history.getByText("00:00:50")).toBeVisible();
+  await history.locator(".reading-session-list article").filter({ hasText: "00:00:50" }).getByRole("button", { name: "Удалить сессию" }).click();
+  await expect(history.locator(".reading-session-list article")).toHaveCount(1);
+  await expect(history.getByText("00:00:50")).toHaveCount(0);
+});

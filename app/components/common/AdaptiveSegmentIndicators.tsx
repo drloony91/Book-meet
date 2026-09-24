@@ -3,8 +3,6 @@
 import { useEffect } from "react";
 
 const CONTROL_SELECTOR = [
-  ".library-status-filter",
-  ".book-reading-status",
   ".profile-social-switch",
   ".view-switcher",
 ].join(",");

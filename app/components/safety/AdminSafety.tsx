@@ -1,22 +1,26 @@
-import { FormEvent, useMemo, useState } from "react";
+import { FormEvent, useEffect, useMemo, useState } from "react";
+import { localizedApiError, useI18n, type Translate } from "../../i18n";
 import type { DemoUser, SafetyReport } from "../../types/domain";
+import { apiFetch } from "../../services/api";
 
 function materialPath(report: SafetyReport) {
-  const roots: Record<string, string> = { book: "books", review: "reviews", excerpt: "blog", event: "events", occasion: "meet", publisher_news: "publishing" };
+  if (report.targetKind === "book_note") return report.noteBookId ? `/books/${report.noteBookId}` : "";
+  if (report.targetKind === "marketplace_listing" || report.targetKind === "marketplace_conversation") return "";
+  const roots: Record<string, string> = { book: "books", review: "reviews", excerpt: "blog", event: "events", occasion: "meet", publisher_news: "publishing", shelf: "shelves" };
   if (report.targetKind === "comment" && report.materialKind && report.materialId) return `/${roots[report.materialKind] ?? ""}/${report.materialId}`;
   if (report.targetKind === "chat") return "";
   return report.targetKind === "user" ? `/users/${report.targetId}` : `/${roots[report.targetKind] ?? ""}/${report.targetId}`;
 }
 
-function reportObjectLabel(report: SafetyReport) {
-  if (report.targetKind === "user") return `на пользователя ${report.targetUserName ?? ""}`;
-  if (report.targetKind === "chat") return `на диалог с ${report.targetUserName ?? "пользователем"}`;
-  if (report.targetKind === "comment") return `на комментарий пользователя ${report.targetUserName ?? ""}`;
-  return `на материал «${report.targetTitle ?? "Без названия"}»`;
+function reportObjectLabel(report: SafetyReport, t: Translate) {
+  if (report.targetKind === "user") return t("admin.reportOnUser", { name: report.targetUserName ?? "" });
+  if (report.targetKind === "chat") return t("admin.reportOnChat", { name: report.targetUserName ?? t("material.user") });
+  if (report.targetKind === "comment") return t("admin.reportOnComment", { name: report.targetUserName ?? "" });
+  return t("admin.reportOnMaterial", { title: report.targetTitle ?? t("book.untitled") });
 }
 
 export function AdminSafetySection({ mode, reports, users, onBack, onOpenUser, onOpenChat, onRefresh }: {
-  mode: "reports-new" | "reports-reviewed" | "users-active" | "users-blocked";
+  mode: "reports-new" | "reports-reviewed" | "users-active" | "users-blocked" | "users-deleted";
   reports: SafetyReport[];
   users: DemoUser[];
   onBack: () => void;
@@ -24,6 +28,7 @@ export function AdminSafetySection({ mode, reports, users, onBack, onOpenUser, o
   onOpenChat: (id: number) => void;
   onRefresh: () => void;
 }) {
+  const { t, domainLabel, formatDate, formatNumber } = useI18n();
   const [selected, setSelected] = useState<SafetyReport | null>(null);
   const [deleteReason, setDeleteReason] = useState("");
   const [deleting, setDeleting] = useState(false);
@@ -31,40 +36,80 @@ export function AdminSafetySection({ mode, reports, users, onBack, onOpenUser, o
   const [permanent, setPermanent] = useState(false);
   const [days, setDays] = useState(7);
   const [suspensionReason, setSuspensionReason] = useState("");
+  const [motivatedResponse, setMotivatedResponse] = useState("");
+  const [restrictingSeller, setRestrictingSeller] = useState(false);
+  const [liftingSeller, setLiftingSeller] = useState(false);
+  const [restrictionReason, setRestrictionReason] = useState("");
+  const [liftReason, setLiftReason] = useState("");
+  const [restrictionUntil, setRestrictionUntil] = useState("");
+  const [sellerRestriction, setSellerRestriction] = useState<{ reason: string; until: string | null } | null>(null);
+  const [actionError, setActionError] = useState("");
   const [view, setView] = useState<"grid" | "list">("grid");
-  const shownReports = reports.filter((item) => item.status === (mode === "reports-new" ? "new" : "reviewed"));
-  const shownUsers = useMemo(() => users.filter((user) => !user.isAdmin && (mode === "users-blocked" ? Boolean(user.suspension) : !user.suspension)), [users, mode]);
+  const shownReports = reports.filter((item) => mode === "reports-new" ? ["new", "reviewing"].includes(item.status) : ["satisfied", "rejected"].includes(item.status));
+  const shownUsers = useMemo(() => users.filter((user) => !user.isAdmin && (mode === "users-deleted" ? Boolean(user.deletedAt && !user.purged) : !user.deletedAt && !user.purged && (mode === "users-blocked" ? Boolean(user.suspension) : !user.suspension))), [users, mode]);
+  useEffect(() => {
+    if (selected?.targetKind !== "marketplace_listing" || !selected.targetUserId) return;
+    let active = true;
+    apiFetch(`/api/admin/marketplace/sellers/${selected.targetUserId}/restriction`, { cache: "no-store" })
+      .then(async (response) => {
+        const data = await response.json() as { restriction?: { reason: string; until: string | null }; error?: string };
+        if (!response.ok) throw new Error(data.error ?? t("common.actionError"));
+        if (active) setSellerRestriction(data.restriction ?? null);
+      })
+      .catch((error) => { if (active) setActionError(error instanceof Error ? error.message : t("common.actionError")); });
+    return () => { active = false; };
+  }, [selected?.targetKind, selected?.targetUserId]);
 
   async function action(url: string, options: RequestInit = {}) {
-    const response = await fetch(url, { credentials: "same-origin", ...options, headers: { "content-type": "application/json", ...(options.headers ?? {}) } });
-    const data = await response.json().catch(() => ({})) as { error?: string };
-    if (!response.ok) throw new Error(data.error || "Не удалось выполнить действие");
-    setSelected(null);
-    setDeleting(false);
-    setSuspending(false);
-    onRefresh();
+    try {
+      setActionError("");
+      const response = await apiFetch(url, { credentials: "same-origin", ...options, headers: { "content-type": "application/json", ...(options.headers ?? {}) } });
+      const data = await response.json().catch(() => ({})) as { error?: string };
+      if (!response.ok) throw new Error(localizedApiError(data.error, t("common.actionError")));
+      setSelected(null);
+      setDeleting(false);
+      setSuspending(false);
+      setRestrictingSeller(false);
+      setLiftingSeller(false);
+      onRefresh();
+    } catch (error) { setActionError(error instanceof Error ? error.message : t("common.actionError")); }
   }
 
-  if (mode === "users-active" || mode === "users-blocked") return <div className="admin-safety-page">
-    <button className="back-button" type="button" onClick={onBack}>← В админку</button>
-    <div className="admin-catalog-heading"><div><span className="section-subtitle">Пользователи</span><h1>{mode === "users-blocked" ? "Заблокированные пользователи" : "Активные пользователи"}</h1><p>{shownUsers.length} профилей</p></div><div className="admin-user-view-toggle"><button className={view === "grid" ? "active" : ""} type="button" onClick={() => setView("grid")}>Плитка</button><button className={view === "list" ? "active" : ""} type="button" onClick={() => setView("list")}>Список</button></div></div>
-    <div className={`admin-user-directory ${view}`}>{shownUsers.map((user) => <article key={user.id} onClick={() => onOpenUser(user.id)}><span className={`avatar avatar-sm avatar-${user.color}`}>{user.initials}</span><div><strong>{user.profile.name}</strong><p>{user.profile.type} · {user.profile.city}</p>{user.suspension && <small>{user.suspension.permanent ? "Бессрочно" : `До ${new Date(user.suspension.until ?? "").toLocaleDateString("ru-RU")}`} · {user.suspension.reason}</small>}</div>{user.suspension && <button className="outline-button" type="button" onClick={(event) => { event.stopPropagation(); void action(`/api/admin/users/${user.id}/suspension`, { method: "DELETE" }); }}>Разблокировать</button>}</article>)}</div>
+  if (mode === "users-active" || mode === "users-blocked" || mode === "users-deleted") return <div className="admin-safety-page">
+    <button className="back-button" type="button" onClick={onBack}>← {t("admin.backToAdmin")}</button>
+    <div className="admin-catalog-heading"><div><span className="section-subtitle">{t("admin.users")}</span><h1>{mode === "users-deleted" ? t("admin.deletedUsers") : mode === "users-blocked" ? t("admin.blockedUsers") : t("admin.activeUsers")}</h1><p>{t("admin.profileCount", { count: formatNumber(shownUsers.length) })}</p></div><div className="admin-user-view-toggle"><button className={view === "grid" ? "active" : ""} type="button" onClick={() => setView("grid")}>{t("admin.gridView")}</button><button className={view === "list" ? "active" : ""} type="button" onClick={() => setView("list")}>{t("admin.listView")}</button></div></div>
+    <div className={`admin-user-directory ${view}`}>{shownUsers.map((user) => <article key={user.id} onClick={() => onOpenUser(user.id)}><span className={`avatar avatar-sm avatar-${user.color}`}>{user.initials}</span><div><strong data-i18n-skip>{user.profile.name}</strong><p><span>{domainLabel(user.profile.type)}</span> · <span data-i18n-skip>{user.profile.city}</span></p>{user.suspension && <small>{user.suspension.permanent ? t("admin.indefinitely") : t("admin.untilDate", { date: formatDate(user.suspension.until ?? "") })} · <span data-i18n-skip>{user.suspension.reason}</span></small>}{mode === "users-deleted" && <small>{user.purged ? t("admin.deletedPermanently") : t("admin.storedUntil", { date: formatDate(user.deletionExpiresAt ?? "") })}</small>}</div>{user.suspension && <button className="outline-button" type="button" onClick={(event) => { event.stopPropagation(); void action(`/api/admin/users/${user.id}/suspension`, { method: "DELETE" }); }}>{t("admin.unblock")}</button>}{mode === "users-deleted" && !user.purged && <div className="admin-deleted-user-actions"><button className="outline-button" type="button" title={t("admin.restoreProfile")} aria-label={t("admin.restoreProfile")} onClick={(event) => { event.stopPropagation(); void action(`/api/admin/users/${user.id}/restore`, { method: "POST" }); }}>↶</button><button className="quiet-danger-button" type="button" title={t("admin.deletePermanently")} aria-label={t("admin.deletePermanently")} onClick={(event) => { event.stopPropagation(); if (window.confirm(t("admin.deleteProfilePermanentlyConfirm"))) void action(`/api/admin/users/${user.id}/permanent`, { method: "DELETE" }); }}>🗑</button></div>}</article>)}</div>
   </div>;
 
   return <div className="admin-safety-page">
-    <button className="back-button" type="button" onClick={onBack}>← В админку</button>
-    <div className="profile-title-row"><div><span className="section-subtitle">Все жалобы</span><h1>{mode === "reports-new" ? "Новые жалобы" : "Просмотренные жалобы"}</h1><p>{shownReports.length} жалоб</p></div></div>
-    <div className="admin-report-list">{shownReports.map((report) => <button type="button" key={report.id} onClick={() => setSelected(report)}><span>Жалоба № {report.id}</span><strong>{report.reporterName} пожаловался(ась) {reportObjectLabel(report)}</strong><small>{new Date(report.createdAt).toLocaleString("ru-RU")}</small></button>)}</div>
-    {!shownReports.length && <div className="profile-tab-placeholder">В этом разделе жалоб нет.</div>}
+    <button className="back-button" type="button" onClick={onBack}>← {t("admin.backToAdmin")}</button>
+    <div className="profile-title-row"><div><span className="section-subtitle">{t("admin.allReports")}</span><h1>{mode === "reports-new" ? t("admin.newReports") : t("admin.reviewedReports")}</h1><p>{t("admin.reportCount", { count: formatNumber(shownReports.length) })}</p></div></div>
+    <div className="admin-report-list">{shownReports.map((report) => { const remaining = report.dueAt ? Math.ceil((new Date(report.dueAt).getTime() - Date.now()) / 86_400_000) : null; return <button type="button" key={report.id} onClick={() => { setActionError(""); setSellerRestriction(null); setSelected(report); }}><span data-i18n-skip>{report.reference ?? t("admin.reportNumber", { id: report.id })}</span><strong data-i18n-skip>{report.reporterName} {reportObjectLabel(report, t)}</strong><small>{formatDate(report.createdAt, { dateStyle: "medium", timeStyle: "short" })}</small>{remaining !== null && ["new", "reviewing"].includes(report.status) && <b className={remaining < 0 ? "report-overdue" : "report-deadline"}>{remaining < 0 ? t("safety.overdue", { days: Math.abs(remaining) }) : t("safety.daysRemaining", { days: remaining })}</b>}</button>; })}</div>
+    {!shownReports.length && <div className="profile-tab-placeholder">{t("admin.noReports")}</div>}
     {selected && <div className="modal-backdrop" onMouseDown={() => setSelected(null)}><section className="admin-report-modal" onMouseDown={(event) => event.stopPropagation()}>
-      <button className="modal-close" type="button" onClick={() => setSelected(null)}>×</button>
-      <span className="section-subtitle">Жалоба № {selected.id}</span><h2>{selected.targetKind === "user" ? "Жалоба на пользователя" : selected.targetKind === "chat" ? "Жалоба на диалог" : selected.targetKind === "comment" ? "Жалоба на комментарий" : "Жалоба на материал"}</h2>
-      <dl><dt>Пожаловался</dt><dd><button type="button" onClick={() => onOpenUser(selected.reporterId)}>{selected.reporterName}</button></dd><dt>Объект жалобы</dt><dd>{selected.targetKind === "chat" ? selected.targetTitle : <a href={materialPath(selected)}>{selected.targetTitle ?? selected.targetUserName ?? "Открыть материал"}</a>}</dd><dt>Текст жалобы</dt><dd>{selected.reason}</dd></dl>
-      {selected.targetKind === "comment" && <section className="admin-reported-comment"><strong>Комментарий пользователя {selected.targetUserName}</strong><p>{selected.commentText ?? "Комментарий был удалён."}</p>{selected.materialKind && selected.materialId && <a className="outline-button" href={materialPath(selected)}>Перейти к материалу</a>}</section>}
-      {selected.targetKind === "chat" && <section className="admin-reported-conversation"><h3>Диалог на момент жалобы</h3><div>{(selected.conversationMessages ?? []).map((message) => { const sender = users.find((user) => user.id === message.senderId); return <article key={message.id}><strong>{sender?.profile.name ?? "Система"}</strong><small>{message.createdAt ? new Date(message.createdAt).toLocaleString("ru-RU") : message.time}</small><p>{message.text}</p></article>; })}{!(selected.conversationMessages ?? []).length && <p>В диалоге нет сообщений.</p>}</div></section>}
-      {selected.status === "new" && <div className="admin-event-actions"><button className="outline-button" type="button" onClick={() => selected.targetUserId && onOpenChat(selected.targetUserId)}>Написать пользователю</button>{selected.targetKind === "user" ? <button className="danger-button" type="button" onClick={() => setSuspending(true)}>Заблокировать</button> : !["chat", "comment"].includes(selected.targetKind) ? <button className="danger-button" type="button" onClick={() => setDeleting(true)}>Удалить материал</button> : null}<button className="primary-button" type="button" onClick={() => void action(`/api/admin/reports/${selected.id}/processed`, { method: "PATCH" })}>Обработано</button></div>}
+      <button className="modal-close" type="button" aria-label={t("common.close")} onClick={() => setSelected(null)}>×</button>
+      <span className="section-subtitle" data-i18n-skip>{selected.reference ?? t("admin.reportNumber", { id: selected.id })}</span><h2>{selected.targetKind === "user" ? t("safety.user") : selected.targetKind === "chat" || selected.targetKind === "marketplace_conversation" ? t("safety.chat") : selected.targetKind === "comment" ? t("safety.comment") : t("safety.material")}</h2>
+      <dl><dt>{t("admin.reporter")}</dt><dd>{selected.reporterId ? <button type="button" data-i18n-skip onClick={() => onOpenUser(selected.reporterId!)}>{selected.reporterName}</button> : <span>{t("profile.deletedTitle")}</span>}</dd><dt>{t("admin.reportObject")}</dt><dd data-i18n-skip>{materialPath(selected) ? <a href={materialPath(selected)}>{selected.targetTitle ?? selected.targetUserName ?? t("admin.openMaterial")}</a> : <span>{selected.targetTitle ?? selected.targetUserName ?? t("admin.openMaterial")}</span>}</dd><dt>{t("admin.reportText")}</dt><dd data-i18n-skip>{selected.reason}</dd><dt>{t("safety.status")}</dt><dd>{t(`safety.status.${selected.status}` as never)}</dd>{selected.motivatedResponse && <><dt>{t("safety.motivatedResponse")}</dt><dd data-i18n-skip>{selected.motivatedResponse}</dd></>}</dl>
+      {actionError && !deleting && !restrictingSeller && !liftingSeller && <p className="marketplace-notice" role="alert">{actionError}</p>}
+      {sellerRestriction && selected.targetKind === "marketplace_listing" && <p>{t("marketplace.admin.currentRestriction", { reason: sellerRestriction.reason })}</p>}
+      {selected.targetKind === "book_note" && <section className="admin-reported-comment"><strong>{t("notes.title")}</strong><p className="book-note-body" data-i18n-skip>{selected.noteText ?? t("admin.commentDeleted")}</p></section>}
+      {selected.targetKind === "comment" && <section className="admin-reported-comment"><strong>{t("admin.userCommentBy", { name: selected.targetUserName ?? "" })}</strong><p data-i18n-skip>{selected.commentText ?? t("admin.commentDeleted")}</p>{selected.materialKind && selected.materialId && <a className="outline-button" href={materialPath(selected)}>{t("admin.goToMaterial")}</a>}</section>}
+      {(selected.targetKind === "chat" || selected.targetKind === "marketplace_conversation") && <section className="admin-reported-conversation"><h3>{t("admin.reportedConversation")}</h3><div>{(selected.conversationMessages ?? []).map((message) => { const sender = users.find((user) => user.id === message.senderId); return <article key={message.id}><strong data-i18n-skip>{sender?.profile.name ?? t("admin.system")}</strong><small>{message.createdAt ? formatDate(message.createdAt, { dateStyle: "medium", timeStyle: "short" }) : message.time}</small><p data-i18n-skip>{message.text}</p></article>; })}{!(selected.conversationMessages ?? []).length && <p>{t("admin.noConversationMessages")}</p>}</div></section>}
+      {["new", "reviewing"].includes(selected.status) && <>
+        <label>{t("safety.motivatedResponse")}<textarea required rows={5} value={motivatedResponse} onChange={(event) => setMotivatedResponse(event.target.value)} /></label>
+        <div className="admin-event-actions">
+          <button className="outline-button" type="button" onClick={() => selected.targetUserId && onOpenChat(selected.targetUserId)}>{t("admin.messageUser")}</button>
+          {selected.targetKind === "user" ? <button className="danger-button" type="button" onClick={() => setSuspending(true)}>{t("admin.block")}</button> : !["chat", "comment", "marketplace_conversation"].includes(selected.targetKind) ? <button className="danger-button" type="button" onClick={() => setDeleting(true)}>{selected.targetKind === "marketplace_listing" ? t("marketplace.admin.removeListing") : t("admin.deleteMaterial")}</button> : null}
+          {selected.targetKind === "marketplace_listing" && selected.targetUserId && (sellerRestriction ? <button className="outline-button" type="button" onClick={() => setLiftingSeller(true)}>{t("marketplace.admin.liftRestriction")}</button> : <button className="outline-button" type="button" onClick={() => setRestrictingSeller(true)}>{t("marketplace.admin.restrictSeller")}</button>)}
+          {selected.status === "new" && <button className="outline-button" type="button" onClick={() => void action(`/api/admin/reports/${selected.id}`, { method: "PATCH", body: JSON.stringify({ status: "reviewing" }) })}>{t("safety.takeReview")}</button>}
+          <button className="primary-button" disabled={!motivatedResponse.trim()} type="button" onClick={() => void action(`/api/admin/reports/${selected.id}`, { method: "PATCH", body: JSON.stringify({ status: "satisfied", response: motivatedResponse }) })}>{t("safety.satisfy")}</button>
+          <button className="outline-button" disabled={!motivatedResponse.trim()} type="button" onClick={() => void action(`/api/admin/reports/${selected.id}`, { method: "PATCH", body: JSON.stringify({ status: "rejected", response: motivatedResponse }) })}>{t("safety.reject")}</button>
+        </div>
+      </>}
     </section></div>}
-    {deleting && selected && <div className="nested-modal-backdrop" onMouseDown={() => setDeleting(false)}><form className="safety-action-modal" onSubmit={(event) => { event.preventDefault(); void action(`/api/admin/reports/${selected.id}/delete-material`, { method: "POST", body: JSON.stringify({ reason: deleteReason }) }); }} onMouseDown={(event) => event.stopPropagation()}><h2>Удалить материал</h2><label>Причина удаления<textarea required rows={5} value={deleteReason} onChange={(event) => setDeleteReason(event.target.value)} /></label><div className="form-actions"><button className="danger-button" type="submit">Удалить</button><button className="outline-button" type="button" onClick={() => setDeleting(false)}>Отмена</button></div></form></div>}
-    {suspending && selected && <div className="nested-modal-backdrop" onMouseDown={() => setSuspending(false)}><form className="safety-action-modal" onSubmit={(event: FormEvent) => { event.preventDefault(); void action(`/api/admin/users/${selected.targetId}/suspension`, { method: "POST", body: JSON.stringify({ permanent, days, reason: suspensionReason, reportId: selected.id }) }); }} onMouseDown={(event) => event.stopPropagation()}><h2>Заблокировать пользователя</h2><div className="suspension-mode"><button className={!permanent ? "active" : ""} type="button" onClick={() => setPermanent(false)}>Временно</button><button className={permanent ? "active" : ""} type="button" onClick={() => setPermanent(true)}>Навсегда</button></div>{!permanent && <label>Количество дней<input type="number" min={1} max={3650} value={days} onChange={(event) => setDays(Number(event.target.value))} /></label>}<label>Причина блокировки<textarea required rows={5} value={suspensionReason} onChange={(event) => setSuspensionReason(event.target.value)} /></label><div className="form-actions"><button className="danger-button" type="submit">Заблокировать</button><button className="outline-button" type="button" onClick={() => setSuspending(false)}>Отмена</button></div></form></div>}
+    {deleting && selected && <div className="nested-modal-backdrop" onMouseDown={() => setDeleting(false)}><form className="safety-action-modal" onSubmit={(event) => { event.preventDefault(); void action(selected.targetKind === "marketplace_listing" ? `/api/admin/marketplace/listings/${selected.targetId}/moderation` : `/api/admin/reports/${selected.id}/delete-material`, { method: selected.targetKind === "marketplace_listing" ? "PATCH" : "POST", body: JSON.stringify({ reason: deleteReason }) }); }} onMouseDown={(event) => event.stopPropagation()}><h2>{selected.targetKind === "marketplace_listing" ? t("marketplace.admin.removeListing") : t("admin.deleteMaterial")}</h2><label>{t("admin.deleteReason")}<textarea required rows={5} value={deleteReason} onChange={(event) => setDeleteReason(event.target.value)} /></label>{actionError && <p className="marketplace-notice" role="alert">{actionError}</p>}<div className="form-actions"><button className="danger-button" type="submit">{selected.targetKind === "marketplace_listing" ? t("marketplace.admin.removeListing") : t("common.delete")}</button><button className="outline-button" type="button" onClick={() => setDeleting(false)}>{t("common.cancel")}</button></div></form></div>}
+    {restrictingSeller && selected?.targetKind === "marketplace_listing" && selected.targetUserId && <div className="nested-modal-backdrop" onMouseDown={() => setRestrictingSeller(false)}><form className="safety-action-modal" onSubmit={(event) => { event.preventDefault(); void action(`/api/admin/marketplace/sellers/${selected.targetUserId}/restriction`, { method: "POST", body: JSON.stringify({ reason: restrictionReason, ...(restrictionUntil ? { until: new Date(restrictionUntil).toISOString() } : {}) }) }); }} onMouseDown={(event) => event.stopPropagation()}><h2>{t("marketplace.admin.restrictSeller")}</h2><p>{t("marketplace.admin.restrictionHint")}</p><label>{t("marketplace.admin.reason")}<textarea required maxLength={2000} rows={4} value={restrictionReason} onChange={(event) => setRestrictionReason(event.target.value)} /></label><label>{t("marketplace.admin.restrictionUntil")}<input type="datetime-local" value={restrictionUntil} onChange={(event) => setRestrictionUntil(event.target.value)} /></label>{actionError && <p className="marketplace-notice" role="alert">{actionError}</p>}<div className="form-actions"><button className="danger-button" type="submit">{t("marketplace.admin.applyRestriction")}</button><button className="outline-button" type="button" onClick={() => setRestrictingSeller(false)}>{t("common.cancel")}</button></div></form></div>}
+    {liftingSeller && selected?.targetKind === "marketplace_listing" && selected.targetUserId && <div className="nested-modal-backdrop" onMouseDown={() => setLiftingSeller(false)}><form className="safety-action-modal" onSubmit={(event) => { event.preventDefault(); void action(`/api/admin/marketplace/sellers/${selected.targetUserId}/restriction`, { method: "DELETE", body: JSON.stringify({ reason: liftReason }) }); }} onMouseDown={(event) => event.stopPropagation()}><h2>{t("marketplace.admin.liftRestriction")}</h2><label>{t("marketplace.admin.reason")}<textarea required maxLength={2000} rows={4} value={liftReason} onChange={(event) => setLiftReason(event.target.value)} /></label>{actionError && <p className="marketplace-notice" role="alert">{actionError}</p>}<div className="form-actions"><button className="primary-button" type="submit">{t("marketplace.admin.liftRestriction")}</button><button className="outline-button" type="button" onClick={() => setLiftingSeller(false)}>{t("common.cancel")}</button></div></form></div>}
+    {suspending && selected && <div className="nested-modal-backdrop" onMouseDown={() => setSuspending(false)}><form className="safety-action-modal" onSubmit={(event: FormEvent) => { event.preventDefault(); void action(`/api/admin/users/${selected.targetId}/suspension`, { method: "POST", body: JSON.stringify({ permanent, days, reason: suspensionReason, reportId: selected.id }) }); }} onMouseDown={(event) => event.stopPropagation()}><h2>{t("admin.blockUser")}</h2><div className="suspension-mode"><button className={!permanent ? "active" : ""} type="button" onClick={() => setPermanent(false)}>{t("admin.temporarily")}</button><button className={permanent ? "active" : ""} type="button" onClick={() => setPermanent(true)}>{t("admin.forever")}</button></div>{!permanent && <label>{t("admin.daysCount")}<input type="number" min={1} max={3650} value={days} onChange={(event) => setDays(Number(event.target.value))} /></label>}<label>{t("admin.blockReason")}<textarea required rows={5} value={suspensionReason} onChange={(event) => setSuspensionReason(event.target.value)} /></label><div className="form-actions"><button className="danger-button" type="submit">{t("admin.block")}</button><button className="outline-button" type="button" onClick={() => setSuspending(false)}>{t("common.cancel")}</button></div></form></div>}
   </div>;
 }

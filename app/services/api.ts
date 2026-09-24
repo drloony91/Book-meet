@@ -1,25 +1,19 @@
+import { currentLocale } from "../i18n";
+
 export async function apiFetch(input: RequestInfo | URL, init: RequestInit = {}) {
-  return fetch(input, {
+  const locale = currentLocale();
+  const timezone = Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC";
+  const localeHeaders = { "Accept-Language": locale, "X-BookMeet-Locale": locale, "X-BookMeet-Timezone": timezone };
+  const response = await fetch(input, {
     credentials: "same-origin",
     ...init,
     headers: init.body && !(init.body instanceof FormData)
-      ? { "content-type": "application/json", ...init.headers }
-      : init.headers,
+      ? { "content-type": "application/json", ...localeHeaders, ...init.headers }
+      : { ...localeHeaders, ...init.headers },
   });
-}
-
-export async function apiJson<T>(input: RequestInfo | URL, init: RequestInit = {}): Promise<T> {
-  const response = await apiFetch(input, init);
-  const data = await response.json().catch(() => ({})) as T;
-  if (!response.ok) {
-    const message = typeof data === "object" && data && "error" in data
-      ? String((data as { error?: unknown }).error || "Ошибка запроса")
-      : "Ошибка запроса";
-    throw Object.assign(new Error(message), { response, data });
+  if (response.status === 428) {
+    const payload = await response.clone().json().catch(() => ({})) as { code?: string };
+    if (payload.code === "PROFILE_COMPLETION_REQUIRED") window.dispatchEvent(new CustomEvent("bookmeet:profile-completion-required"));
   }
-  return data;
-}
-
-export function jsonBody(value: unknown) {
-  return JSON.stringify(value);
+  return response;
 }

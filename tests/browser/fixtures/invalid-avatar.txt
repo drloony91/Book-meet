@@ -1,0 +1,1 @@
+This is intentionally not an image. It is used to verify upload type validation.

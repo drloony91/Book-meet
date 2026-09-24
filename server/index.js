@@ -3,6 +3,12 @@ import express from "express";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { mkdir } from "node:fs/promises";
+import { apiRateLimit } from "./modules/request-limits.js";
+import { createTelegramOutboxDispatcher } from "./modules/telegram-outbox.js";
+import { getPool } from "./db.js";
+import { createMysqlNotificationDeliveryStore, createNotificationDeliveryWorker } from "./modules/notification-events.js";
+import { createEmailNotificationAdapter, createNotificationDeliveryDispatcher, createTelegramNotificationAdapter } from "./modules/notification-channels.js";
+import { authText, requestLocale } from "./modules/i18n.js";
 
 const app = express();
 const projectRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
@@ -14,8 +20,19 @@ async function start() {
   if (production && demoMode) {
     throw new Error("DEMO_MODE запрещён в production");
   }
+  if (production && !process.env.AUDIT_HASH_SECRET) {
+    throw new Error("AUDIT_HASH_SECRET is required in production");
+  }
 
   const { default: api } = await import(demoMode ? "./demo-api.js" : "./api.js");
+  const telegramDispatcher = demoMode ? null : createTelegramOutboxDispatcher();
+  const notificationDispatcher = demoMode ? null : createNotificationDeliveryDispatcher(createNotificationDeliveryWorker({
+    store: createMysqlNotificationDeliveryStore({ pool: getPool() }),
+    adapters: {
+      telegram: createTelegramNotificationAdapter(),
+      email: createEmailNotificationAdapter(),
+    },
+  }));
 
   app.disable("x-powered-by");
   app.set("trust proxy", 1);
@@ -26,17 +43,30 @@ async function start() {
     response.setHeader("X-Frame-Options", "DENY");
     response.setHeader("Referrer-Policy", "strict-origin-when-cross-origin");
     response.setHeader("Permissions-Policy", "camera=(), microphone=(), geolocation=()");
+    if (production) response.setHeader("Strict-Transport-Security", "max-age=31536000; includeSubDomains");
     response.setHeader("Content-Security-Policy", "default-src 'self'; script-src 'self' https://accounts.google.com/gsi/client; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; connect-src 'self' https://accounts.google.com/gsi/; frame-src https://accounts.google.com/gsi/; font-src 'self'; frame-ancestors 'none'; base-uri 'self'; form-action 'self'");
     next();
   });
 
   await mkdir(uploadRoot, { recursive: true });
+  // Older local marketplace files must never be exposed by the generic static
+  // upload mount. New listing images live outside this public directory.
+  app.use("/uploads", (request, response, next) => /^\/marketplace-/i.test(request.path) ? response.status(404).end() : next());
   app.use("/uploads", express.static(uploadRoot, { dotfiles: "deny", fallthrough: false, maxAge: production ? "7d" : 0 }));
   app.use("/api", (request, response, next) => {
     const origin = request.headers.origin;
     const allowedOrigin = process.env.APP_ORIGIN;
     if (!["GET", "HEAD", "OPTIONS"].includes(request.method) && origin && allowedOrigin && origin !== new URL(allowedOrigin).origin) {
       return response.status(403).json({ error: "Запрос с другого сайта отклонён" });
+    }
+    next();
+  });
+  app.use("/api", apiRateLimit);
+  app.use("/api", (request, response, next) => {
+    if (telegramDispatcher && !["GET", "HEAD", "OPTIONS"].includes(request.method)) {
+      response.once("finish", () => {
+        if (response.statusCode < 400) { telegramDispatcher.wake(); notificationDispatcher?.wake(); }
+      });
     }
     next();
   });
@@ -58,17 +88,25 @@ async function start() {
 
   app.use((error, _request, response, _next) => {
     console.error(error);
+    if (error?.code === "ER_DUP_ENTRY" && /username_key/i.test(String(error?.sqlMessage ?? error?.message ?? ""))) {
+      return response.status(409).json({ code: "USERNAME_TAKEN", error: authText(requestLocale(_request), "usernameTaken") });
+    }
     const status = error.statusCode || 500;
     const message = process.env.NODE_ENV === "production" && status >= 500 ? "Не удалось выполнить запрос" : error.message;
-    response.status(status).json({ error: message });
+    const code = typeof error.code === "string" && /^[A-Z0-9_]{3,80}$/.test(error.code) ? error.code : undefined;
+    response.status(status).json(code ? { error: message, code } : { error: message });
   });
 
   const port = Number(process.env.PORT || 3000);
   const server = app.listen(port, () => {
     console.log(`Book Meet запущен на http://localhost:${port}`);
   });
+  telegramDispatcher?.start();
+  notificationDispatcher?.start();
 
   function shutdown(signal) {
+    telegramDispatcher?.stop();
+    notificationDispatcher?.stop();
     console.log(`${signal}: останавливаем Book Meet`);
     server.close(() => process.exit(0));
     setTimeout(() => process.exit(1), 10_000).unref();

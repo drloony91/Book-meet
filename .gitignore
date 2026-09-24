@@ -12,6 +12,8 @@
 
 # testing
 /coverage
+/playwright-report/
+/test-results/
 
 # misc
 .DS_Store
@@ -31,6 +33,7 @@ yarn-error.log*
 *.tsbuildinfo
 /dist/
 /uploads/
+/marketplace-private-uploads/
 
 # local production and release artifacts
 /.deploy-*/
